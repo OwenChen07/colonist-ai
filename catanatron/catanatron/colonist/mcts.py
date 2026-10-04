@@ -132,18 +132,21 @@ class Decision:
         "children",
     )
 
-    def __init__(self, game, color, actions, logits, value):
+    def __init__(self, game, color, actions):
         self.game = game
         self.color = color
         self.actions = actions
-        self.logits = logits  # over `actions`
-        p = np.exp(logits - logits.max())
-        self.prior = p / p.sum()
-        self.value = value  # net's value, for `color`
+        self.logits = None  # over `actions`; None until the net has seen it
         n = len(actions)
         self.N = np.zeros(n)
         self.W = np.zeros(n)  # summed values for `color`
         self.children = [None] * n
+
+    def set_evaluation(self, logits, value):
+        self.logits = logits
+        p = np.exp(logits - logits.max())
+        self.prior = p / p.sum()
+        self.value = value  # net's value, for `color`
 
 
 class Chance:
@@ -182,7 +185,7 @@ class Search:
     # ----- building nodes
     def node_after(self, game):
         """The node for `game` (which this search now owns), playing through
-        forced deterministic moves."""
+        forced deterministic moves. A Decision comes back unevaluated."""
         while True:
             winner = game.winning_color()
             if winner is not None or game.state.num_turns >= TURNS_LIMIT:
@@ -194,16 +197,20 @@ class Search:
             if outs is not None:
                 return Chance(game, actions[0], outs)
             game.execute(actions[0], validate_action=False)
-        color = game.state.current_color()
-        logits, value = self.evaluate(game, color, actions)
-        return Decision(game, color, list(actions), logits, value)
+        return Decision(game, game.state.current_color(), list(actions))
 
-    def evaluate(self, game, color, actions):
-        self.evaluations += 1
-        legal = E.legal_indices(actions)
-        static, dynamic = E.encode(game, color)
-        logits, values = self.net.forward(static, dynamic[None, :])
-        return logits[0, legal].astype(np.float64), float(values[0])
+    def evaluate(self, nodes):
+        """Evaluates new Decisions with one network call. They are all
+        positions of the same game, so they share the board inputs."""
+        self.evaluations += len(nodes)
+        encoded = [E.encode(n.game, n.color) for n in nodes]
+        dynamic = np.stack([d for _, d in encoded])
+        logits, values = self.net.forward(encoded[0][0], dynamic)
+        for row, node in enumerate(nodes):
+            legal = E.legal_indices(node.actions)
+            node.set_evaluation(
+                logits[row, legal].astype(np.float64), float(values[row])
+            )
 
     def child_of(self, node, i):
         """Builds the node reached by move i of a Decision."""
@@ -261,27 +268,22 @@ class Search:
         return p / p.sum()
 
     # ----- simulation
-    def simulate(self, root, first):
-        """One simulation from the root through root move `first`. Returns the
-        leaf value for the root player."""
+    def descend(self, root, first):
+        """Walks from the root through root move `first` to a new leaf.
+        Returns (path, leaf); a Decision leaf still needs evaluating."""
         path = [(root, first)]
         node = root
         i = first
         while True:
-            if isinstance(node, Decision):
-                child = node.children[i]
-                if child is None:
+            child = node.children[i]
+            if child is None:
+                if isinstance(node, Decision):
                     child = node.children[i] = self.child_of(node, i)
-                    leaf = child
-                    break
-                node = child
-            else:  # Chance
-                child = node.children[i]
-                if child is None:
+                else:
                     child = node.children[i] = self.outcome_child(node, i)
-                    leaf = child
-                    break
-                node = child
+                leaf = child
+                break
+            node = child
             if isinstance(node, Terminal):
                 leaf = node
                 break
@@ -297,12 +299,25 @@ class Search:
             child = leaf.children[j] = self.outcome_child(leaf, j)
             path.append((leaf, j))
             leaf = child
-        value = self.value_for(leaf, root.color)
+        return path, leaf
+
+    def backup(self, path, leaf, root_color):
+        value = self.value_for(leaf, root_color)
         for n, k in path:
             n.N[k] += 1
             if isinstance(n, Decision):
-                n.W[k] += value if n.color == root.color else -value
-        return value
+                n.W[k] += value if n.color == root_color else -value
+
+    def simulate_round(self, root, firsts):
+        """One simulation through each root move in `firsts`. Their paths
+        share nothing below the root, so the new leaves are evaluated in one
+        batch."""
+        walks = [self.descend(root, a) for a in firsts]
+        pending = [leaf for _, leaf in walks if isinstance(leaf, Decision)]
+        if pending:
+            self.evaluate(pending)
+        for path, leaf in walks:
+            self.backup(path, leaf, root.color)
 
     def run(self, game):
         """Search `game` (not modified) for its player to move. Returns
@@ -313,6 +328,7 @@ class Search:
         root = self.node_after(g)
         if not isinstance(root, Decision):
             raise ValueError("search needs a position with a choice to make")
+        self.evaluate([root])
         n = len(root.actions)
         gumbel = np.array(
             [-math.log(-math.log(self.rng.random() or 1e-300)) for _ in range(n)]
@@ -328,9 +344,8 @@ class Search:
         for phase in range(phases):
             per = max(1, (sims - used) // ((phases - phase) * len(candidates)))
             for _ in range(per):
-                for a in candidates:
-                    self.simulate(root, a)
-                    used += 1
+                self.simulate_round(root, candidates)
+                used += len(candidates)
             if phase < phases - 1:
                 q = self.completed_q(root)
                 score = gumbel + root.logits + self.sigma(root, q)
