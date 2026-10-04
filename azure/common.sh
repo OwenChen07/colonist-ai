@@ -18,7 +18,13 @@ SUBSCRIPTION=$(az account show --query id -o tsv) || {
   exit 1
 }
 # A storage account name is global: derive a stable one from the subscription.
-ACCOUNT=${STORAGE_ACCOUNT:-colonistai$(printf %s "$SUBSCRIPTION" | { sha1sum 2>/dev/null || shasum; } | cut -c1-8)}
+# (Computed on its own line: macOS's bash 3.2 can't parse it inside ${...}.)
+if command -v sha1sum >/dev/null; then
+  HASH=$(printf %s "$SUBSCRIPTION" | sha1sum | cut -c1-8)
+else
+  HASH=$(printf %s "$SUBSCRIPTION" | shasum | cut -c1-8)
+fi
+ACCOUNT=${STORAGE_ACCOUNT:-colonistai$HASH}
 
 ensure_storage() {
   if ! az storage account show -n "$ACCOUNT" -g "$GROUP" -o none 2>/dev/null; then
