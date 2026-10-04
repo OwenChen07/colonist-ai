@@ -151,6 +151,7 @@ Each phase ends at a gate, and the next phase starts once the gate is passed.
 - Safety rails in code: act only in private rooms, post a message in the game chat at the
   start saying the player is a bot, and stop if the simulator position stops matching
   colonist's (card counts, buildings, dice).
+- Decline every trade offer from the opponent, and never make one.
 - Handle colonist's turn timer: give the search a time budget per move, and play the
   network's top move if time is short.
 - **Gate:** one full private game against you on colonist, with no manual help and no loss
@@ -202,7 +203,7 @@ extension, so Phase 0 rechecks it against real games.
 | Discards | Player chooses which cards | Player chooses, one card at a time | None |
 | Friendly robber | A player with 2 or fewer visible points can't be blocked or robbed | Option exists, but counts hidden victory point cards | Small fix: count visible points only |
 | Dice | Balanced deck (below) | Two plain random dice | Port from the tracker |
-| Trading with the opponent | **Allowed** (seen in a captured game; the table said None before) | Supported as actions, but built-in bots never offer or accept trades | Convert accepted trades once captured; give the AI trade moves (below) |
+| Trading with the opponent | **Allowed** (seen in a captured game; the table said None before) | Supported as actions, but built-in bots never offer or accept trades | None for the AI: it never trades with the opponent (decided 4 Oct). The converter still needs accepted trades, for recorded games where a player trades |
 | Development cards | One per turn, before or after rolling, not on the turn bought | Same | None |
 | Board | Standard 19-hex board | Supported | None |
 | Number layout | Not confirmed | Official spiral or fully random | Confirm from real games |
@@ -231,12 +232,11 @@ This is the AlphaZero recipe, adapted for dice.
 - **Moves.** A 2-player game has 332 possible moves in total. At each decision the network
   only chooses among the legal ones. Forced moves, such as rolling when nothing else is
   possible, skip the search.
-- **Trades between players.** colonist 1v1 allows them, and Catanatron's moves don't
-  include them for the bots. First version: always decline offers, which is legal and
-  costs only the value of good trades. Then: accept or decline with the value network
-  (does the position after the trade look better?), and later make offers from a small
-  fixed menu of 1-for-1 and 2-for-1 trades. Training opponents should sometimes offer
-  trades, so the AI learns to handle them.
+- **No trades with the opponent** (decided 4 Oct). colonist 1v1 allows them, but the AI
+  never offers one and declines every offer. That is always legal and keeps the move set,
+  training and search unchanged; the cost is the occasional good trade it passes up. Bank
+  and port trades are unaffected: they are ordinary moves. Training games have no trades
+  between players, as now.
 - **Search.** A Monte Carlo tree search guided by the network, with Gumbel root selection.
   Gumbel selection is built to improve on the network's choice even with very few
   simulations. It starts at 50 simulations per move in training and 400 or more when playing
