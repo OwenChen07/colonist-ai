@@ -106,9 +106,12 @@ Each phase ends at a gate, and the next phase starts once the gate is passed.
 - Set up a ladder of reference bots: Random, WeightedRandom, ValueFunction, AlphaBeta.
   "AlphaBeta" everywhere in this plan means this fork's version, with its chance nodes
   fixed (see Phase 0 status), not upstream's.
-- Run AlphaBeta at a fixed search depth with no time limit. Its search stops at a
-  wall-clock deadline, so its results change with how busy the machine is: the same 50
-  boards gave 44 and then 52 wins out of 100 in two runs.
+- Seeded games must repeat exactly. **Done (4 Oct):** the same 50 boards had given 44 and
+  then 52 AlphaBeta wins out of 100. The cause was not AlphaBeta's time limit (20 s per
+  move, never reached at depth 2) but move lists built from Python sets, whose order
+  changes between runs (string hashing, and `None`'s hash before Python 3.12), so bots
+  broke ties differently. Those lists are now sorted, and a test replays seeded games in
+  two processes with different hash seeds.
 - Run a sustained one-hour benchmark to measure how much the fanless Air slows down under
   load, and use that number in all later time estimates.
 - Retune AlphaBeta's hand-written scoring for 15-point 1v1 by automatic tuning (SPSA over

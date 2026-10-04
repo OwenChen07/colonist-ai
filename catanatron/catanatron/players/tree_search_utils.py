@@ -59,7 +59,7 @@ def execute_spectrum(game: Game, action: Action):
                 number = get_dev_cards_in_hand(game.state, color, card)
                 current_deck += [card] * number
 
-        for card in set(current_deck):
+        for card in sorted(set(current_deck)):  # sorted: set order varies by run
             option_action = Action(action.color, action.action_type, card)
             option_game = game.copy()
             try:
@@ -193,13 +193,14 @@ def prune_robber_actions(current_color, game, actions):
     for node_id in get_player_buildings(game.state, enemy_color, CITY):
         enemy_owned_tiles.update(game.state.board.map.adjacent_tiles[node_id])
 
-    robber_moves = set(
-        filter(
-            lambda a: a.action_type == ActionType.MOVE_ROBBER
-            and game.state.board.map.tiles[a.value[0]] in enemy_owned_tiles,
-            actions,
-        )
-    )
+    # A list, not a set: max() below keeps the first of equal moves, and set
+    # order varies from run to run.
+    robber_moves = [
+        a
+        for a in actions
+        if a.action_type == ActionType.MOVE_ROBBER
+        and game.state.board.map.tiles[a.value[0]] in enemy_owned_tiles
+    ]
 
     if len(robber_moves) == 0:
         return actions

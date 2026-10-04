@@ -136,12 +136,12 @@ def year_of_plenty_possibilities(color, freqdeck: List[int]) -> List[Action]:
                 if freqdeck_can_draw(freqdeck, 1, second_card):
                     options.add((second_card,))
 
-    return list(
-        map(
-            lambda cards: Action(color, ActionType.PLAY_YEAR_OF_PLENTY, tuple(cards)),
-            options,
-        )
-    )
+    # Sorted, so the order (and so a bot's tie-breaks) doesn't depend on string
+    # hashing, which changes from run to run.
+    return [
+        Action(color, ActionType.PLAY_YEAR_OF_PLENTY, tuple(cards))
+        for cards in sorted(options)
+    ]
 
 
 def road_building_possibilities(state, color, check_money=True) -> List[Action]:
@@ -308,9 +308,17 @@ def maritime_trade_possibilities(state, color) -> List[Action]:
         hand_freqdeck, state.resource_freqdeck, port_resources
     )
 
-    return list(
-        map(lambda t: Action(color, ActionType.MARITIME_TRADE, t), trade_offers)
-    )
+    # Sorted: the offers are tuples holding None, whose hash (before Python
+    # 3.12) is its memory address, so set order changed from run to run and
+    # with it a bot's choice between equally good trades.
+    return [
+        Action(color, ActionType.MARITIME_TRADE, t)
+        for t in sorted(trade_offers, key=_trade_sort_key)
+    ]
+
+
+def _trade_sort_key(offer):
+    return tuple("" if r is None else r for r in offer)
 
 
 def inner_maritime_trade_possibilities(hand_freqdeck, bank_freqdeck, port_resources):
