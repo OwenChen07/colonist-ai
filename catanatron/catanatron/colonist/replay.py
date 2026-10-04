@@ -87,9 +87,16 @@ def game_for_record(record) -> Game:
     return game
 
 
-def decision_of(action: Action) -> Action:
+def decision_of(action: Action, playable_actions) -> Action:
     if action.action_type in DECIDED_WITHOUT_VALUE:
         return Action(action.color, action.action_type, None)
+    if action.action_type == ActionType.BUILD_ROAD and action not in playable_actions:
+        # An edge is the same edge in either node order.
+        flipped = Action(
+            action.color, action.action_type, tuple(reversed(action.value))
+        )
+        if flipped in playable_actions:
+            return flipped
     return action
 
 
@@ -105,7 +112,7 @@ def replay(record, name="record") -> ReplayReport:
     _run_checks(game, checks.get(0, []), report)
     for i, (payload, result) in enumerate(log):
         action = action_from_json(payload)
-        decision = decision_of(action)
+        decision = decision_of(action, game.playable_actions)
         if decision not in game.playable_actions:
             legal = sorted({a.action_type.value for a in game.playable_actions})
             report.errors.append(

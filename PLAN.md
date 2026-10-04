@@ -80,10 +80,15 @@ Each phase ends at a gate, and the next phase starts once the gate is passed.
   and dev-card branches all drew the real next card from the deck. Fixing it did not
   measurably change AlphaBeta's strength (200 games each, all within noise), but the
   dev-card part let AlphaBeta see the deck, so the baseline now plays fair.
-- Recorder: colonist sends the game over one WebSocket as MessagePack state updates
-  (`diff`, `gameLogState`, `tileInfo`, ...), so the recorder reads game data rather than
-  the screen. Next step: a capture extension that saves every message from page load,
-  then a decoder built from real captured games.
+- Recorder: `recorder/` captures every colonist message from page load, and
+  `python -m catanatron.colonist.convert captures/*.json` turns captures into records.
+  colonist sends the whole game once at the start, then a diff after every change, as
+  MessagePack. Coordinates, resources and ports are mapped (see `convert.py`). The first
+  captured game (setup, three rolls, a resignation) converts and replays cleanly, card
+  counts included, with balanced dice confirmed. Colonist's settings match the rules
+  table: 15 points, a 9-card limit, friendly robber, balanced dice.
+- Still to map, from captures that include them: robber moves and steals, discards,
+  dev cards, bank and port trades, and a game played to 15 points.
 
 ### Phase 1: a measuring stick and a baseline bot
 

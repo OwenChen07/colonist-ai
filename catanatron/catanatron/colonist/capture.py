@@ -87,6 +87,10 @@ def summary(frames: List[Frame]) -> str:
 
 
 def _jsonable(x):
+    if isinstance(x, msgpack.Timestamp):
+        return (
+            x.to_unix_nano() // 1_000_000
+        )  # ms since epoch, like the capture's own times
     if isinstance(x, bytes):
         return {"bytes": base64.b64encode(x).decode()}
     if isinstance(x, dict):
