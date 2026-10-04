@@ -152,6 +152,54 @@ Each phase ends at a gate, and the next phase starts once the gate is passed.
   at equal thinking time. This gate checks that the learned evaluator is no worse than the
   hand-written one, not that it is better.
 
+**Status (4 Oct 2026).** The pipeline is built and tested end to end; the full-size data
+run and training are next, on the laptop:
+
+```
+scripts/setup.sh                                                      # once per machine
+.venv/bin/python -m catanatron.colonist.datagen data/ab2 --games 40000    # resumable
+.venv/bin/python -m catanatron.colonist.train data/ab2 --out models/ab2   # resumable
+.venv/bin/python bench/selfplay.py models/ab2/net.npz                     # the benchmark
+.venv/bin/python -m catanatron.colonist.evaluate Z:models/ab2/net.npz:50 AB:2 --games 1000
+```
+
+- Inputs (`colonist/encode.py`): 727 board numbers built once per board (tiles, and per
+  corner its production and port) and 570 per position (robber, buildings, roads, both
+  players, bank, turn phase, balanced-dice state including each player's odds for the next
+  roll). The opponent's resource hand is in (1v1 logs show every card that changes hands);
+  their development cards are only a count, and a test checks that swapping which cards
+  they hold changes nothing the player sees. 67 µs per position on the cloud container.
+- Moves: 313 (332 less trades between players and the duplicate robber victims), with the
+  robber's victim written as "the opponent" so a move means the same from either seat.
+- Training data (`colonist/datagen.py`): AlphaBeta depth 2 against itself, 40 positions per
+  game, 2% random exploration moves (not used as policy targets), shards of 50 games that a
+  rerun skips. About 11 s per game per core on the cloud container (the laptop should be
+  several times faster).
+- Network (`colonist/train.py`, `colonist/net.py`): 3 × 512 fully connected, 1.35M
+  parameters, policy and value heads. Trains with PyTorch (MPS on the laptop), plays with
+  numpy. Each position is shown under a random one of the board's **12 symmetries** (6
+  rotations × mirror), which `colonist/symmetry.py` turns into index permutations; tests
+  check them against physically rotated positions. The exported net is the epoch with the
+  lowest validation loss.
+- Search (`colonist/mcts.py`, bot `Z:<net.npz>:<simulations>`): Gumbel root selection with
+  sequential halving, chance nodes for rolls (balanced-dice odds), development card draws
+  and steals (odds from the victim's hand), forced moves played through. Before each search
+  the opponent's hidden development cards are re-dealt from the unseen cards, never in a way
+  that would already give them 15 points. Check of the search itself: with a crude
+  hand-written evaluation in place of the network it beat a greedy player using the same
+  evaluation 10 games of 10.
+- Self-play runner (`colonist/selfplay.py`): each worker plays a shard of games at once, and
+  the search is a generator, so all games' pending positions share one network call. The
+  network costs 245 µs for one position but 52 µs each in a batch of 16 and 28 µs in a batch
+  of 64 (cloud container), so this batching is what makes Phase 3 affordable. It records the
+  search's policy and value; the trainer takes those as targets alongside bot moves
+  (`--value-mix`, PLAN's average of result and search value).
+- Speedups along the way: game copies 3× faster (explicit copies instead of pickle and
+  deepcopy; also speeds up AlphaBeta), input building 103 → 67 µs.
+- `evaluate` now reports each bot's thinking time per move. AlphaBeta depth 2 takes about
+  55 ms per move on the cloud container, so "equal thinking time" there is about 70
+  simulations at single-game search speed.
+
 ### Phase 3: self-play
 
 - Run the self-play loop (see How it learns).
