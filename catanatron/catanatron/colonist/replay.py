@@ -103,6 +103,8 @@ def decision_of(action: Action, playable_actions) -> Action:
 def replay(record, name="record") -> ReplayReport:
     log = resolve_hidden_draws(record)
     report = ReplayReport(name=name, entries=len(log))
+    if record.get("incomplete"):
+        report.errors.append(f"conversion stopped early: {record['incomplete']}")
     checks = {}
     for check in record.get("checks", []):
         checks.setdefault(check["at"], []).append(check)

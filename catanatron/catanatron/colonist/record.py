@@ -21,6 +21,7 @@ through the log. Translating colonist's own coordinates is the recorder's job.
       ],
       "hidden_vp_cards": {"BLUE": 1},   # optional; revealed at game end
       "winner": "BLUE",                 # optional
+      "incomplete": "why",              # optional; set when conversion stopped early
       "source": {...}                   # optional, free-form
     }
 

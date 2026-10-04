@@ -95,7 +95,8 @@ def test_unknown_log_entry_stops_the_record(frames):
     conv = convert(with_extra_log_entry(frames, {"type": 9999, "playerColor": 1}))
     assert conv.ended == "unsupported"
     assert "9999" in conv.unsupported[0]
-    assert replay(conv.record).ok  # what was converted is still sound
+    # What was converted is still sound; the record is just marked incomplete.
+    assert replay(conv.record).applied == len(conv.record["log"])
 
 
 def test_capture_without_game_start_is_rejected(frames):
@@ -183,3 +184,28 @@ def test_bundled_bank_trade_is_split_into_lots():
     assert bank_trade([3, 3, 3], [1], {3: 3}) == [
         ["SHEEP", "SHEEP", "SHEEP", None, "WOOD"]
     ]
+
+
+ROAD_BUILDING = os.path.join(
+    os.path.dirname(__file__), "fixtures", "capture_road_building.json"
+)
+
+
+def test_road_building_and_declined_trade_offer():
+    """A short real game: the opponent offers a trade (declined, so nothing
+    changes), and the recording player plays Road Building."""
+    conv = convert(load(ROAD_BUILDING))
+    assert not conv.unsupported
+    kinds = [e[0][1] for e in conv.record["log"]]
+    i = kinds.index("PLAY_ROAD_BUILDING")
+    assert kinds[i + 1 : i + 3] == ["BUILD_ROAD", "BUILD_ROAD"]
+    report = replay(conv.record)
+    assert report.ok, report.summary()
+
+
+def test_incomplete_conversion_fails_the_replay_check(frames):
+    conv = convert(with_extra_log_entry(frames, {"type": 9999, "playerColor": 1}))
+    assert conv.record["incomplete"]
+    report = replay(conv.record)
+    assert not report.ok
+    assert "stopped early" in report.errors[0]

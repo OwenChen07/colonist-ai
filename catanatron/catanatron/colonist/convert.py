@@ -95,11 +95,15 @@ LOG_ROBBER_NOTHING_TO_STEAL = 74
 LOG_MONOPOLY = 86  # the resource taken
 LOG_RESIGNED = 112
 LOG_TRADED_WITH_BANK = 116
-#: Safe to skip: game start banners (2), disconnects (22), separators (44),
+#: Safe to skip: a player joining (0), game start banners (2), disconnects
+#: (22), the 10-second rule being turned off (24), separators (44),
 #: income (47, checked through hand counts instead), tiles blocked by the
-#: robber (49), "move the robber" prompts (60), and longest road / largest
-#: army changing hands (66, 68), which Catanatron works out itself.
-LOG_IGNORED = {2, 22, 44, 47, 49, 60, 66, 68}
+#: robber (49), "move the robber" prompts (60), longest road / largest army
+#: changing hands (66, 68), which Catanatron works out itself, trade offers
+#: between players (118: an offer alone changes nothing; an accepted trade
+#: logs its own entry, which is not mapped yet and so stops the record), and
+#: a pre-game counter (130).
+LOG_IGNORED = {0, 2, 22, 24, 44, 47, 49, 60, 66, 68, 118, 130}
 PIECE = {0: "road", 2: "settlement", 3: "city"}
 BUILDING = {1: "settlement", 2: "city"}
 BUILD_ACTION = {
@@ -530,6 +534,8 @@ def convert(frames) -> Conversion:
     except _Unsupported as e:
         c.conv.unsupported.append(str(e))
         c.conv.ended = "unsupported"
+        # The record says so, so the replay check doesn't count it as clean.
+        c.record["incomplete"] = str(e)
     return c.conv
 
 
