@@ -16,10 +16,15 @@ Coordinates (worked out from captured games):
     are shuffled.
 Resources: 1 lumber, 2 brick, 3 wool, 4 grain, 5 ore (0 is the desert, and a
 hidden card). Port type 1 is 3:1; types 2-6 are 2:1 for resources 1-5.
+Development cards: 10 hidden, 11 knight, 12 victory point, 13 monopoly,
+14 road building, 15 year of plenty.
+Points (victoryPointsState): 0 settlements, 1 cities, 2 victory point cards,
+3 largest army, 4 longest road.
 
-Supported so far: board, setup, rolls and income, settlements, cities, roads,
-turn ends, resignation. Anything else in the log is reported as unsupported,
-and the record stops there rather than guessing.
+Supported: board, setup, rolls and income, building, turn ends, 7s (discards,
+robber, steals), development cards (buying and all four plays), bank and port
+trades, the end of the game. Anything else in the log is reported as
+unsupported, and the record stops there rather than guessing.
 """
 
 import argparse
@@ -34,10 +39,15 @@ from catanatron.colonist.record import FORMAT, VERSION, save
 from catanatron.colonist.rules import COLONIST_1V1
 from catanatron.models.enums import (
     BRICK,
+    KNIGHT,
+    MONOPOLY,
     ORE,
+    ROAD_BUILDING,
     SHEEP,
+    VICTORY_POINT,
     WHEAT,
     WOOD,
+    YEAR_OF_PLENTY,
     ActionType,
     EdgeRef,
     NodeRef,
@@ -58,18 +68,45 @@ SEAT_COLORS = ["RED", "BLUE", "ORANGE", "WHITE"]
 
 GAME_STATE = 4
 DIFF = 91
+GAME_OVER = 45
+
+DEV_CARD = {
+    11: KNIGHT,
+    12: VICTORY_POINT,
+    13: MONOPOLY,
+    14: ROAD_BUILDING,
+    15: YEAR_OF_PLENTY,
+}
+HIDDEN_CARD = 10
 
 # Game log entry types (text.type).
-LOG_PLACED = 4  # pieceEnum: 0 road, 2 settlement, 3 city
+LOG_BOUGHT_DEV_CARD = 1
+LOG_PLACED_SETUP = 4  # pieceEnum: 0 road, 2 settlement, 3 city
+LOG_BUILT = 5  # same, during the game
 LOG_ROLLED = 10
-LOG_SEPARATOR = 44
-LOG_GOT_RESOURCES = 47
+LOG_MOVED_ROBBER = 11
+LOG_YOU_STOLE = 14  # from the perspective of the recording player
+LOG_STOLE_FROM_YOU = 15
+LOG_PLAYED_DEV_CARD = 20
+LOG_YEAR_OF_PLENTY = 21  # the cards taken
+LOG_WON = 45
+LOG_DISCARDED = 55
+LOG_ROBBER_NOTHING_TO_STEAL = 74
+LOG_MONOPOLY = 86  # the resource taken
 LOG_RESIGNED = 112
-#: Seen in captures and safe to skip: game start banners, disconnect and
-#: reconnect notices, and the winner announcement after a resignation.
-LOG_IGNORED = {2, 22, 45, 47, 44}
+LOG_TRADED_WITH_BANK = 116
+#: Safe to skip: game start banners (2), disconnects (22), separators (44),
+#: income (47, checked through hand counts instead), tiles blocked by the
+#: robber (49), "move the robber" prompts (60), and longest road / largest
+#: army changing hands (66, 68), which Catanatron works out itself.
+LOG_IGNORED = {2, 22, 44, 47, 49, 60, 66, 68}
 PIECE = {0: "road", 2: "settlement", 3: "city"}
 BUILDING = {1: "settlement", 2: "city"}
+BUILD_ACTION = {
+    "settlement": ActionType.BUILD_SETTLEMENT.value,
+    "city": ActionType.BUILD_CITY.value,
+    "road": ActionType.BUILD_ROAD.value,
+}
 
 
 def cube(x, y):
@@ -84,9 +121,8 @@ class ConvertError(ValueError):
 class Conversion:
     record: dict
     unsupported: List[str] = field(default_factory=list)
-    ended: Optional[str] = (
-        None  # "resignation", "unsupported", or None if the capture just stops
-    )
+    #: "win", "resignation", "unsupported", or None if the capture just stops
+    ended: Optional[str] = None
 
     def summary(self, name):
         n = len(self.record["log"])
@@ -153,166 +189,348 @@ def _edge_nodes(catan_map, e):
 
 
 # ----- game -----
+class _Unsupported(Exception):
+    pass
+
+
+class _Converter:
+    def __init__(self, payload, start):
+        self.payload = payload
+        state = payload["gameState"]
+        settings = payload.get("gameSettings", {})
+        self.play_order = payload["playOrder"]
+        self.seat = {c: SEAT_COLORS[i] for i, c in enumerate(self.play_order)}
+        self.you = payload.get("playerColor")
+
+        map_doc = convert_map(state["mapState"])
+        self.catan_map = map_from_json(map_doc)
+        self.corners = state["mapState"]["tileCornerStates"]
+        self.edges = state["mapState"]["tileEdgeStates"]
+        self.hexes = state["mapState"]["tileHexStates"]
+        self.robber_tile = state.get("mechanicRobberState", {}).get("locationTileIndex")
+        self.ratios = {
+            int(c): {int(r): n for r, n in ps.get("bankTradeRatiosState", {}).items()}
+            for c, ps in state["playerStates"].items()
+        }
+        self.points = {
+            int(c): dict(ps.get("victoryPointsState", {}))
+            for c, ps in state["playerStates"].items()
+        }
+
+        rules = {
+            "vps_to_win": settings.get(
+                "victoryPointsToWin", COLONIST_1V1["vps_to_win"]
+            ),
+            "discard_limit": settings.get(
+                "cardDiscardLimit", COLONIST_1V1["discard_limit"]
+            ),
+            "friendly_robber": settings.get(
+                "friendlyRobber", COLONIST_1V1["friendly_robber"]
+            ),
+            # diceSetting 1 has been balanced in every capture so far; the
+            # replay check confirms it roll by roll.
+            "dice": "balanced" if settings.get("diceSetting", 1) == 1 else "random",
+        }
+        users = {u.get("selectedColor"): u for u in payload.get("playerUserStates", [])}
+        self.record = {
+            "format": FORMAT,
+            "version": VERSION,
+            "rules": rules,
+            "map": map_doc,
+            "seats": [self.seat[c] for c in self.play_order],
+            "players": {
+                self.seat[c]: {
+                    "name": users.get(c, {}).get("username"),
+                    "you": c == self.you,
+                    "bot": users.get(c, {}).get("isBot"),
+                }
+                for c in self.play_order
+            },
+            "log": [],
+            "checks": [],
+            "source": {
+                "colonist_game": settings.get("id"),
+                "ranked": payload.get("gameDetails", {}).get("isRanked"),
+                "started": start.t,
+            },
+        }
+        if self.robber_tile is not None:
+            self.record["robber"] = list(self._tile_cube(self.robber_tile))
+        self.conv = Conversion(self.record)
+        self.log = self.record["log"]
+        self.setup_turns = 2 * len(self.play_order)
+        self.completed = state["currentState"].get("completedTurns", 0)
+        self.current = state["currentState"].get("currentTurnPlayerColor")
+        self.discards = []  # waiting for the robber, then emitted in seat order
+        self.pending_play = None  # a monopoly or year of plenty awaiting its cards
+
+    # ----- helpers -----
+    def emit(self, color, action_type, value, result=None):
+        self._flush_discards()
+        self.log.append([[self.seat[color], action_type, value], result])
+
+    def _flush_discards(self):
+        if not self.discards:
+            return
+        discards, self.discards = self.discards, []
+        # Catanatron asks seats to discard in seat order.
+        for color, card in sorted(discards, key=lambda d: self.play_order.index(d[0])):
+            self.log.append(
+                [[self.seat[color], ActionType.DISCARD_RESOURCE.value, card], card]
+            )
+
+    def _tile_cube(self, index):
+        h = self.hexes[str(index)]
+        return cube(h["x"], h["y"])
+
+    def _other(self, color):
+        others = [c for c in self.play_order if c != color]
+        if len(others) != 1:
+            raise _Unsupported("steals are only mapped for 1v1 games")
+        return others[0]
+
+    # ----- one diff -----
+    def apply(self, diff):
+        map_diff = diff.get("mapState", {})
+        placed = []  # pieces placed in this diff, waiting to be put in log order
+        for idx, c in map_diff.get("tileCornerStates", {}).items():
+            self.corners.setdefault(idx, {}).update(c)
+            # An upgrade to a city only sends the new building type; the owner
+            # is already on the corner.
+            owner = self.corners[idx].get("owner")
+            if owner and c.get("buildingType") in BUILDING:
+                node = _corner_node(self.catan_map, self.corners[idx])
+                placed.append((owner, BUILDING[c["buildingType"]], node))
+        for idx, e in map_diff.get("tileEdgeStates", {}).items():
+            self.edges.setdefault(idx, {}).update(e)
+            if "owner" in e and e.get("type") == 1:
+                nodes = list(_edge_nodes(self.catan_map, self.edges[idx]))
+                placed.append((e["owner"], "road", nodes))
+        robber = diff.get("mechanicRobberState", {}).get("locationTileIndex")
+        dev_state = diff.get("mechanicDevelopmentCardsState", {}).get("players", {})
+        bought = {}  # color -> cards bought this diff, in order
+
+        entries = sorted(
+            diff.get("gameLogState", {}).items(), key=lambda kv: int(kv[0])
+        )
+        texts = [e.get("text", {}) for _, e in entries]
+        for i, text in enumerate(texts):
+            kind = text.get("type")
+            color = text.get("playerColor")
+            if kind in (LOG_PLACED_SETUP, LOG_BUILT):
+                piece = PIECE.get(text.get("pieceEnum"))
+                match = next(
+                    (p for p in placed if p[0] == color and p[1] == piece), None
+                )
+                if match is None:
+                    raise _Unsupported(f"log entry {text} has no matching board change")
+                placed.remove(match)
+                self.emit(color, BUILD_ACTION[piece], match[2])
+            elif kind == LOG_ROLLED:
+                dice = [text["firstDice"], text["secondDice"]]
+                self.emit(color, ActionType.ROLL.value, dice, dice)
+            elif kind == LOG_DISCARDED:
+                self.discards.extend((color, RESOURCE[c]) for c in text["cardEnums"])
+            elif kind == LOG_MOVED_ROBBER:
+                if robber is None:
+                    raise _Unsupported(
+                        f"robber moved without a new robber tile: {text}"
+                    )
+                steal = next(
+                    (
+                        t
+                        for t in texts[i + 1 :]
+                        if t.get("type")
+                        in (
+                            LOG_YOU_STOLE,
+                            LOG_STOLE_FROM_YOU,
+                            LOG_ROBBER_NOTHING_TO_STEAL,
+                        )
+                    ),
+                    None,
+                )
+                if steal is None:
+                    raise _Unsupported(
+                        f"robber moved with no steal or no-steal entry: {text}"
+                    )
+                if steal["type"] == LOG_ROBBER_NOTHING_TO_STEAL:
+                    victim, card = None, None
+                else:
+                    victim = self.seat[self._other(color)]
+                    card = RESOURCE[steal["cardEnums"][0]]
+                coordinate = list(self._tile_cube(robber))
+                self.emit(
+                    color, ActionType.MOVE_ROBBER.value, [coordinate, victim], card
+                )
+            elif kind in (
+                LOG_YOU_STOLE,
+                LOG_STOLE_FROM_YOU,
+                LOG_ROBBER_NOTHING_TO_STEAL,
+            ):
+                continue  # taken with the robber move above
+            elif kind == LOG_BOUGHT_DEV_CARD:
+                bought.setdefault(color, 0)
+                bought[color] += 1
+                self.emit(color, ActionType.BUY_DEVELOPMENT_CARD.value, None, None)
+            elif kind == LOG_PLAYED_DEV_CARD:
+                card = DEV_CARD.get(text.get("cardEnum"))
+                if card == KNIGHT:
+                    self.emit(color, ActionType.PLAY_KNIGHT_CARD.value, None)
+                elif card == ROAD_BUILDING:
+                    self.emit(color, ActionType.PLAY_ROAD_BUILDING.value, None)
+                elif card in (MONOPOLY, YEAR_OF_PLENTY):
+                    self.pending_play = (color, card)
+                else:
+                    raise _Unsupported(f"played development card {text}")
+            elif kind == LOG_MONOPOLY:
+                self._play(
+                    color,
+                    MONOPOLY,
+                    ActionType.PLAY_MONOPOLY.value,
+                    RESOURCE[text["cardEnum"]],
+                )
+            elif kind == LOG_YEAR_OF_PLENTY:
+                cards = [RESOURCE[c] for c in text["cardEnums"]]
+                self._play(
+                    color, YEAR_OF_PLENTY, ActionType.PLAY_YEAR_OF_PLENTY.value, cards
+                )
+            elif kind == LOG_TRADED_WITH_BANK:
+                self._bank_trade(
+                    color, text["givenCardEnums"], text["receivedCardEnums"]
+                )
+            elif kind == LOG_WON:
+                if self.conv.ended != "resignation":
+                    self.record["winner"] = self.seat[color]
+                    self.conv.ended = "win"
+            elif kind == LOG_RESIGNED:
+                self.conv.ended = "resignation"
+            elif kind in LOG_IGNORED:
+                continue
+            else:
+                raise _Unsupported(f"log entry type {kind}: {text}")
+        if placed:
+            raise _Unsupported(f"board changes without a log entry: {placed}")
+        if self.pending_play is not None:
+            raise _Unsupported(
+                f"{self.pending_play} played without its cards in the log"
+            )
+        if robber is not None:
+            self.robber_tile = robber
+
+        self._fill_in_draws(bought, dev_state)
+        self._turns(diff.get("currentState", {}))
+        self._player_states(diff.get("playerStates", {}))
+
+    def _play(self, color, card, action_type, value):
+        if self.pending_play != (color, card):
+            raise _Unsupported(
+                f"{card} cards for {color} without the card being played"
+            )
+        self.pending_play = None
+        self.emit(color, action_type, value)
+
+    def _bank_trade(self, color, given, received):
+        """One colonist entry can hold several trades: split the cards given
+        into lots at the player's rate for each resource, one per card received."""
+        lots = []
+        for r in sorted(set(given), key=given.index):
+            n, rate = given.count(r), self.ratios.get(color, {}).get(r, 4)
+            if n % rate:
+                raise _Unsupported(f"trade of {n} x {r} at {rate}:1")
+            lots += [r] * (n // rate)
+        if len(lots) != len(received):
+            raise _Unsupported(f"trade gives {given} for {received}")
+        for r, want in zip(lots, received):
+            rate = self.ratios.get(color, {}).get(r, 4)
+            value = [RESOURCE[r]] * rate + [None] * (4 - rate) + [RESOURCE[want]]
+            self.emit(color, ActionType.MARITIME_TRADE.value, value)
+
+    def _fill_in_draws(self, bought, dev_state):
+        """Development cards bought in this diff: known to the buyer only."""
+        for color, n in bought.items():
+            seen = dev_state.get(str(color), {}).get("developmentCardsBoughtThisTurn")
+            cards = seen[-n:] if seen and len(seen) >= n else [HIDDEN_CARD] * n
+            buys = [
+                e
+                for e in self.log
+                if e[0][0] == self.seat[color]
+                and e[0][1] == ActionType.BUY_DEVELOPMENT_CARD.value
+            ]
+            for entry, c in zip(buys[-n:], cards):
+                if c != HIDDEN_CARD:
+                    entry[0][2] = entry[1] = DEV_CARD[c]
+
+    def _turns(self, cur):
+        if "completedTurns" in cur:
+            if (
+                self.completed >= self.setup_turns
+                and cur["completedTurns"] > self.completed
+            ):
+                self.emit(self.current, ActionType.END_TURN.value, None)
+            self.completed = cur["completedTurns"]
+        if "currentTurnPlayerColor" in cur:
+            self.current = cur["currentTurnPlayerColor"]
+
+    def _player_states(self, player_states):
+        self._flush_discards()
+        for c, ps in player_states.items():
+            color = int(c)
+            if "bankTradeRatiosState" in ps:
+                self.ratios.setdefault(color, {}).update(
+                    {int(r): n for r, n in ps["bankTradeRatiosState"].items()}
+                )
+            check = {"at": len(self.log), "color": self.seat[color]}
+            if "victoryPointsState" in ps:
+                self.points.setdefault(color, {}).update(ps["victoryPointsState"])
+                p = {int(k): v for k, v in self.points[color].items()}
+                # Visible points: everything but victory point cards.
+                check["visible_vps"] = (
+                    p.get(0, 0) + 2 * p.get(1, 0) + 2 * p.get(3, 0) + 2 * p.get(4, 0)
+                )
+            cards = ps.get("resourceCards", {}).get("cards")
+            if cards is not None:
+                check["resources"] = len(cards)
+                if color == self.you:
+                    hand = {r: 0 for r in RESOURCE.values()}
+                    for card in cards:
+                        hand[RESOURCE[card]] += 1
+                    check["hand"] = hand
+            if len(check) > 2:
+                self.record["checks"].append(check)
+
+    def finish(self, end_game_state):
+        """Hidden victory point cards, revealed in colonist's end-of-game summary."""
+        if not end_game_state:
+            return
+        hidden = {}
+        for c, p in end_game_state.get("players", {}).items():
+            color = int(c)
+            if color != self.you and color in self.seat:
+                hidden[self.seat[color]] = p.get("victoryPoints", {}).get("2", 0)
+        self.record["hidden_vp_cards"] = hidden
+
+
 def convert(frames) -> Conversion:
     start = next((f for f in frames if f.dir == "in" and f.type == GAME_STATE), None)
     if start is None:
         raise ConvertError(
             "capture has no game start; the extension must be on before the game begins"
         )
-    payload = start.data["data"]["payload"]
-    state = payload["gameState"]
-    settings = payload.get("gameSettings", {})
-    play_order = payload["playOrder"]
-    seat = {c: SEAT_COLORS[i] for i, c in enumerate(play_order)}
-    you = payload.get("playerColor")
-
-    map_doc = convert_map(state["mapState"])
-    catan_map = map_from_json(map_doc)
-    corners = state["mapState"]["tileCornerStates"]
-    edges = state["mapState"]["tileEdgeStates"]
-    hexes = state["mapState"]["tileHexStates"]
-
-    rules = {
-        "vps_to_win": settings.get("victoryPointsToWin", COLONIST_1V1["vps_to_win"]),
-        "discard_limit": settings.get(
-            "cardDiscardLimit", COLONIST_1V1["discard_limit"]
-        ),
-        "friendly_robber": settings.get(
-            "friendlyRobber", COLONIST_1V1["friendly_robber"]
-        ),
-        # diceSetting 1 has been balanced in every capture so far; the replay
-        # check confirms it roll by roll.
-        "dice": "balanced" if settings.get("diceSetting", 1) == 1 else "random",
-    }
-    users = {u.get("selectedColor"): u for u in payload.get("playerUserStates", [])}
-    record = {
-        "format": FORMAT,
-        "version": VERSION,
-        "rules": rules,
-        "map": map_doc,
-        "seats": [seat[c] for c in play_order],
-        "players": {
-            seat[c]: {
-                "name": users.get(c, {}).get("username"),
-                "you": c == you,
-                "bot": users.get(c, {}).get("isBot"),
-            }
-            for c in play_order
-        },
-        "log": [],
-        "checks": [],
-        "source": {
-            "colonist_game": settings.get("id"),
-            "ranked": payload.get("gameDetails", {}).get("isRanked"),
-            "started": start.t,
-        },
-    }
-    robber = state.get("mechanicRobberState", {}).get("locationTileIndex")
-    if robber is not None:
-        h = hexes[str(robber)]
-        record["robber"] = list(cube(h["x"], h["y"]))
-
-    conv = Conversion(record)
-    log = record["log"]
-    setup_turns = 2 * len(play_order)
-    completed = state["currentState"].get("completedTurns", 0)
-    current = state["currentState"].get("currentTurnPlayerColor")
-
-    def emit(color, action_type, value, result=None):
-        log.append([[seat[color], action_type, value], result])
-
-    for f in frames:
-        if f.dir != "in" or f.type != DIFF or f.seq < start.seq:
-            continue
-        diff = f.data["data"]["payload"].get("diff", {})
-        map_diff = diff.get("mapState", {})
-
-        # Pieces placed in this diff, waiting to be put in log order.
-        placed = []
-        for idx, c in map_diff.get("tileCornerStates", {}).items():
-            corners.setdefault(idx, {}).update(c)
-            if "owner" in c and c.get("buildingType") in BUILDING:
-                node = _corner_node(catan_map, corners[idx])
-                placed.append((c["owner"], BUILDING[c["buildingType"]], node))
-        for idx, e in map_diff.get("tileEdgeStates", {}).items():
-            edges.setdefault(idx, {}).update(e)
-            if "owner" in e and e.get("type") == 1:
-                placed.append(
-                    (e["owner"], "road", list(_edge_nodes(catan_map, edges[idx])))
-                )
-
-        stop = False
-        for _, entry in sorted(
-            diff.get("gameLogState", {}).items(), key=lambda kv: int(kv[0])
-        ):
-            text = entry.get("text", {})
-            kind = text.get("type")
-            if kind == LOG_PLACED:
-                piece = PIECE.get(text.get("pieceEnum"))
-                match = next(
-                    (
-                        p
-                        for p in placed
-                        if p[0] == text.get("playerColor") and p[1] == piece
-                    ),
-                    None,
-                )
-                if match is None:
-                    conv.unsupported.append(
-                        f"log entry {text} has no matching board change"
-                    )
-                    stop = True
-                    break
-                placed.remove(match)
-                owner, piece, where = match
-                action = {
-                    "settlement": ActionType.BUILD_SETTLEMENT,
-                    "city": ActionType.BUILD_CITY,
-                    "road": ActionType.BUILD_ROAD,
-                }[piece]
-                emit(owner, action.value, where)
-            elif kind == LOG_ROLLED:
-                dice = [text["firstDice"], text["secondDice"]]
-                emit(text["playerColor"], ActionType.ROLL.value, dice, dice)
-            elif kind == LOG_RESIGNED:
-                conv.ended = "resignation"
-                stop = True
-                break
-            elif kind in LOG_IGNORED:
+    c = _Converter(start.data["data"]["payload"], start)
+    try:
+        for f in frames:
+            if f.dir != "in" or f.seq < start.seq:
                 continue
-            else:
-                conv.unsupported.append(f"log entry type {kind}: {text}")
-                stop = True
+            if f.type == DIFF:
+                c.apply(f.data["data"]["payload"].get("diff", {}))
+            elif f.type == GAME_OVER:
+                c.finish(f.data["data"]["payload"].get("endGameState"))
+            if c.conv.ended in ("win", "resignation") and f.type == GAME_OVER:
                 break
-        if stop:
-            if conv.ended is None:
-                conv.ended = "unsupported"
-            break
-        if placed:
-            conv.unsupported.append(f"board changes without a log entry: {placed}")
-            conv.ended = "unsupported"
-            break
-
-        cur = diff.get("currentState", {})
-        if "completedTurns" in cur:
-            if completed >= setup_turns and cur["completedTurns"] > completed:
-                emit(current, ActionType.END_TURN.value, None)
-            completed = cur["completedTurns"]
-        if "currentTurnPlayerColor" in cur:
-            current = cur["currentTurnPlayerColor"]
-
-        for color, ps in diff.get("playerStates", {}).items():
-            cards = ps.get("resourceCards", {}).get("cards")
-            if cards is None:
-                continue
-            check = {"at": len(log), "color": seat[int(color)], "resources": len(cards)}
-            if int(color) == you:
-                hand = {r: 0 for r in RESOURCE.values()}
-                for card in cards:
-                    hand[RESOURCE[card]] += 1
-                check["hand"] = hand
-            record["checks"].append(check)
-    return conv
+    except _Unsupported as e:
+        c.conv.unsupported.append(str(e))
+        c.conv.ended = "unsupported"
+    return c.conv
 
 
 def main(argv=None):

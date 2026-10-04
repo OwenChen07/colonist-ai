@@ -41,7 +41,7 @@ def test_real_game_converts_and_replays(frames):
     report = replay(record)
     assert report.ok, report.summary()
     assert report.dice_mode == "balanced"
-    assert len(record["checks"]) == 7  # all of them held
+    assert len(record["checks"]) == 9  # all of them held (cards and points)
 
 
 def test_board(frames):
@@ -110,3 +110,76 @@ def test_mismatched_ports_are_rejected(frames):
     port["x"], port["y"] = 0, 0  # an inland edge
     with pytest.raises(ConvertError):
         convert_map(map_state)
+
+
+FULL_GAME = os.path.join(
+    os.path.dirname(__file__), "fixtures", "capture_full_game.json"
+)
+
+
+@pytest.fixture(scope="module")
+def full_game():
+    return convert(load(FULL_GAME))
+
+
+def test_full_game_replays_to_the_same_winner(full_game):
+    """A real 20-minute game played to 15 points: 7s, discards, steals,
+    knights, monopoly, year of plenty, hidden dev card buys, port trades."""
+    assert full_game.ended == "win" and not full_game.unsupported
+    record = full_game.record
+    report = replay(record)
+    assert report.ok, report.summary()
+    assert report.winner == record["winner"]
+    assert report.dice_mode == "balanced"  # 72 rolls, all possible under balanced dice
+    kinds = {e[0][1] for e in record["log"]}
+    assert {
+        "MOVE_ROBBER",
+        "DISCARD_RESOURCE",
+        "PLAY_KNIGHT_CARD",
+        "PLAY_MONOPOLY",
+        "PLAY_YEAR_OF_PLENTY",
+        "BUY_DEVELOPMENT_CARD",
+        "MARITIME_TRADE",
+        "BUILD_CITY",
+    } <= kinds
+    checks = record["checks"]
+    assert sum("hand" in c for c in checks) > 50
+    assert sum("visible_vps" in c for c in checks) > 10
+
+
+def test_full_game_dev_cards_are_known_only_to_their_buyer(full_game):
+    record = full_game.record
+    you = next(c for c, p in record["players"].items() if p["you"])
+    buys = [e for e in record["log"] if e[0][1] == "BUY_DEVELOPMENT_CARD"]
+    assert all(e[1] is not None for e in buys if e[0][0] == you)
+    assert all(e[1] is None for e in buys if e[0][0] != you)
+
+
+def test_full_game_wrong_steal_is_caught(full_game):
+    record = copy.deepcopy(full_game.record)
+    i = next(
+        i for i, e in enumerate(record["log"]) if e[0][1] == "MOVE_ROBBER" and e[1]
+    )
+    record["log"][i][1] = "WOOD" if record["log"][i][1] != "WOOD" else "BRICK"
+    assert not replay(record).ok
+
+
+def bank_trade(given, received, ratios):
+    from catanatron.colonist.convert import _Converter
+
+    c = _Converter.__new__(_Converter)
+    c.log, c.discards, c.seat = [], [], {1: "RED"}
+    c.ratios = {1: ratios}
+    c._bank_trade(1, given, received)
+    return [e[0][2] for e in c.log]
+
+
+def test_bundled_bank_trade_is_split_into_lots():
+    # 2:1 ore port plus 4:1 brick, received wheat and wool.
+    assert bank_trade([5, 5, 2, 2, 2, 2], [4, 3], {5: 2, 2: 4}) == [
+        ["ORE", "ORE", None, None, "WHEAT"],
+        ["BRICK", "BRICK", "BRICK", "BRICK", "SHEEP"],
+    ]
+    assert bank_trade([3, 3, 3], [1], {3: 3}) == [
+        ["SHEEP", "SHEEP", "SHEEP", None, "WOOD"]
+    ]

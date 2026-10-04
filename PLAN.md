@@ -83,12 +83,17 @@ Each phase ends at a gate, and the next phase starts once the gate is passed.
 - Recorder: `recorder/` captures every colonist message from page load, and
   `python -m catanatron.colonist.convert captures/*.json` turns captures into records.
   colonist sends the whole game once at the start, then a diff after every change, as
-  MessagePack. Coordinates, resources and ports are mapped (see `convert.py`). The first
-  captured game (setup, three rolls, a resignation) converts and replays cleanly, card
-  counts included, with balanced dice confirmed. Colonist's settings match the rules
-  table: 15 points, a 9-card limit, friendly robber, balanced dice.
-- Still to map, from captures that include them: robber moves and steals, discards,
-  dev cards, bank and port trades, and a game played to 15 points.
+  MessagePack. Board coordinates, resources, ports, dev cards and the points breakdown
+  are mapped (see `convert.py`).
+- **First full game (4 Oct):** a 20-minute casual 1v1 to 15 points converts to 261 moves
+  that all replay legally, with 206 checks against colonist (both players' card counts,
+  the recording player's exact hand, visible points) all matching, and the same winner.
+  It covers 7s, discards, steals, knights, monopoly, year of plenty, hidden dev card buys
+  and port trades. All 72 rolls were possible under balanced dice, so colonist 1v1 uses
+  them. The hand checks also confirm the resource mapping (building costs differ by
+  resource, so a swap would show).
+- Not yet seen in a capture: Road Building. Phase 0 gate: 20 recorded games replaying
+  cleanly (2 so far, 1 of them complete).
 
 ### Phase 1: a measuring stick and a baseline bot
 
