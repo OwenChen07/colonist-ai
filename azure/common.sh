@@ -4,7 +4,7 @@
 # here between jobs) and $VM_GROUP holds the VMs and their disks, IPs and
 # network, so `azure/teardown.sh` can remove every VM without touching data.
 
-LOCATION=${LOCATION:-eastus}
+LOCATION=${LOCATION:-eastus}  # Azure for Students: see allowed_locations below
 GROUP=${GROUP:-colonist-ai}
 VM_GROUP=${VM_GROUP:-colonist-ai-vms}
 CONTAINER=colonist
@@ -37,6 +37,15 @@ preflight() {
     echo "and check in the portal (Subscriptions) that it shows as Active." >&2
     exit 1
   fi
+  # Azure for Students allows only a few regions, set by a policy on the
+  # subscription. Read them from the policy and stop early if LOCATION isn't one.
+  allowed=$(allowed_locations)
+  if [ -n "$allowed" ] && ! printf '%s\n' $allowed | grep -qx "$LOCATION"; then
+    echo "Region $LOCATION isn't allowed on this subscription. Allowed regions:" >&2
+    printf '  %s\n' $allowed >&2
+    echo "Rerun with one of them, e.g.  LOCATION=$(printf '%s\n' $allowed | head -1) azure/deploy.sh ..." >&2
+    exit 1
+  fi
   for ns in Microsoft.Storage Microsoft.Compute Microsoft.Network; do
     state=$(az provider show -n "$ns" --query registrationState -o tsv 2>/dev/null)
     if [ "$state" != "Registered" ]; then
@@ -46,11 +55,33 @@ preflight() {
   done
 }
 
+# The regions allowed by policy on this subscription (empty if none is set).
+allowed_locations() {
+  az policy assignment list -o json 2>/dev/null | python3 -c '
+import json, sys
+found = set()
+for a in json.load(sys.stdin):
+    for name, p in (a.get("parameters") or {}).items():
+        v = p.get("value") if isinstance(p, dict) else None
+        if "location" in name.lower() and isinstance(v, list):
+            found.update(x for x in v if isinstance(x, str))
+print(" ".join(sorted(found)))
+' 2>/dev/null
+}
+
+# Create a resource group unless it exists (a group keeps the region it was
+# made in; its resources can be in any region).
+ensure_group() {
+  if [ "$(az group exists -n "$1")" != "true" ]; then
+    az group create -n "$1" -l "$LOCATION" -o none
+  fi
+}
+
 ensure_storage() {
   preflight
   if ! az storage account show -n "$ACCOUNT" -g "$GROUP" -o none 2>/dev/null; then
     echo "== creating storage account $ACCOUNT in $LOCATION"
-    az group create -n "$GROUP" -l "$LOCATION" -o none
+    ensure_group "$GROUP"
     az storage account create -n "$ACCOUNT" -g "$GROUP" -l "$LOCATION" \
       --sku Standard_LRS --kind StorageV2 --min-tls-version TLS1_2 \
       --allow-blob-public-access false -o none

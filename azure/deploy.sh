@@ -94,7 +94,7 @@ runcmd:
 EOF
 
 echo "== creating VM $VM ($VM_SIZE, $PRIORITY) in $LOCATION"
-az group create -n "$VM_GROUP" -l "$LOCATION" -o none
+ensure_group "$VM_GROUP"
 spot=()
 if [ "$PRIORITY" = "Spot" ]; then
   spot=(--priority Spot --eviction-policy Deallocate --max-price -1)
