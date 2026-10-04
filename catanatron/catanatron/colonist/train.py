@@ -11,7 +11,9 @@ shows how well the net does on boards it has never seen.
 
 Writes to --out:
   checkpoint.pt  everything needed to resume (weights, optimizer, epoch)
-  net.npz        the weights for play (catanatron.colonist.net)
+  net.npz        the weights for play (catanatron.colonist.net), from the
+                 epoch with the lowest validation loss
+  last.npz       the weights after the latest epoch
   log.csv        losses and accuracy after every epoch
 
 Needs PyTorch (pip install -e ".[train]"). Uses the Apple GPU (MPS) or CUDA
@@ -126,6 +128,37 @@ class Data:
         return x, self.legal[idx], self.action[idx], pi, self.value[idx]
 
 
+class Augment:
+    """Applies a random board symmetry to each position of a batch."""
+
+    def __init__(self, device, generator):
+        import torch
+
+        from catanatron.colonist.symmetry import symmetries
+
+        syms = symmetries()
+        self.inputs = torch.tensor(np.stack([s.inputs for s in syms]), device=device)
+        self.moves = torch.tensor(np.stack([s.moves for s in syms]), device=device)
+        self.move_image = torch.tensor(
+            np.stack([s.move_image for s in syms]), device=device
+        )
+        self.generator = generator
+
+    def __call__(self, x, legal, action, pi, value):
+        import torch
+
+        sym = torch.randint(0, len(self.inputs), (len(x),), generator=self.generator)
+        sym = sym.to(x.device)
+        x = torch.gather(x, 1, self.inputs[sym])
+        moves = self.moves[sym]
+        legal = torch.gather(legal, 1, moves)
+        if pi is not None:
+            pi = torch.gather(pi, 1, moves)
+        mapped = self.move_image[sym, action.clamp(min=0)]
+        action = torch.where(action >= 0, mapped, action)
+        return x, legal, action, pi, value
+
+
 def losses(model, x, legal, action, pi, value, value_weight):
     """Returns (total, policy loss, value loss, correct top moves, number of
     policy targets)."""
@@ -190,6 +223,11 @@ def main(argv=None):
         help="weight of the search's value in the value target (self-play rows)",
     )
     parser.add_argument("--val-fraction", type=float, default=0.05)
+    parser.add_argument(
+        "--no-augment",
+        action="store_true",
+        help="train without the 12 board symmetries",
+    )
     parser.add_argument("--device", default=None)
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args(argv)
@@ -214,6 +252,8 @@ def main(argv=None):
         f"on {device}",
         flush=True,
     )
+    baseline = float((val.value**2).mean()) if val.n else float("nan")
+    print(f"validation value loss of always guessing 0: {baseline:.3f}", flush=True)
     del d
 
     hidden = [int(h) for h in args.hidden.split(",")]
@@ -231,7 +271,7 @@ def main(argv=None):
     os.makedirs(args.out, exist_ok=True)
     ckpt_path = os.path.join(args.out, "checkpoint.pt")
     log_path = os.path.join(args.out, "log.csv")
-    first_epoch = 0
+    first_epoch, best = 0, float("inf")
     if os.path.exists(ckpt_path):
         ckpt = torch.load(ckpt_path, map_location=device)
         if ckpt["hidden"] != hidden:
@@ -244,6 +284,7 @@ def main(argv=None):
         opt.load_state_dict(ckpt["opt"])
         sched.load_state_dict(ckpt["sched"])
         first_epoch = ckpt["epoch"]
+        best = ckpt.get("best", float("inf"))
         print(f"resuming after epoch {first_epoch}", flush=True)
     print(f"{params:,} parameters", flush=True)
     if first_epoch == 0:
@@ -261,6 +302,7 @@ def main(argv=None):
             )
 
     gen = torch.Generator(device="cpu").manual_seed(args.seed)
+    augment = None if args.no_augment else Augment(device, gen)
     for epoch in range(first_epoch, args.epochs):
         start = time.time()
         gen.manual_seed(args.seed * 1000 + epoch)  # resumable shuffles
@@ -268,7 +310,10 @@ def main(argv=None):
         sums = np.zeros(3)
         for s in range(steps_per_epoch):
             idx = order[s * args.batch : (s + 1) * args.batch]
-            total, pl, vl, _, _ = losses(model, *train.batch(idx), args.value_weight)
+            batch = train.batch(idx)
+            if augment:
+                batch = augment(*batch)
+            total, pl, vl, _, _ = losses(model, *batch, args.value_weight)
             opt.zero_grad(set_to_none=True)
             total.backward()
             opt.step()
@@ -286,6 +331,18 @@ def main(argv=None):
             csv.writer(f).writerow(
                 [f"{x:.5g}" if isinstance(x, float) else x for x in row]
             )
+        # net.npz is the epoch with the lowest validation loss so far (the
+        # value head can overfit long before the policy stops improving);
+        # last.npz is the latest.
+        val_loss = float(vp + args.value_weight * vv)
+        meta = {
+            "meta_epoch": np.asarray(epoch + 1),
+            "meta_val_loss": np.asarray(val_loss),
+        }
+        if val_loss < best:
+            best = val_loss
+            export(model, os.path.join(args.out, "net.npz"), meta)
+        export(model, os.path.join(args.out, "last.npz"), meta)
         torch.save(
             {
                 "model": model.state_dict(),
@@ -293,15 +350,11 @@ def main(argv=None):
                 "sched": sched.state_dict(),
                 "epoch": epoch + 1,
                 "hidden": hidden,
+                "best": best,
             },
             ckpt_path + ".tmp",
         )
         os.replace(ckpt_path + ".tmp", ckpt_path)
-        export(
-            model,
-            os.path.join(args.out, "net.npz"),
-            {"meta_epoch": np.asarray(epoch + 1)},
-        )
     return 0
 
 
