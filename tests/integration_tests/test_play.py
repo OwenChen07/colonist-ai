@@ -143,3 +143,13 @@ def test_parquet_output():
         assert "F_BANK_BRICK" in df.columns
         assert "RETURN" in df.columns
         assert "ACTION" in df.columns
+
+
+def test_summary_survives_a_game_with_no_winner(monkeypatch):
+    # A game that hits the turn limit has no winner and is left out of the
+    # averages; with none finished, the summary used to divide by zero.
+    monkeypatch.setattr("catanatron.game.TURNS_LIMIT", 1)
+    runner = CliRunner()
+    result = runner.invoke(simulate, ["--num=1", "--players=R,R"])
+    assert result.exit_code == 0, result.exception
+    assert "Game Summary" in result.output
