@@ -107,6 +107,25 @@ def test_redeal_keeps_what_the_viewer_knows(positions):
         assert np.array_equal(E.encode(g, me)[1], mine_before)
 
 
+def test_redeal_never_ends_the_game():
+    """A deal that would give the opponent 15 points can't be the real one."""
+    game = _positions(3)[-60]
+    me, them = game.state.colors
+    key = player_key(game.state, them) + "_"
+    ps = game.state.player_state
+    _set_dev_hand(game, them, ["KNIGHT", "KNIGHT", "KNIGHT"])
+    visible = ps[key + "ACTUAL_VICTORY_POINTS"]
+    ps[key + "VICTORY_POINTS"] += 13 - visible  # two short of winning
+    ps[key + "ACTUAL_VICTORY_POINTS"] = 13
+    game.state.development_listdeck = [VICTORY_POINT] * 5 + ["MONOPOLY"]
+    rng = random.Random(0)
+    for _ in range(20):
+        g = game.copy()
+        redeal_hidden_cards(g, me, rng)
+        assert g.winning_color() is None
+        assert g.state.player_state[key + "ACTUAL_VICTORY_POINTS"] < 15
+
+
 def test_chance_outcomes_sum_to_one(positions):
     seen = set()
     for game in positions:
@@ -209,3 +228,51 @@ def test_training_round_trip(tmp_path):
     assert main(args + ["--epochs", "2"]) == 0  # resumes
     net = Net.load(str(out / "net.npz"))
     assert len(net.hidden) == 2
+
+
+def test_selfplay_shard_and_mixed_training(tmp_path):
+    from catanatron.colonist.datagen import load, run_shard as bot_shard
+    from catanatron.colonist.selfplay import run_shard
+
+    net_path = str(tmp_path / "net.npz")
+    random_net(hidden=(16, 16)).save(net_path)
+    sp = tmp_path / "sp"
+    _, games, rows, searches, calls, _ = run_shard(
+        (str(sp), net_path, 0, 3, {"simulations": 4})
+    )
+    assert games == 3 and rows == searches > 0
+    assert calls < searches * 4  # positions from several games share calls
+    bot_shard((str(tmp_path / "bot"), "W", 0, 2, 10, 0.0))
+    d = load(glob.glob(str(sp / "*.npz")) + glob.glob(str(tmp_path / "bot" / "*.npz")))
+    soft = d["soft"] >= 0
+    assert soft.sum() == rows == len(d["pi"])
+    assert np.allclose(d["pi"].astype(np.float32).sum(1), 1, atol=1e-2)
+    assert not d["pi"][~d["legal"][soft]].any()
+    assert (d["action"][soft] == -1).all()
+    assert np.array_equal(d["v"][~soft], d["z"][~soft])
+
+    pytest.importorskip("torch")
+    from catanatron.colonist.train import main
+
+    out = tmp_path / "model"
+    assert (
+        main(
+            [
+                str(sp),
+                str(tmp_path / "bot"),
+                "--out",
+                str(out),
+                "--hidden",
+                "16",
+                "--epochs",
+                "1",
+                "--batch",
+                "64",
+                "--val-fraction",
+                "0.5",
+                "--device",
+                "cpu",
+            ]
+        )
+        == 0
+    )

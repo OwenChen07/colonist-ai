@@ -49,9 +49,13 @@ TURNS_LIMIT = 1000
 
 
 # ===== hidden information
-def redeal_hidden_cards(game, viewer, rng):
+def redeal_hidden_cards(game, viewer, rng, tries=100):
     """In place: deal the opponent's development cards again from everything
-    `viewer` can't see (their hand plus the deck), and shuffle the deck."""
+    `viewer` can't see (their hand plus the deck), and shuffle the deck.
+
+    A deal must fit what the viewer knows: the game isn't over, so the
+    opponent's visible points plus victory point cards are short of winning.
+    Deals that break this are drawn again (the real hand always fits)."""
     state = game.state
     ps = state.player_state
     for color in state.colors:
@@ -59,10 +63,15 @@ def redeal_hidden_cards(game, viewer, rng):
             continue
         key = player_key(state, color) + "_"
         hand = [c for c in DEVELOPMENT_CARDS for _ in range(ps[key + c + "_IN_HAND"])]
+        visible = ps[key + "ACTUAL_VICTORY_POINTS"] - hand.count(VICTORY_POINT)
         pool = state.development_listdeck + hand
-        rng.shuffle(pool)
-        new_hand, state.development_listdeck = pool[: len(hand)], pool[len(hand) :]
-        vps_before = ps[key + VICTORY_POINT + "_IN_HAND"]
+        new_hand, deck = hand, state.development_listdeck
+        for _ in range(tries):
+            rng.shuffle(pool)
+            if visible + pool[: len(hand)].count(VICTORY_POINT) < game.vps_to_win:
+                new_hand, deck = pool[: len(hand)], pool[len(hand) :]
+                break
+        state.development_listdeck = list(deck)
         for c in DEVELOPMENT_CARDS:
             n = new_hand.count(c)
             ps[key + c + "_IN_HAND"] = n
@@ -71,8 +80,7 @@ def redeal_hidden_cards(game, viewer, rng):
                 # deal can't know which were bought this turn, so it assumes
                 # none were (exact at the start of their turn).
                 ps[key + c + "_OWNED_AT_START"] = n > 0
-        vps_after = ps[key + VICTORY_POINT + "_IN_HAND"]
-        ps[key + "ACTUAL_VICTORY_POINTS"] += vps_after - vps_before
+        ps[key + "ACTUAL_VICTORY_POINTS"] = visible + new_hand.count(VICTORY_POINT)
     # Refresh legal moves: they can depend on the cards in hand.
     from catanatron.models.actions import generate_playable_actions
 
@@ -308,27 +316,29 @@ class Search:
             if isinstance(n, Decision):
                 n.W[k] += value if n.color == root_color else -value
 
-    def simulate_round(self, root, firsts):
-        """One simulation through each root move in `firsts`. Their paths
-        share nothing below the root, so the new leaves are evaluated in one
-        batch."""
-        walks = [self.descend(root, a) for a in firsts]
-        pending = [leaf for _, leaf in walks if isinstance(leaf, Decision)]
-        if pending:
-            self.evaluate(pending)
-        for path, leaf in walks:
-            self.backup(path, leaf, root.color)
-
     def run(self, game):
         """Search `game` (not modified) for its player to move. Returns
         (chosen action, root node)."""
+        steps = self.steps(game)
+        try:
+            pending = next(steps)
+            while True:
+                self.evaluate(pending)
+                pending = steps.send(None)
+        except StopIteration as done:
+            return done.value
+
+    def steps(self, game):
+        """The search as a generator, so many searches can share network
+        calls: it yields lists of new Decisions to evaluate (with
+        set_evaluation) before it is resumed, and returns (action, root)."""
         g = game.copy()
         viewer = g.state.current_color()
         redeal_hidden_cards(g, viewer, self.rng)
         root = self.node_after(g)
         if not isinstance(root, Decision):
             raise ValueError("search needs a position with a choice to make")
-        self.evaluate([root])
+        yield [root]
         n = len(root.actions)
         gumbel = np.array(
             [-math.log(-math.log(self.rng.random() or 1e-300)) for _ in range(n)]
@@ -337,14 +347,21 @@ class Search:
         candidates = list(np.argsort(-(gumbel + root.logits))[:m])
         # Sequential halving: equal visits per round to each candidate, then
         # keep the better half (at least 2 until the last round, which spends
-        # whatever budget is left).
+        # whatever budget is left). Within a round the candidates' paths
+        # share nothing below the root, and root statistics are only read
+        # between rounds, so a round's new leaves are evaluated together.
         sims = self.simulations
         phases = max(1, math.ceil(math.log2(m))) if m > 1 else 0
         used = 0
         for phase in range(phases):
             per = max(1, (sims - used) // ((phases - phase) * len(candidates)))
             for _ in range(per):
-                self.simulate_round(root, candidates)
+                walks = [self.descend(root, a) for a in candidates]
+                pending = [leaf for _, leaf in walks if isinstance(leaf, Decision)]
+                if pending:
+                    yield pending
+                for path, leaf in walks:
+                    self.backup(path, leaf, root.color)
                 used += len(candidates)
             if phase < phases - 1:
                 q = self.completed_q(root)
@@ -355,6 +372,13 @@ class Search:
         score = gumbel + root.logits + self.sigma(root, q)
         best = max(candidates, key=lambda a: score[a])
         return root.actions[best], root
+
+    def root_targets(self, root):
+        """Training targets from a finished search: the improved policy over
+        the root's moves, and the search's value for the root player."""
+        q = self.completed_q(root)
+        pi = self.improved_policy(root)
+        return pi, float((pi * q).sum())
 
 
 class NetPlayer(Player):

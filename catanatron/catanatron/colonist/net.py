@@ -66,6 +66,23 @@ class Net:
         values = np.tanh(h @ self.value[0] + self.value[1])[:, 0]
         return logits, values
 
+    def forward_rows(self, statics, dynamic):
+        """Like forward, but row i has its own board inputs statics[i] (rows
+        from several games). Each board's first-layer share is computed once
+        per call."""
+        first = {}
+        for st in statics:
+            if id(st) not in first:
+                first[id(st)] = st @ self.w1_static + self.hidden[0][1]
+        h = dynamic @ self.w1_dynamic + np.stack([first[id(st)] for st in statics])
+        np.maximum(h, 0, out=h)
+        for w, b in self.hidden[1:]:
+            h = h @ w + b
+            np.maximum(h, 0, out=h)
+        logits = h @ self.policy[0] + self.policy[1]
+        values = np.tanh(h @ self.value[0] + self.value[1])[:, 0]
+        return logits, values
+
     def evaluate(self, game, color, legal=None):
         """(priors over `legal` move indices, value) for one position."""
         static, dynamic = E.encode(game, color)

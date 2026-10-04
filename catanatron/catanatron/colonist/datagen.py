@@ -133,14 +133,41 @@ def shard_path(out_dir, first, count):
 
 def load(paths):
     """Concatenate shards into one dict of arrays, with `game` renumbered to
-    index the combined `static`."""
+    index the combined `static`.
+
+    Bot shards (this module) and self-play shards (selfplay.py) can be mixed.
+    Self-play rows have a search policy: they are listed in `pi`, and `soft`
+    gives each row's index into `pi` (-1 for a row without one). `v`, the
+    search's value, is the game result for rows without a search."""
     parts = [dict(np.load(p)) for p in sorted(paths)]
-    out, offset = {}, 0
+    offset, soft_offset = 0, 0
     for part in parts:
         part["game"] = part["game"] + offset
         offset += len(part["static"])
-    for key in parts[0]:
+        n = len(part["z"])
+        if "v" not in part:
+            part["v"] = part["z"].astype(np.float16)
+        if "pi" in part:
+            part["soft"] = np.arange(soft_offset, soft_offset + n, dtype=np.int64)
+            soft_offset += n
+        else:
+            part["soft"] = np.full(n, -1, np.int64)
+    out = {}
+    for key in (
+        "static",
+        "seed",
+        "dynamic",
+        "game",
+        "legal",
+        "action",
+        "z",
+        "turn",
+        "v",
+        "soft",
+    ):
         out[key] = np.concatenate([p[key] for p in parts])
+    pis = [p["pi"] for p in parts if "pi" in p]
+    out["pi"] = np.concatenate(pis) if pis else np.zeros((0, E.NUM_ACTIONS), np.float16)
     out["legal"] = np.unpackbits(out["legal"], axis=1, count=E.NUM_ACTIONS).astype(bool)
     return out
 

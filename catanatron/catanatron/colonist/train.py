@@ -82,39 +82,68 @@ def split_by_game(seeds, val_fraction):
 
 
 class Data:
-    """Positions on the device, with board inputs gathered per batch."""
+    """Positions on the device, with board inputs gathered per batch.
 
-    def __init__(self, d, rows, device):
+    Policy targets are either the bot's move (`action`, a class index) or a
+    search's improved policy (`pi`, a distribution); the value target mixes
+    the game result with the search's value: (1 - value_mix) z + value_mix v,
+    which is just z for rows without a search."""
+
+    def __init__(self, d, rows, device, value_mix=0.0):
         import torch
 
-        self.static = torch.from_numpy(d["static"]).to(device)
-        self.game = torch.from_numpy(d["game"][rows].astype(np.int64)).to(device)
-        self.dynamic = torch.from_numpy(d["dynamic"][rows]).to(device)
-        self.legal = torch.from_numpy(d["legal"][rows]).to(device)
-        self.action = torch.from_numpy(d["action"][rows].astype(np.int64)).to(device)
-        self.z = torch.from_numpy(d["z"][rows].astype(np.float32)).to(device)
+        t = lambda a: torch.from_numpy(np.ascontiguousarray(a)).to(device)
+        self.static = t(d["static"])
+        self.game = t(d["game"][rows].astype(np.int64))
+        self.dynamic = t(d["dynamic"][rows])
+        self.legal = t(d["legal"][rows])
+        self.action = t(d["action"][rows].astype(np.int64))
+        z = d["z"][rows].astype(np.float32)
+        v = d["v"][rows].astype(np.float32)
+        self.value = t((1 - value_mix) * z + value_mix * v)
+        soft = d["soft"][rows]
+        self.has_soft = len(d["pi"]) > 0
+        if self.has_soft:
+            # pi rows for just these positions, renumbered
+            used = soft >= 0
+            self.pi = t(d["pi"][soft[used]])
+            remap = np.full(len(rows), -1, np.int64)
+            remap[used] = np.arange(used.sum())
+            self.soft = t(remap)
         self.n = len(rows)
 
     def batch(self, idx):
         import torch
 
         x = torch.cat([self.static[self.game[idx]], self.dynamic[idx].float()], dim=1)
-        return x, self.legal[idx], self.action[idx], self.z[idx]
+        if self.has_soft:
+            soft = self.soft[idx]
+            pi = torch.zeros(len(idx), E.NUM_ACTIONS, device=x.device)
+            has = soft >= 0
+            pi[has] = self.pi[soft[has]].float()
+        else:
+            pi = None
+        return x, self.legal[idx], self.action[idx], pi, self.value[idx]
 
 
-def losses(model, x, legal, action, z, value_weight):
-    import torch
+def losses(model, x, legal, action, pi, value, value_weight):
+    """Returns (total, policy loss, value loss, correct top moves, number of
+    policy targets)."""
     import torch.nn.functional as F
 
     logits, v = model(x)
     logits = logits.masked_fill(~legal, -1e9)
-    has_target = action >= 0
-    target = action.clamp(min=0)
-    ce = F.cross_entropy(logits, target, reduction="none")
+    log_p = F.log_softmax(logits, dim=1)
+    hard = action >= 0
+    target = F.one_hot(action.clamp(min=0), E.NUM_ACTIONS).float()
+    target = target * hard[:, None]
+    if pi is not None:
+        target = target + pi
+    has_target = target.sum(1) > 0
     n_target = has_target.sum().clamp(min=1)
-    policy_loss = (ce * has_target).sum() / n_target
-    correct = ((logits.argmax(1) == action) & has_target).sum()
-    value_loss = F.mse_loss(v, z)
+    policy_loss = -(target * log_p.clamp(min=-1e4)).sum() / n_target
+    correct = ((logits.argmax(1) == target.argmax(1)) & has_target).sum()
+    value_loss = F.mse_loss(v, value)
     total = policy_loss + value_weight * value_loss
     return total, policy_loss, value_loss, correct, n_target
 
@@ -127,7 +156,7 @@ def evaluate(model, data, batch_size, value_weight):
     with torch.no_grad():
         for start in range(0, data.n, batch_size):
             idx = torch.arange(
-                start, min(start + batch_size, data.n), device=data.z.device
+                start, min(start + batch_size, data.n), device=data.value.device
             )
             _, pl, vl, correct, nt = losses(model, *data.batch(idx), value_weight)
             sums += [
@@ -137,7 +166,11 @@ def evaluate(model, data, batch_size, value_weight):
                 nt.item(),
             ]
     model.train()
-    return sums[0] / sums[3], sums[1] / data.n, sums[2] / sums[3]
+    return (
+        sums[0] / max(sums[3], 1),
+        sums[1] / max(data.n, 1),
+        sums[2] / max(sums[3], 1),
+    )
 
 
 def main(argv=None):
@@ -150,6 +183,12 @@ def main(argv=None):
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--value-weight", type=float, default=1.0)
+    parser.add_argument(
+        "--value-mix",
+        type=float,
+        default=0.5,
+        help="weight of the search's value in the value target (self-play rows)",
+    )
     parser.add_argument("--val-fraction", type=float, default=0.05)
     parser.add_argument("--device", default=None)
     parser.add_argument("--seed", type=int, default=0)
@@ -168,8 +207,8 @@ def main(argv=None):
     d = load(paths)
     val_game = split_by_game(d["seed"], args.val_fraction)
     is_val = val_game[d["game"]]
-    train = Data(d, np.flatnonzero(~is_val), device)
-    val = Data(d, np.flatnonzero(is_val), device)
+    train = Data(d, np.flatnonzero(~is_val), device, args.value_mix)
+    val = Data(d, np.flatnonzero(is_val), device, args.value_mix)
     print(
         f"{len(d['seed'])} games, {train.n} training and {val.n} validation positions, "
         f"on {device}",
