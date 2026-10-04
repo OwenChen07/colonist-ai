@@ -83,6 +83,8 @@ class State:
             Building dev card.
         free_roads_available (int): Number of roads available left in Road Building
             phase.
+        dice (BalancedDice | None): Dice model for rolls, or None for two plain
+            random dice.
     """
 
     def __init__(
@@ -94,6 +96,7 @@ class State:
         number_placement: NumberPlacement = "official_spiral",
         initialize=True,
         rng=None,
+        dice=None,
     ):
         if initialize:
             self.random = rng if rng is not None else random.Random()
@@ -107,6 +110,7 @@ class State:
             )
             self.discard_limit = discard_limit
             self.friendly_robber = friendly_robber
+            self.dice = dice
 
             # feature-ready dictionary
             self.player_state = dict()
@@ -200,5 +204,7 @@ class State:
         state_copy.is_resolving_trade = self.is_resolving_trade
         state_copy.current_trade = self.current_trade
         state_copy.acceptees = self.acceptees
+
+        state_copy.dice = self.dice.copy() if self.dice is not None else None
 
         return state_copy

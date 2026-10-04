@@ -13,6 +13,7 @@ from catanatron.state import State
 from catanatron.apply_action import apply_action
 from catanatron.state_functions import player_key, player_has_rolled
 from catanatron.models.map import CatanMap, NumberPlacement
+from catanatron.models.dice import BalancedDice
 from catanatron.models.player import Color, Player
 from catanatron.observer import GameObserver
 
@@ -57,6 +58,14 @@ class GameAccumulator(GameObserver):
     """
 
 
+def _make_dice(kind: str, num_players: int):
+    if kind == "random":
+        return None
+    if kind == "balanced":
+        return BalancedDice(num_players)
+    raise ValueError(f"unknown dice {kind!r}; expected 'random' or 'balanced'")
+
+
 class Game:
     """
     Initializes a map, decides player seating order, and exposes two main
@@ -78,6 +87,7 @@ class Game:
         catan_map: Optional[CatanMap] = None,
         number_placement: NumberPlacement = "official_spiral",
         initialize: bool = True,
+        dice: str = "random",
     ):
         """Creates a game (doesn't run it).
 
@@ -88,6 +98,8 @@ class Game:
             vps_to_win (int, optional): Victory Points needed to win. Defaults to 10.
             catan_map (CatanMap, optional): Map to use. Defaults to None.
             initialize (bool, optional): Whether to initialize. Defaults to True.
+            dice (str, optional): "random" for two plain dice, or "balanced" for
+                colonist.io's balanced dice. Defaults to "random".
         """
         #: Everything watching this game: the seated players, plus any
         #: accumulators handed to play(). One list, so each hook is one loop.
@@ -109,6 +121,7 @@ class Game:
                 friendly_robber=friendly_robber,
                 number_placement=number_placement,
                 rng=self.random,
+                dice=_make_dice(dice, len(players)),
             )
             self.playable_actions = generate_playable_actions(self.state)
 

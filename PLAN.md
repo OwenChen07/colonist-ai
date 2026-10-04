@@ -66,11 +66,35 @@ Each phase ends at a gate, and the next phase starts once the gate is passed.
 - **Gate:** 20 of your recorded 1v1 games replay through the simulator with no illegal move
   and matching card counts.
 
+**Status (3 Oct 2026).** Simulator side done, recorder in progress:
+
+- Colonist 1v1 rules: `catanatron.colonist.rules.new_game()`.
+- Balanced dice: `catanatron/models/dice.py`. Matches colonist's controller exactly
+  (same rolls and odds on 24 reference games from the tracker's port, same random stream).
+- Friendly robber counts visible points only.
+- Game records and the replay check: `python -m catanatron.colonist.replay records/*.json`.
+  Opponent dev-card draws that the recording player couldn't see are worked out from the
+  cards they later play.
+- Fixed a bug in the bots' look-ahead (also reported upstream in bcollazo/catanatron#385):
+  chance branches never applied their outcome, so roll branches rolled fresh random dice
+  and dev-card branches all drew the real next card from the deck. Fixing it did not
+  measurably change AlphaBeta's strength (200 games each, all within noise), but the
+  dev-card part let AlphaBeta see the deck, so the baseline now plays fair.
+- Recorder: colonist sends the game over one WebSocket as MessagePack state updates
+  (`diff`, `gameLogState`, `tileInfo`, ...), so the recorder reads game data rather than
+  the screen. Next step: a capture extension that saves every message from page load,
+  then a decoder built from real captured games.
+
 ### Phase 1: a measuring stick and a baseline bot
 
 - Build the evaluation harness: paired boards, swapped seats, win rate with its margin of
   error, plus an early-stopping sequential test (SPRT) for promotion matches.
 - Set up a ladder of reference bots: Random, WeightedRandom, ValueFunction, AlphaBeta.
+  "AlphaBeta" everywhere in this plan means this fork's version, with its chance nodes
+  fixed (see Phase 0 status), not upstream's.
+- Run AlphaBeta at a fixed search depth with no time limit. Its search stops at a
+  wall-clock deadline, so its results change with how busy the machine is: the same 50
+  boards gave 44 and then 52 wins out of 100 in two runs.
 - Run a sustained one-hour benchmark to measure how much the fanless Air slows down under
   load, and use that number in all later time estimates.
 - Retune AlphaBeta's hand-written scoring for 15-point 1v1 by automatic tuning (SPSA over

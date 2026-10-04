@@ -27,6 +27,7 @@ from collections import Counter, defaultdict
 from catanatron.game import Game
 from catanatron.models.actions import generate_playable_actions
 from catanatron.models.board import STATIC_GRAPH, Board
+from catanatron.models.dice import BalancedDice
 from catanatron.models.enums import (
     DEVELOPMENT_CARDS,
     RESOURCES,
@@ -257,6 +258,7 @@ def state_to_json(game: Game):
         "is_resolving_trade": s.is_resolving_trade,
         "current_trade": list(s.current_trade),
         "acceptees": list(s.acceptees),
+        "dice": s.dice.to_json() if s.dice is not None else None,
     }
 
 
@@ -328,6 +330,8 @@ def state_from_json(doc, players) -> Game:
     s.is_resolving_trade = doc["is_resolving_trade"]
     s.current_trade = tuple(doc["current_trade"])
     s.acceptees = tuple(doc["acceptees"])
+    dice = doc.get("dice")  # absent in documents saved before dice were stored
+    s.dice = BalancedDice.from_json(dice, Color.__getitem__) if dice else None
 
     game = Game(players=[], initialize=False)
     game.id = doc["game"]["id"]

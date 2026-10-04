@@ -31,7 +31,7 @@ from catanatron.models.enums import (
 )
 from catanatron.state import State
 from catanatron.state_functions import (
-    get_actual_victory_points,
+    get_visible_victory_points,
     get_player_buildings,
     get_player_freqdeck,
     player_can_afford_dev_card,
@@ -261,7 +261,9 @@ def _robber_action_blocks_low_vp_enemy(state, color, action) -> bool:
         if color == candidate_color:
             continue
 
-        if get_actual_victory_points(state, candidate_color) < 3:
+        # Visible points only: counting hidden victory point cards would let the
+        # legal moves reveal them.
+        if get_visible_victory_points(state, candidate_color) < 3:
             return True
 
     return False

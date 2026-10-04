@@ -2,6 +2,7 @@
 
 Run: .venv/bin/python bench/speed.py
 """
+
 import random
 import time
 
@@ -41,7 +42,10 @@ def step_time(n=3000):
 def net_time(batch, n=2000):
     # ~1M-parameter MLP (650 -> 768 -> 768 -> 332 policy + 1 value), float32, numpy/Accelerate.
     rng = np.random.default_rng(0)
-    ws = [rng.standard_normal(s, dtype=np.float32) * 0.05 for s in [(650, 768), (768, 768), (768, 333)]]
+    ws = [
+        rng.standard_normal(s, dtype=np.float32) * 0.05
+        for s in [(650, 768), (768, 768), (768, 333)]
+    ]
     x = rng.standard_normal((batch, 650), dtype=np.float32)
     t = time.perf_counter()
     for _ in range(n):
@@ -67,14 +71,24 @@ def feature_time(n=300):
 
 if __name__ == "__main__":
     r = games_per_sec(lambda: [RandomPlayer(Color.RED), RandomPlayer(Color.BLUE)], 100)
-    print(f"Random vs Random: {r[0]:.1f} games/s, {r[1]:.0f} turns, {r[2]:.0f} decisions/game")
-    r = games_per_sec(lambda: [ValueFunctionPlayer(Color.RED), ValueFunctionPlayer(Color.BLUE)], 20)
-    print(f"ValueFunction vs ValueFunction: {r[0]:.2f} games/s, {r[1]:.0f} turns, {r[2]:.0f} decisions/game")
-    r = games_per_sec(lambda: [AlphaBetaPlayer(Color.RED), ValueFunctionPlayer(Color.BLUE)], 5)
+    print(
+        f"Random vs Random: {r[0]:.1f} games/s, {r[1]:.0f} turns, {r[2]:.0f} decisions/game"
+    )
+    r = games_per_sec(
+        lambda: [ValueFunctionPlayer(Color.RED), ValueFunctionPlayer(Color.BLUE)], 20
+    )
+    print(
+        f"ValueFunction vs ValueFunction: {r[0]:.2f} games/s, {r[1]:.0f} turns, {r[2]:.0f} decisions/game"
+    )
+    r = games_per_sec(
+        lambda: [AlphaBetaPlayer(Color.RED), ValueFunctionPlayer(Color.BLUE)], 5
+    )
     print(f"AlphaBeta vs ValueFunction: {1 / r[0]:.1f} s/game")
     print(f"Search step (copy + one move): {step_time() * 1e6:.0f} us")
     for b in (1, 64):
         per, params = net_time(b)
-        print(f"Net eval, {params / 1e6:.2f}M params, batch {b}: {per * 1e6:.0f} us/position")
+        print(
+            f"Net eval, {params / 1e6:.2f}M params, batch {b}: {per * 1e6:.0f} us/position"
+        )
     per, size = feature_time()
     print(f"Feature extraction ({size} numbers): {per * 1e6:.0f} us/position")

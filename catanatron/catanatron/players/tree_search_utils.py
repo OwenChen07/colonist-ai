@@ -63,7 +63,14 @@ def execute_spectrum(game: Game, action: Action):
             option_action = Action(action.color, action.action_type, card)
             option_game = game.copy()
             try:
-                option_game.execute(option_action, validate_action=False)
+                # As with rolls, the card has to go in as the record; otherwise
+                # every branch pops the real top of the deck, which lets the
+                # search see the next card. (Same fix as bcollazo/catanatron#385.)
+                option_game.execute(
+                    option_action,
+                    validate_action=False,
+                    action_record=ActionRecord(option_action, card),
+                )
             except Exception:
                 # ignore exceptions, since player might imagine impossible outcomes.
                 # ignoring means the value function of this node will be flattened,
@@ -73,13 +80,28 @@ def execute_spectrum(game: Game, action: Action):
         return results
     elif action.action_type == ActionType.ROLL:
         results = []
+        dice = game.state.dice
+        odds = dice.odds(action.color) if dice is not None else None
         for roll in range(2, 13):
-            outcome = (roll // 2, math.ceil(roll / 2))
+            if dice is None:
+                outcome = (roll // 2, math.ceil(roll / 2))
+                proba = number_probability(roll)
+            else:
+                proba = odds[roll - 2]
+                if proba == 0:
+                    continue  # impossible under the balanced dice right now
+                outcome = dice.example_pair(roll)
 
             option_action = Action(action.color, action.action_type, outcome)
             option_game = game.copy()
-            option_game.execute(option_action, validate_action=False)
-            results.append((option_game, number_probability(roll)))
+            # The outcome has to go in as the record: apply_roll ignores
+            # action.value and would otherwise roll fresh dice.
+            option_game.execute(
+                option_action,
+                validate_action=False,
+                action_record=ActionRecord(option_action, outcome),
+            )
+            results.append((option_game, proba))
         return results
     elif action.action_type == ActionType.MOVE_ROBBER:
         (coordinate, robbed_color) = action.value

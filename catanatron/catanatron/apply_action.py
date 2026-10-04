@@ -269,9 +269,14 @@ def apply_roll(state: State, action: Action, action_record=None):
     key = player_key(state, action.color)
     state.player_state[f"{key}_HAS_ROLLED"] = True
 
-    dices = (
-        action_record.result if action_record is not None else roll_dice(state.random)
-    )
+    if action_record is not None:
+        dices = action_record.result
+        if state.dice is not None:
+            state.dice.observe(action.color, dices)
+    elif state.dice is not None:
+        dices = state.dice.roll(state.random, action.color)
+    else:
+        dices = roll_dice(state.random)
     number = dices[0] + dices[1]
     action = Action(action.color, action.action_type, dices)
 
