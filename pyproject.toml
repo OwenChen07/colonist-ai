@@ -20,7 +20,8 @@ dependencies = ["networkx", "click", "rich"]
 
 [project.optional-dependencies]
 gym = ["gymnasium<=0.29.1", "numpy", "pandas", "fastparquet", "pygame"]
-colonist = ["msgpack"]
+colonist = ["msgpack", "numpy"]
+train = ["torch"]
 web = [
     "gunicorn",
     "flask",

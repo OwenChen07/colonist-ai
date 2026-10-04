@@ -40,6 +40,12 @@ def register_builtins(registry=REGISTRY):
         "AB": AlphaBetaPlayer,
         "SAB": SameTurnAlphaBetaPlayer,
     }
+    try:  # the network player needs numpy (the colonist extra)
+        from catanatron.colonist.mcts import NetPlayer
+
+        builtins["Z"] = NetPlayer
+    except ImportError:
+        pass
     for key, player_class in builtins.items():
         registry.register(key, player_class, replace=True)
     return registry

@@ -1,4 +1,3 @@
-import pickle
 import random
 from collections import defaultdict
 from typing import Any, Dict, List, Sequence, Tuple
@@ -182,9 +181,10 @@ class State:
         state_copy.resource_freqdeck = self.resource_freqdeck.copy()
         state_copy.development_listdeck = self.development_listdeck.copy()
 
-        state_copy.buildings_by_color = pickle.loads(
-            pickle.dumps(self.buildings_by_color)
-        )
+        state_copy.buildings_by_color = {
+            color: defaultdict(list, {kind: list(ids) for kind, ids in by_kind.items()})
+            for color, by_kind in self.buildings_by_color.items()
+        }
         state_copy.action_records = self.action_records.copy()
         state_copy.num_turns = self.num_turns
 

@@ -1,0 +1,354 @@
+"""What the network sees, and the moves it chooses from (PLAN.md, Phase 2).
+
+A position is encoded from the point of view of one player ("me"; the other
+is "them"), as two float32 vectors:
+
+  - static: the board, which never changes during a game, so it is built once
+    per map and shared by every position of the game. Tiles (resource and
+    number odds) and, for each of the 54 corners, what it produces and which
+    port it opens. The per-corner part saves the network from learning which
+    tiles touch which corner.
+  - dynamic: everything else. Robber, buildings and roads, both players' hands
+    and progress, the bank, the turn's phase, and the balanced-dice state.
+
+Only what "me" could know goes in. Their resource hand is included: in 1v1
+the log shows every card that changes hands (both players see a steal), so
+colonist players and the tracker can follow it exactly. Their unplayed
+development cards are only a count, and their hidden victory points are left
+out (their visible points are in).
+
+Moves: the 313 actions a 2-player game can contain, without trades between
+players (the AI never makes them). A robber move names its victim as "them",
+so the same index means the same move from either seat.
+"""
+
+import weakref
+from functools import lru_cache
+
+import numpy as np
+
+from catanatron.models.board import get_edges
+from catanatron.models.dice import MIN_CARDS_BEFORE_RESHUFFLE
+from catanatron.models.enums import (
+    DEVELOPMENT_CARDS,
+    RESOURCES,
+    SETTLEMENT,
+    CITY,
+    ROAD,
+    VICTORY_POINT,
+    ActionType,
+)
+from catanatron.models.map import build_map, number_probability
+
+NUM_TILES = 19
+NUM_NODES = 54
+EDGES = tuple(tuple(sorted(e)) for e in get_edges())
+EDGE_INDEX = {e: i for i, e in enumerate(EDGES)}
+NUM_EDGES = len(EDGES)  # 72
+PLAYABLE_DEVS = [c for c in DEVELOPMENT_CARDS if c != VICTORY_POINT]
+PORT_KINDS = RESOURCES + [None]  # None: 3:1
+_SCALE_PROBA = 36 / 5  # a single 6 or 8 becomes 1
+
+# ===== moves
+THEM = "THEM"  # robber victim, relative to the player moving
+
+
+@lru_cache(None)
+def action_table():
+    """The 313 moves, as (ActionType, value) keys, in a fixed order. The same
+    moves as the gym's action space for two players (which needs gymnasium),
+    less trades between players and with the robber's victim relative."""
+    R = RESOURCES
+    keys = [
+        (ActionType.ROLL, None),
+        *[(ActionType.DISCARD_RESOURCE, r) for r in R],
+        *[(ActionType.BUILD_ROAD, e) for e in EDGES],
+        *[(ActionType.BUILD_SETTLEMENT, n) for n in range(NUM_NODES)],
+        *[(ActionType.BUILD_CITY, n) for n in range(NUM_NODES)],
+        (ActionType.BUY_DEVELOPMENT_CARD, None),
+        (ActionType.PLAY_KNIGHT_CARD, None),
+        *[
+            (ActionType.PLAY_YEAR_OF_PLENTY, (R[i], R[j]))
+            for i in range(5)
+            for j in range(i, 5)
+        ],
+        *[(ActionType.PLAY_YEAR_OF_PLENTY, (r,)) for r in R],
+        (ActionType.PLAY_ROAD_BUILDING, None),
+        *[(ActionType.PLAY_MONOPOLY, r) for r in R],
+        *[
+            (ActionType.MOVE_ROBBER, (c, victim))
+            for c in build_map("BASE").land_tiles
+            for victim in (None, THEM)
+        ],
+        *[
+            (ActionType.MARITIME_TRADE, tuple(4 * [i] + [j]))
+            for i in R
+            for j in R
+            if i != j
+        ],
+        *[
+            (ActionType.MARITIME_TRADE, tuple(3 * [i] + [None, j]))
+            for i in R
+            for j in R
+            if i != j
+        ],
+        *[
+            (ActionType.MARITIME_TRADE, tuple(2 * [i] + [None, None, j]))
+            for i in R
+            for j in R
+            if i != j
+        ],
+        (ActionType.END_TURN, None),
+    ]
+    return tuple(sorted(keys, key=str))
+
+
+@lru_cache(None)
+def _action_index():
+    return {key: i for i, key in enumerate(action_table())}
+
+
+NUM_ACTIONS = 313
+
+
+def action_key(action):
+    value = action.value
+    if action.action_type == ActionType.MOVE_ROBBER:
+        coordinate, victim = value
+        value = (coordinate, None if victim is None else THEM)
+    elif action.action_type == ActionType.BUILD_ROAD:
+        value = tuple(sorted(value))
+    return (action.action_type, value)
+
+
+def action_index(action):
+    return _action_index()[action_key(action)]
+
+
+def legal_indices(actions):
+    """Indices of these actions, in the same order."""
+    index = _action_index()
+    return [index[action_key(a)] for a in actions]
+
+
+# ===== the board (static)
+class _MapCache:
+    def __init__(self, catan_map):
+        tile_ids = sorted(catan_map.tiles_by_id)
+        assert len(tile_ids) == NUM_TILES
+        index_of_id = {tid: i for i, tid in enumerate(tile_ids)}
+        self.tile_of_coordinate = {
+            c: index_of_id[t.id] for c, t in catan_map.land_tiles.items()
+        }
+        tiles = np.zeros((NUM_TILES, 7), np.float32)
+        for i, tid in enumerate(tile_ids):
+            tile = catan_map.tiles_by_id[tid]
+            if tile.resource is None:
+                tiles[i, 5] = 1
+            else:
+                tiles[i, RESOURCES.index(tile.resource)] = 1
+                tiles[i, 6] = number_probability(tile.number) * _SCALE_PROBA
+        # Per corner: its production of each resource, and its port.
+        self.node_production = np.zeros((NUM_NODES, 5), np.float32)
+        for node, counter in catan_map.node_production.items():
+            for r, p in counter.items():
+                self.node_production[node, RESOURCES.index(r)] = p * _SCALE_PROBA
+        self.node_port = np.zeros((NUM_NODES, 6), np.float32)
+        for kind, nodes in catan_map.port_nodes.items():
+            for node in nodes:
+                self.node_port[node, PORT_KINDS.index(kind)] = 1
+        # Per corner, which tiles it touches (for the robber's blocking)
+        self.node_tiles = {
+            node: [index_of_id[t.id] for t in tiles_]
+            for node, tiles_ in catan_map.adjacent_tiles.items()
+        }
+        self.tile_production = np.zeros((NUM_TILES, 5), np.float32)
+        for i, tid in enumerate(tile_ids):
+            tile = catan_map.tiles_by_id[tid]
+            if tile.resource is not None:
+                self.tile_production[i, RESOURCES.index(tile.resource)] = (
+                    number_probability(tile.number) * _SCALE_PROBA
+                )
+        self.static = np.concatenate(
+            [tiles.ravel(), self.node_production.ravel(), self.node_port.ravel()]
+        )
+
+
+_maps = weakref.WeakKeyDictionary()
+
+
+def _map_cache(catan_map):
+    cache = _maps.get(catan_map)
+    if cache is None:
+        cache = _maps[catan_map] = _MapCache(catan_map)
+    return cache
+
+
+def encode_static(catan_map):
+    return _map_cache(catan_map).static
+
+
+STATIC_SIZE = NUM_TILES * 7 + NUM_NODES * 11  # 727
+
+
+# ===== the position (dynamic)
+def _player_block(state, color, cache, robber_tile, me):
+    """Features of one player. `me` adds what only the owner knows."""
+    key = f"P{state.color_to_index[color]}_"
+    ps = state.player_state
+    hand = [ps[key + r + "_IN_HAND"] for r in RESOURCES]
+    devs = [ps[key + c + "_IN_HAND"] for c in DEVELOPMENT_CARDS]
+    f = [
+        ps[key + "VICTORY_POINTS"] / 15,
+        ps[key + "HAS_ARMY"],
+        ps[key + "HAS_ROAD"],
+        ps[key + "ROADS_AVAILABLE"] / 15,
+        ps[key + "SETTLEMENTS_AVAILABLE"] / 5,
+        ps[key + "CITIES_AVAILABLE"] / 4,
+        ps[key + "LONGEST_ROAD_LENGTH"] / 15,
+        ps[key + "HAS_ROLLED"],
+        sum(hand) / 10,
+        sum(devs) / 5,
+    ]
+    f += [h / 5 for h in hand]
+    f += [ps[key + "PLAYED_" + c] / 5 for c in PLAYABLE_DEVS]
+    # Production per resource, with and without the robber, and ports owned.
+    total = np.zeros(5, np.float32)
+    blocked = np.zeros(5, np.float32)
+    ports = np.zeros(6, np.float32)
+    buildings = state.buildings_by_color[color]
+    for mult, kind in ((1, SETTLEMENT), (2, CITY)):
+        for node in buildings[kind]:
+            total += mult * cache.node_production[node]
+            ports = np.maximum(ports, cache.node_port[node])
+            if robber_tile in cache.node_tiles.get(node, ()):
+                blocked += mult * cache.tile_production[robber_tile]
+    f = np.concatenate(
+        [np.asarray(f, np.float32), total / 3, (total - blocked) / 3, ports]
+    )
+    if me:
+        mine = [
+            ps[key + "ACTUAL_VICTORY_POINTS"] / 15,
+            ps[key + "HAS_PLAYED_DEVELOPMENT_CARD_IN_TURN"],
+        ]
+        mine += [d / 3 for d in devs]
+        # playable now: owned since the start of the turn
+        mine += [
+            float(ps[key + c + "_OWNED_AT_START"] and ps[key + c + "_IN_HAND"] > 0)
+            for c in PLAYABLE_DEVS
+        ]
+        f = np.concatenate([f, np.asarray(mine, np.float32)])
+    return f
+
+
+PLAYER_SIZE = 10 + 5 + 4 + 5 + 5 + 6  # 35
+MY_EXTRA = 2 + 5 + 4  # 11
+
+
+def _dice_block(dice, me, them):
+    """The balanced dice, as the log shows them: cards left of each total,
+    recent rolls in order, 7 tallies, the streak, and the odds of the next
+    roll for each player."""
+    f = np.zeros(DICE_SIZE, np.float32)
+    if dice is None:
+        plain = [min(t - 1, 13 - t) / 36 * 6 for t in range(2, 13)]
+        f[-22:-11] = plain
+        f[-11:] = plain
+        return f
+    f[0] = dice.mode == "balanced"
+    f[1] = dice.cards_left / 36
+    f[2] = dice.cards_left < MIN_CARDS_BEFORE_RESHUFFLE
+    f[3:14] = [len(p) / 6 for p in dice.deck]
+    for slot, total in enumerate(reversed(dice.recent)):  # most recent first
+        f[14 + slot * 11 + total - 2] = 1
+    f[69] = dice.sevens.get(me, 0) / 5
+    f[70] = dice.sevens.get(them, 0) / 5
+    f[71] = dice.streak_color == me
+    f[72] = dice.streak_color == them
+    f[73] = dice.streak_count / 3
+    f[74:85] = np.asarray(dice.odds(me)) * 6
+    f[85:96] = np.asarray(dice.odds(them)) * 6
+    return f
+
+
+DICE_SIZE = 96
+
+
+def encode(game, color):
+    """(static, dynamic) vectors for the position as `color` sees it."""
+    state = game.state
+    board = state.board
+    cache = _map_cache(board.map)
+    them = next(c for c in state.colors if c != color)
+    robber_tile = cache.tile_of_coordinate[board.robber_coordinate]
+
+    robber = np.zeros(NUM_TILES, np.float32)
+    robber[robber_tile] = 1
+    nodes = np.zeros((NUM_NODES, 4), np.float32)
+    roads = np.zeros((NUM_EDGES, 2), np.float32)
+    for side, c in enumerate((color, them)):
+        b = state.buildings_by_color[c]
+        for node in b[SETTLEMENT]:
+            nodes[node, 2 * side] = 1
+        for node in b[CITY]:
+            nodes[node, 2 * side + 1] = 1
+        for edge in b[ROAD]:
+            roads[EDGE_INDEX[tuple(sorted(edge))], side] = 1
+
+    me_index = state.color_to_index[color]
+    phase = np.asarray(
+        [
+            state.is_initial_build_phase,
+            state.is_discarding,
+            state.discard_counts[me_index] / 5,
+            state.is_moving_knight,
+            state.is_road_building,
+            state.free_roads_available / 2,
+            state.current_turn_index == me_index,
+            min(state.num_turns, 300) / 100,
+            len(state.development_listdeck) / 25,
+        ]
+        + [n / 19 for n in state.resource_freqdeck],
+        np.float32,
+    )
+    dynamic = np.concatenate(
+        [
+            robber,
+            nodes.ravel(),
+            roads.ravel(),
+            _player_block(state, color, cache, robber_tile, me=True),
+            _player_block(state, them, cache, robber_tile, me=False),
+            phase,
+            _dice_block(state.dice, color, them),
+        ]
+    )
+    return cache.static, dynamic
+
+
+PHASE_SIZE = 9 + 5
+DYNAMIC_SIZE = (
+    NUM_TILES
+    + NUM_NODES * 4
+    + NUM_EDGES * 2
+    + PLAYER_SIZE * 2
+    + MY_EXTRA
+    + PHASE_SIZE
+    + DICE_SIZE
+)  # 570
+INPUT_SIZE = STATIC_SIZE + DYNAMIC_SIZE
+
+
+def encode_flat(game, color):
+    static, dynamic = encode(game, color)
+    return np.concatenate([static, dynamic])
+
+
+__all__ = [
+    "INPUT_SIZE",
+    "NUM_ACTIONS",
+    "action_index",
+    "action_table",
+    "encode",
+    "encode_flat",
+    "legal_indices",
+]

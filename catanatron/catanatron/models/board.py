@@ -1,5 +1,3 @@
-import pickle
-import copy
 from collections import defaultdict
 from typing import Any, Set, Dict, Tuple, List
 import functools
@@ -15,7 +13,6 @@ from catanatron.models.map import (
     NodeId,
 )
 from catanatron.models.enums import FastBuildingType, SETTLEMENT, CITY
-
 
 # Used to find relationships between nodes and edges
 base_map = CatanMap.from_template(BASE_MAP_TEMPLATE)
@@ -306,8 +303,14 @@ class Board:
         board.map = self.map  # reuse since its immutable
         board.buildings = self.buildings.copy()
         board.roads = self.roads.copy()
-        board.connected_components = pickle.loads(
-            pickle.dumps(self.connected_components)
+        # Explicit copies of these nested containers are several times faster
+        # than pickle/deepcopy, and copying is the search's inner loop.
+        board.connected_components = defaultdict(
+            list,
+            {
+                c: [set(comp) for comp in comps]
+                for c, comps in self.connected_components.items()
+            },
         )
         board.board_buildable_ids = self.board_buildable_ids.copy()
         board.road_lengths = self.road_lengths.copy()
@@ -316,10 +319,12 @@ class Board:
 
         board.robber_coordinate = self.robber_coordinate
         board.buildable_subgraph = self.buildable_subgraph
-        board.buildable_edges_cache = copy.deepcopy(self.buildable_edges_cache)
-        board.player_port_resources_cache = copy.deepcopy(
-            self.player_port_resources_cache
-        )
+        board.buildable_edges_cache = {
+            c: list(edges) for c, edges in self.buildable_edges_cache.items()
+        }
+        board.player_port_resources_cache = {
+            c: set(ports) for c, ports in self.player_port_resources_cache.items()
+        }
         return board
 
     # ===== Helper functions

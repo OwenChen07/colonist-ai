@@ -20,6 +20,7 @@ rates both ways, stopping as soon as either is accepted or at --max-games.
 import argparse
 import math
 import multiprocessing
+import os
 import random
 import signal
 import sys
@@ -38,6 +39,12 @@ class GameResult:
     a_first: bool  # did A have the first seat
     score: float  # for A: 1 win, 0 loss, 0.5 no winner
     turns: int
+    # Thinking time, over the decisions with more than one legal move. Not
+    # part of equality: a rerun gives the same games, not the same timings.
+    a_seconds: float = field(default=0.0, compare=False)
+    a_moves: int = field(default=0, compare=False)
+    b_seconds: float = field(default=0.0, compare=False)
+    b_moves: int = field(default=0, compare=False)
 
 
 @dataclass
@@ -87,9 +94,22 @@ class MatchResult:
             f"({wins} wins, {losses} losses, {draws} no winner; {self.n} games, "
             f"{self.seconds:.0f} s; first seat won {self.first_seat:.1%})"
         )
+        a_ms, b_ms = self.ms_per_move()
+        if a_ms is not None:
+            line += f"; thinking {a_ms:.1f} vs {b_ms:.1f} ms per move"
         if self.decision:
             line += f" -> {self.decision}"
         return line
+
+    def ms_per_move(self):
+        """Average thinking time per real decision, for A and for B."""
+        am = sum(g.a_moves for g in self.games)
+        bm = sum(g.b_moves for g in self.games)
+        if not am or not bm:
+            return None, None
+        a = 1000 * sum(g.a_seconds for g in self.games) / am
+        b = 1000 * sum(g.b_seconds for g in self.games) / bm
+        return a, b
 
 
 # ----- one game -----
@@ -112,9 +132,30 @@ def play_game(task):
     # its own stream; otherwise two random bots would replay one game mirrored
     # and an identical-bots check would always say exactly 50%.
     game.random.seed(stream)
+    clock_a, clock_b = _clock(a), _clock(b)
     winner = game.play()
     score = 0.5 if winner is None else float(winner == COLORS[0])
-    return GameResult(seed, a_first, score, game.state.num_turns)
+    return GameResult(seed, a_first, score, game.state.num_turns, *clock_a, *clock_b)
+
+
+def _clock(player):
+    """Times the player's real decisions. Returns a list that fills in as
+    [seconds, moves]."""
+    totals = [0.0, 0]
+    decide = player.decide
+
+    def timed(game, playable_actions):
+        if len(playable_actions) < 2:
+            return decide(game, playable_actions)
+        start = time.perf_counter()
+        try:
+            return decide(game, playable_actions)
+        finally:
+            totals[0] += time.perf_counter() - start
+            totals[1] += 1
+
+    player.decide = timed
+    return totals
 
 
 def _build(spec, color):
@@ -251,6 +292,10 @@ def main(argv=None):
     # On SIGTERM, exit through the worker pool's cleanup, so killing a match
     # doesn't leave worker processes running (they slowed later runs badly).
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
+    # One BLAS thread per worker process: the net's small matrix products
+    # gain nothing from more, and threads across workers fight for cores.
+    for var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
+        os.environ.setdefault(var, "1")
     rules = {"dice": "random"} if args.plain_dice else {}
     show = lambda r: print(f"  {r.n} games: {r.score:.1%} ± {r.margin:.1%}", flush=True)
     if args.sprt:

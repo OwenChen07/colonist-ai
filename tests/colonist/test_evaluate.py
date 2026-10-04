@@ -25,6 +25,14 @@ def test_matches_repeat_exactly():
     assert first.games == again.games
 
 
+def test_thinking_time_is_reported():
+    result = match("F", "R", games=2, seed=1, workers=1)
+    assert all(g.a_moves > 0 and g.b_moves > 0 for g in result.games)
+    a_ms, b_ms = result.ms_per_move()
+    assert a_ms > b_ms > 0  # the value function thinks; random doesn't
+    assert "ms per move" in result.summary()
+
+
 def test_workers_give_the_same_games():
     serial = match("W", "R", games=4, seed=5, workers=1)
     parallel = match("W", "R", games=4, seed=5, workers=2)
