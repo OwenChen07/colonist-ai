@@ -119,6 +119,20 @@ Each phase ends at a gate, and the next phase starts once the gate is passed.
 - **Gate:** the harness passes three checks. Two identical bots score 50% ± 3. The ladder
   comes out in the expected order. A rerun with the same seeds gives identical results.
 - **Soft target, not blocking:** the retuned bot wins at least 55% against stock AlphaBeta.
+- **Gate passed (4 Oct)** with `python -m catanatron.colonist.evaluate`, 1,000 games each:
+
+  | Match | Score for the first bot | First seat won |
+  |---|---|---|
+  | WeightedRandom vs WeightedRandom | 48.4% ± 3.1% (no bias) | 51.5% |
+  | WeightedRandom vs Random | 61.9% ± 3.0% | 51.8% |
+  | ValueFunction vs WeightedRandom | 99.7% ± 0.3% | 50.1% |
+  | AlphaBeta (depth 2) vs ValueFunction | 53.7% ± 2.8% | 54.7% |
+
+  Two runs of the same match give identical games. AlphaBeta beats ValueFunction, but only
+  just: the measuring stick the gates use is a modest bot under colonist's rules. A
+  1,000-game AlphaBeta match takes about 8 minutes on 8 cores.
+- Still to do in Phase 1: the one-hour sustained-load benchmark (needs the laptop to itself),
+  and the optional AlphaBeta retuning.
   Phase 2 just needs a decent bot to record games from.
 
 ### Phase 2: a learned evaluator
