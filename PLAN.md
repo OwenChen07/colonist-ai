@@ -396,6 +396,7 @@ what happened in most published Catan projects.
 | Promotion threshold | 52%, tested with SPRT |
 | Phase 1 gate | The harness is the gate. The retuned bot is a soft target |
 | Playing on colonist | Yes, in private rooms, as Phase 4 |
+| Cloud compute | Azure (Azure for Students, $100 credit): `azure/` runs data recording, training and self-play on a VM, with data and models in Blob Storage (4 Oct) |
 
 ## Changes from v1
 

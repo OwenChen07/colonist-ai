@@ -1,0 +1,70 @@
+#!/bin/bash
+# Runs on the VM (started by azure/deploy.sh; output in /var/log/colonist-job.log,
+# copied to logs/<vm>.log in storage). Sets up, pulls what the job needs from
+# storage, runs it while uploading its output every few minutes, uploads the
+# rest, then deallocates the VM.
+set -uo pipefail
+source /opt/colonist/job.env
+export HOME=/root AZCOPY_AUTO_LOGIN_TYPE=MSI
+cd /opt/colonist/repo
+URL="https://$ACCOUNT.blob.core.windows.net/$CONTAINER"
+LOG=/var/log/colonist-job.log
+read -r -a ARGS <<<"$JOB_ARGS"
+
+upload_log() { azcopy copy "$LOG" "$URL/logs/$VM.log" --log-level ERROR >/dev/null || true; }
+pull() { mkdir -p "$1" && azcopy sync "$URL/$1" "$1" --log-level ERROR || true; }
+push() { [ -d "$1" ] && azcopy sync "$1" "$URL/$1" --log-level ERROR || true; }
+
+deallocate() {
+  upload_log
+  if [ -n "${KEEP_VM:-}" ]; then
+    echo "KEEP_VM set: leaving the VM running"
+    return
+  fi
+  local token
+  token=$(curl -s -H Metadata:true \
+    "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://management.azure.com/" |
+    python3 -c 'import json, sys; print(json.load(sys.stdin)["access_token"])')
+  curl -s -X POST -H "Authorization: Bearer $token" -H "Content-Length: 0" \
+    "https://management.azure.com/subscriptions/$SUBSCRIPTION/resourceGroups/$VM_GROUP/providers/Microsoft.Compute/virtualMachines/$VM/deallocate?api-version=2024-07-01"
+}
+trap deallocate EXIT
+
+echo "== $(date -u) $JOB $NAME ${JOB_ARGS} on $(nproc) cores"
+scripts/setup.sh || { echo "setup failed"; exit 1; }
+PY=.venv/bin/python
+
+case "$JOB" in
+  datagen)
+    OUT=data/$NAME
+    CMD=($PY -m catanatron.colonist.datagen "$OUT" "${ARGS[@]}")
+    ;;
+  train)
+    pull "data/$NAME"
+    OUT=models/$NAME
+    CMD=($PY -m catanatron.colonist.train "data/$NAME" --out "$OUT" "${ARGS[@]}")
+    ;;
+  selfplay)
+    pull "models/$MODEL"
+    OUT=data/$NAME
+    CMD=($PY -m catanatron.colonist.selfplay "models/$MODEL/net.npz" "$OUT" "${ARGS[@]}")
+    ;;
+esac
+pull "$OUT"  # resume from an earlier run with the same name
+
+echo "== running: ${CMD[*]}"
+"${CMD[@]}" &
+pid=$!
+while kill -0 "$pid" 2>/dev/null; do
+  for _ in $(seq 30); do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 10
+  done
+  push "$OUT"
+  upload_log
+done
+wait "$pid"
+status=$?
+push "$OUT"
+echo "== $(date -u) finished with status $status"
+exit "$status"
