@@ -39,7 +39,8 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     env:
-      CATANATRON_TEST_DATABASE_URL: postgresql://catanatron:victorypoint@127.0.0.1:5432/catanatron_test
+      # SQLAlchemy 2.1 maps a bare postgresql:// to psycopg 3; the web extra installs psycopg2.
+      CATANATRON_TEST_DATABASE_URL: postgresql+psycopg2://catanatron:victorypoint@127.0.0.1:5432/catanatron_test
     strategy:
       matrix:
         python-version: ["3.11", "3.12"]
@@ -78,7 +79,7 @@ jobs:
           python -W error examples/gym_vectorized_example.py
       - name: Install the rest of the dependencies
         run: |
-          pip install .[web,dev]
+          pip install .[web,dev,colonist]
       - name: Lint with black
         run: |
           black catanatron --check
