@@ -1,0 +1,11 @@
+{
+  "name": "colonist-ai-capture",
+  "private": true,
+  "description": "Chrome extension that captures colonist.io game messages for colonist-ai",
+  "scripts": {
+    "test": "node test/capture.test.js"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "^6.0.0"
+  }
+}

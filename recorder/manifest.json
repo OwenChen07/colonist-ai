@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Colonist AI Capture",
+  "version": "0.1.0",
+  "description": "Saves the game messages colonist.io sends and receives, so games can be turned into records for the colonist-ai replay check. Read-only: it never sends anything.",
+  "content_scripts": [
+    {
+      "matches": ["https://colonist.io/*", "https://*.colonist.io/*"],
+      "js": ["src/capture.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": true
+    }
+  ]
+}

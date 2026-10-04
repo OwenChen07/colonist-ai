@@ -139,3 +139,8 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
+
+# colonist-ai: captured games and records hold usernames and chat; keep them local
+captures/
+records/
+recorder/node_modules/
