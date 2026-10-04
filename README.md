@@ -1,3 +1,16 @@
+# Colonist 1v1 AI
+
+A self-play AI for colonist.io's 1v1 rules, built on a fork of
+[Catanatron](https://github.com/bcollazo/catanatron). See [PLAN.md](PLAN.md) for the plan.
+
+- `PLAN.md`: phases, gates, design and measured speeds.
+- `bench/speed.py`: speed baseline under colonist 1v1 settings
+  (`.venv/bin/python bench/speed.py`).
+
+Licensed GPL-3.0, like Catanatron. Upstream's README follows.
+
+---
+
 # Catanatron
 
 [![Coverage Status](https://coveralls.io/repos/github/bcollazo/catanatron/badge.svg?branch=main)](https://coveralls.io/github/bcollazo/catanatron?branch=main)
