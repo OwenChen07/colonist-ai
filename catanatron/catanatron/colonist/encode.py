@@ -44,6 +44,7 @@ NUM_TILES = 19
 NUM_NODES = 54
 EDGES = tuple(tuple(sorted(e)) for e in get_edges())
 EDGE_INDEX = {e: i for i, e in enumerate(EDGES)}
+EDGE_INDEX.update({(b, a): i for (a, b), i in list(EDGE_INDEX.items())})
 NUM_EDGES = len(EDGES)  # 72
 PLAYABLE_DEVS = [c for c in DEVELOPMENT_CARDS if c != VICTORY_POINT]
 PORT_KINDS = RESOURCES + [None]  # None: 3:1
@@ -162,6 +163,11 @@ class _MapCache:
             node: [index_of_id[t.id] for t in tiles_]
             for node, tiles_ in catan_map.adjacent_tiles.items()
         }
+        # Per tile, which corners touch it
+        self.tile_touches = np.zeros((NUM_TILES, NUM_NODES), np.float32)
+        for node, tiles_ in self.node_tiles.items():
+            for t in tiles_:
+                self.tile_touches[t, node] = 1
         self.tile_production = np.zeros((NUM_TILES, 5), np.float32)
         for i, tid in enumerate(tile_ids):
             tile = catan_map.tiles_by_id[tid]
@@ -169,6 +175,13 @@ class _MapCache:
                 self.tile_production[i, RESOURCES.index(tile.resource)] = (
                     number_probability(tile.number) * _SCALE_PROBA
                 )
+        # Plain-list copies for the per-position code
+        self.tile_touches_list = [[bool(x) for x in row] for row in self.tile_touches]
+        self.node_production_list = [list(map(float, r)) for r in self.node_production]
+        self.node_port_kinds = [
+            [k for k in range(6) if self.node_port[n, k]] for n in range(NUM_NODES)
+        ]
+        self.tile_production_list = [list(map(float, r)) for r in self.tile_production]
         self.static = np.concatenate(
             [tiles.ravel(), self.node_production.ravel(), self.node_port.ravel()]
         )
@@ -192,86 +205,110 @@ STATIC_SIZE = NUM_TILES * 7 + NUM_NODES * 11  # 727
 
 
 # ===== the position (dynamic)
-def _player_block(state, color, cache, robber_tile, me):
-    """Features of one player. `me` adds what only the owner knows."""
-    key = f"P{state.color_to_index[color]}_"
+# Building this is in the search's inner loop. The vectors are short, so plain
+# Python lists with one conversion at the end beat many small numpy calls.
+_BASE_SCALE = (1 / 15, 1, 1, 1 / 15, 1 / 5, 1 / 4, 1 / 15, 1)
+
+
+@lru_cache(None)
+def _keys(index):
+    p = f"P{index}_"
+    base = (
+        "VICTORY_POINTS",
+        "HAS_ARMY",
+        "HAS_ROAD",
+        "ROADS_AVAILABLE",
+        "SETTLEMENTS_AVAILABLE",
+        "CITIES_AVAILABLE",
+        "LONGEST_ROAD_LENGTH",
+        "HAS_ROLLED",
+    )
+    return (
+        [(p + n, scale) for n, scale in zip(base, _BASE_SCALE)],
+        [p + r + "_IN_HAND" for r in RESOURCES],
+        [p + c + "_IN_HAND" for c in DEVELOPMENT_CARDS],
+        [p + "PLAYED_" + c for c in PLAYABLE_DEVS],
+        p + "ACTUAL_VICTORY_POINTS",
+        p + "HAS_PLAYED_DEVELOPMENT_CARD_IN_TURN",
+        [(p + c + "_OWNED_AT_START", p + c + "_IN_HAND") for c in PLAYABLE_DEVS],
+    )
+
+
+def _player_block(v, state, color, cache, robber_tile, me):
+    """Appends one player's features to the list v. `me` adds what only the
+    owner knows."""
+    base, hand_keys, dev_keys, played_keys, actual, played_turn, playable = _keys(
+        state.color_to_index[color]
+    )
     ps = state.player_state
-    hand = [ps[key + r + "_IN_HAND"] for r in RESOURCES]
-    devs = [ps[key + c + "_IN_HAND"] for c in DEVELOPMENT_CARDS]
-    f = [
-        ps[key + "VICTORY_POINTS"] / 15,
-        ps[key + "HAS_ARMY"],
-        ps[key + "HAS_ROAD"],
-        ps[key + "ROADS_AVAILABLE"] / 15,
-        ps[key + "SETTLEMENTS_AVAILABLE"] / 5,
-        ps[key + "CITIES_AVAILABLE"] / 4,
-        ps[key + "LONGEST_ROAD_LENGTH"] / 15,
-        ps[key + "HAS_ROLLED"],
-        sum(hand) / 10,
-        sum(devs) / 5,
-    ]
-    f += [h / 5 for h in hand]
-    f += [ps[key + "PLAYED_" + c] / 5 for c in PLAYABLE_DEVS]
+    hand = [ps[k] for k in hand_keys]
+    devs = [ps[k] for k in dev_keys]
+    v += [ps[k] * scale for k, scale in base]
+    v.append(sum(hand) / 10)
+    v.append(sum(devs) / 5)
+    v += [h / 5 for h in hand]
+    v += [ps[k] / 5 for k in played_keys]
     # Production per resource, with and without the robber, and ports owned.
-    total = np.zeros(5, np.float32)
-    blocked = np.zeros(5, np.float32)
-    ports = np.zeros(6, np.float32)
+    total = [0.0] * 5
+    blocked = 0
+    ports = [0.0] * 6
     buildings = state.buildings_by_color[color]
+    touches = cache.tile_touches_list[robber_tile]
     for mult, kind in ((1, SETTLEMENT), (2, CITY)):
         for node in buildings[kind]:
-            total += mult * cache.node_production[node]
-            ports = np.maximum(ports, cache.node_port[node])
-            if robber_tile in cache.node_tiles.get(node, ()):
-                blocked += mult * cache.tile_production[robber_tile]
-    f = np.concatenate(
-        [np.asarray(f, np.float32), total / 3, (total - blocked) / 3, ports]
-    )
+            for r, x in enumerate(cache.node_production_list[node]):
+                total[r] += mult * x
+            for k in cache.node_port_kinds[node]:
+                ports[k] = 1.0
+            if touches[node]:
+                blocked += mult
+    v += [x / 3 for x in total]
+    tile = cache.tile_production_list[robber_tile]
+    v += [(x - blocked * t) / 3 for x, t in zip(total, tile)]
+    v += ports
     if me:
-        mine = [
-            ps[key + "ACTUAL_VICTORY_POINTS"] / 15,
-            ps[key + "HAS_PLAYED_DEVELOPMENT_CARD_IN_TURN"],
-        ]
-        mine += [d / 3 for d in devs]
+        v.append(ps[actual] / 15)
+        v.append(ps[played_turn])
+        v += [d / 3 for d in devs]
         # playable now: owned since the start of the turn
-        mine += [
-            float(ps[key + c + "_OWNED_AT_START"] and ps[key + c + "_IN_HAND"] > 0)
-            for c in PLAYABLE_DEVS
-        ]
-        f = np.concatenate([f, np.asarray(mine, np.float32)])
-    return f
+        v += [float(bool(ps[a] and ps[b] > 0)) for a, b in playable]
 
 
 PLAYER_SIZE = 10 + 5 + 4 + 5 + 5 + 6  # 35
 MY_EXTRA = 2 + 5 + 4  # 11
+_PLAIN_ODDS = [min(t - 1, 13 - t) / 36 * 6 for t in range(2, 13)]
 
 
-def _dice_block(dice, me, them):
-    """The balanced dice, as the log shows them: cards left of each total,
-    recent rolls in order, 7 tallies, the streak, and the odds of the next
-    roll for each player."""
-    f = np.zeros(DICE_SIZE, np.float32)
+def _dice_block(v, dice, me, them):
+    """Appends the balanced dice, as the log shows them: cards left of each
+    total, recent rolls in order, 7 tallies, the streak, and the odds of the
+    next roll for each player."""
     if dice is None:
-        plain = [min(t - 1, 13 - t) / 36 * 6 for t in range(2, 13)]
-        f[-22:-11] = plain
-        f[-11:] = plain
-        return f
-    f[0] = dice.mode == "balanced"
-    f[1] = dice.cards_left / 36
-    f[2] = dice.cards_left < MIN_CARDS_BEFORE_RESHUFFLE
-    f[3:14] = [len(p) / 6 for p in dice.deck]
+        v += [0.0] * (DICE_SIZE - 22)
+        v += _PLAIN_ODDS
+        v += _PLAIN_ODDS
+        return
+    v.append(float(dice.mode == "balanced"))
+    v.append(dice.cards_left / 36)
+    v.append(float(dice.cards_left < MIN_CARDS_BEFORE_RESHUFFLE))
+    v += [len(p) / 6 for p in dice.deck]
+    recent = [0.0] * 55
     for slot, total in enumerate(reversed(dice.recent)):  # most recent first
-        f[14 + slot * 11 + total - 2] = 1
-    f[69] = dice.sevens.get(me, 0) / 5
-    f[70] = dice.sevens.get(them, 0) / 5
-    f[71] = dice.streak_color == me
-    f[72] = dice.streak_color == them
-    f[73] = dice.streak_count / 3
-    f[74:85] = np.asarray(dice.odds(me)) * 6
-    f[85:96] = np.asarray(dice.odds(them)) * 6
-    return f
+        recent[slot * 11 + total - 2] = 1.0
+    v += recent
+    v.append(dice.sevens.get(me, 0) / 5)
+    v.append(dice.sevens.get(them, 0) / 5)
+    v.append(float(dice.streak_color == me))
+    v.append(float(dice.streak_color == them))
+    v.append(dice.streak_count / 3)
+    v += [x * 6 for x in dice.odds(me)]
+    v += [x * 6 for x in dice.odds(them)]
 
 
 DICE_SIZE = 96
+_BOARD_SIZE = NUM_TILES + NUM_NODES * 4 + NUM_EDGES * 2
+_NODES_AT = NUM_TILES
+_ROADS_AT = _NODES_AT + NUM_NODES * 4
 
 
 def encode(game, color):
@@ -279,50 +316,38 @@ def encode(game, color):
     state = game.state
     board = state.board
     cache = _map_cache(board.map)
-    them = next(c for c in state.colors if c != color)
+    c0, c1 = state.colors
+    them = c1 if color == c0 else c0
     robber_tile = cache.tile_of_coordinate[board.robber_coordinate]
 
-    robber = np.zeros(NUM_TILES, np.float32)
-    robber[robber_tile] = 1
-    nodes = np.zeros((NUM_NODES, 4), np.float32)
-    roads = np.zeros((NUM_EDGES, 2), np.float32)
+    v = [0.0] * _BOARD_SIZE
+    v[robber_tile] = 1.0
     for side, c in enumerate((color, them)):
         b = state.buildings_by_color[c]
         for node in b[SETTLEMENT]:
-            nodes[node, 2 * side] = 1
+            v[_NODES_AT + 4 * node + 2 * side] = 1.0
         for node in b[CITY]:
-            nodes[node, 2 * side + 1] = 1
+            v[_NODES_AT + 4 * node + 2 * side + 1] = 1.0
         for edge in b[ROAD]:
-            roads[EDGE_INDEX[tuple(sorted(edge))], side] = 1
+            v[_ROADS_AT + 2 * EDGE_INDEX[edge] + side] = 1.0
 
+    _player_block(v, state, color, cache, robber_tile, me=True)
+    _player_block(v, state, them, cache, robber_tile, me=False)
     me_index = state.color_to_index[color]
-    phase = np.asarray(
-        [
-            state.is_initial_build_phase,
-            state.is_discarding,
-            state.discard_counts[me_index] / 5,
-            state.is_moving_knight,
-            state.is_road_building,
-            state.free_roads_available / 2,
-            state.current_turn_index == me_index,
-            min(state.num_turns, 300) / 100,
-            len(state.development_listdeck) / 25,
-        ]
-        + [n / 19 for n in state.resource_freqdeck],
-        np.float32,
-    )
-    dynamic = np.concatenate(
-        [
-            robber,
-            nodes.ravel(),
-            roads.ravel(),
-            _player_block(state, color, cache, robber_tile, me=True),
-            _player_block(state, them, cache, robber_tile, me=False),
-            phase,
-            _dice_block(state.dice, color, them),
-        ]
-    )
-    return cache.static, dynamic
+    v += [
+        float(state.is_initial_build_phase),
+        float(state.is_discarding),
+        state.discard_counts[me_index] / 5,
+        float(state.is_moving_knight),
+        float(state.is_road_building),
+        state.free_roads_available / 2,
+        float(state.current_turn_index == me_index),
+        min(state.num_turns, 300) / 100,
+        len(state.development_listdeck) / 25,
+    ]
+    v += [n / 19 for n in state.resource_freqdeck]
+    _dice_block(v, state.dice, color, them)
+    return cache.static, np.array(v, np.float32)
 
 
 PHASE_SIZE = 9 + 5
