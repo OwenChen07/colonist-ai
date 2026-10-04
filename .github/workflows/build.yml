@@ -87,11 +87,11 @@ jobs:
       - name: Test with pytest
         run: |
           coverage run --source=catanatron -m pytest tests/
-      - name: Coveralls
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Coverage report
+        # Upstream uploads to Coveralls; this fork isn't registered there, so
+        # the report goes in the job log instead.
         run: |
-          coveralls --service=github
+          coverage report --skip-covered | tail -n 25
 
   build-ui:
     runs-on: ubuntu-latest
