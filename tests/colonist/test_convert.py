@@ -209,3 +209,12 @@ def test_incomplete_conversion_fails_the_replay_check(frames):
     report = replay(conv.record)
     assert not report.ok
     assert "stopped early" in report.errors[0]
+
+
+def test_timer_moving_the_robber_is_skipped(frames):
+    """When a player's timer runs out on a 7, colonist logs 58 ("Bot is
+    selecting where to place Robber for ...") before the move itself (11)."""
+    conv = convert(
+        with_extra_log_entry(frames, {"type": 58, "playerColor": 1, "pieceEnum": 5})
+    )
+    assert not conv.unsupported
