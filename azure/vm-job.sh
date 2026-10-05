@@ -12,8 +12,18 @@ LOG=/var/log/colonist-job.log
 read -r -a ARGS <<<"$JOB_ARGS"
 
 upload_log() { azcopy copy "$LOG" "$URL/logs/$VM.log" --log-level ERROR >/dev/null || true; }
-pull() { mkdir -p "$1" && azcopy sync "$URL/$1" "$1" --log-level ERROR || true; }
-push() { [ -d "$1" ] && azcopy sync "$1" "$URL/$1" --log-level ERROR || true; }
+# copy, not sync: sync refuses a folder that doesn't exist yet in storage.
+# --overwrite=ifSourceNewer skips files already there, so repeats are cheap.
+pull() {
+  mkdir -p "$1"
+  azcopy copy "$URL/$1" "$(dirname "$1")/" --recursive --overwrite=ifSourceNewer \
+    --log-level ERROR >/dev/null 2>&1 || echo "(nothing in storage yet at $1)"
+}
+push() {
+  [ -d "$1" ] || return 0
+  azcopy copy "$1" "$URL/$(dirname "$1")/" --recursive --overwrite=ifSourceNewer \
+    --log-level ERROR | tail -3 || true
+}
 
 deallocate() {
   upload_log
