@@ -31,7 +31,13 @@ deallocate() {
 trap deallocate EXIT
 
 echo "== $(date -u) $JOB $NAME ${JOB_ARGS} on $(nproc) cores"
-scripts/setup.sh || { echo "setup failed"; exit 1; }
+upload_log
+# Setup takes several minutes; keep the log in storage current meanwhile.
+(while sleep 60; do upload_log; done) &
+setup_logger=$!
+echo "== setting up (installing packages, running tests)"
+scripts/setup.sh || { kill "$setup_logger"; echo "setup failed"; exit 1; }
+kill "$setup_logger" 2>/dev/null
 PY=.venv/bin/python
 
 case "$JOB" in
