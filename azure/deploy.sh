@@ -112,13 +112,14 @@ fi
 # family, and the region, have enough free vCPU quota (Azure for Students
 # gives some families 0). Prints "size arch" lines, in VM_SIZE order.
 pick_sizes() {
-  local skus usage
-  skus=$(az vm list-skus -l "$LOCATION" --resource-type virtualMachines -o json 2>/dev/null) || return 1
-  usage=$(az vm list-usage -l "$LOCATION" -o json 2>/dev/null) || return 1
-  SKUS="$skus" USAGE="$usage" WANT="$VM_SIZE" python3 -c '
-import json, os
-skus = json.loads(os.environ["SKUS"])
-usage = json.loads(os.environ["USAGE"])
+  # Via files: the size list is megabytes, too big for an environment
+  # variable or argument on macOS.
+  az vm list-skus -l "$LOCATION" --resource-type virtualMachines -o json >"$tmp/skus.json" 2>/dev/null || return 1
+  az vm list-usage -l "$LOCATION" -o json >"$tmp/usage.json" 2>/dev/null || return 1
+  WANT="$VM_SIZE" python3 - "$tmp/skus.json" "$tmp/usage.json" <<'PY'
+import json, os, sys
+skus = json.load(open(sys.argv[1]))
+usage = json.load(open(sys.argv[2]))
 free = {u["name"]["value"].lower(): int(u["limit"]) - int(u["currentValue"]) for u in usage}
 info = {}
 for s in skus:
@@ -137,10 +138,14 @@ for name in os.environ["WANT"].split():
     family, vcpus, arch = info[name]
     if free.get(family, 0) >= vcpus and regional >= vcpus:
         print(name, arch)
-'
+PY
 }
 echo "== finding VM sizes this subscription can create in $LOCATION"
-if ! candidates=$(pick_sizes) || [ -z "$candidates" ]; then
+if ! candidates=$(pick_sizes); then
+  echo "Couldn't read VM sizes or quotas for $LOCATION from Azure." >&2
+  exit 1
+fi
+if [ -z "$candidates" ]; then
   echo "No size in VM_SIZE is both open and within quota in $LOCATION." >&2
   echo "Try another allowed region (LOCATION=...), or set VM_SIZE to one from:" >&2
   echo "  az vm list-skus -l $LOCATION --resource-type virtualMachines --query \"[?restrictions==\\\`[]\\\`].[name, family]\" -o tsv" >&2
