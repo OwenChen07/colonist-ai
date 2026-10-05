@@ -317,7 +317,7 @@ extension, so Phase 0 rechecks it against real games.
 | Points to win | 15 | Option, default 10 | Set to 15 |
 | Hand limit on a 7 | Hold up to 9 cards | Option, default 7 | Set to 9 |
 | Discards | Player chooses which cards | Player chooses, one card at a time | None |
-| Friendly robber | A player with 2 or fewer visible points can't be blocked or robbed | Option exists, but counts hidden victory point cards | Small fix: count visible points only |
+| Friendly robber | A player with 2 or fewer visible points can't be blocked or robbed, **including the player moving the robber** (seen live, 5 Oct) | Option exists, but counted hidden victory point cards and protected only opponents | Fixed: visible points only, and every low-point player is protected |
 | Dice | Balanced deck (below) | Two plain random dice | Port from the tracker |
 | Trading with the opponent | **Allowed** (seen in a captured game; the table said None before) | Supported as actions, but built-in bots never offer or accept trades | None for the AI: it never trades with the opponent (decided 4 Oct). The converter still needs accepted trades, for recorded games where a player trades |
 | Development cards | One per turn, before or after rolling, not on the turn bought | Same | None |

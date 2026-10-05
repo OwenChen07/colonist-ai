@@ -62,3 +62,35 @@ def test_friendly_robber_counts_visible_points_only():
     s.player_state[f"{blue}_VICTORY_POINTS"] = 3
     exposed = {a.value[0] for a in robber_possibilities(s, Color.RED)}
     assert exposed & blue_tiles(game)
+
+
+def red_tiles(game):
+    s = game.state
+    red_nodes = set(s.buildings_by_color[Color.RED]["SETTLEMENT"])
+    return {
+        coordinate
+        for coordinate, tile in s.board.map.land_tiles.items()
+        if red_nodes & set(tile.nodes.values())
+        and coordinate != s.board.robber_coordinate
+    }
+
+
+def test_friendly_robber_protects_the_mover_too():
+    """colonist's friendly robber protects every player with 2 or fewer visible
+    points, including the one moving the robber (seen in a live game)."""
+    game = new_game(two_players(), seed=3)
+    play_through_setup(game)
+    s = game.state
+    red = player_key(s, Color.RED)
+    s.player_state[f"{red}_VICTORY_POINTS"] = 2
+    own = red_tiles(game)
+    assert own
+    moves = {a.value[0] for a in robber_possibilities(s, Color.RED)}
+    assert not (moves & own)
+
+    # At 3 points (and with the opponent at 3, so shared tiles aren't
+    # protected on their account), the mover's tiles are open again.
+    s.player_state[f"{red}_VICTORY_POINTS"] = 3
+    s.player_state[f"{player_key(s, Color.BLUE)}_VICTORY_POINTS"] = 3
+    moves = {a.value[0] for a in robber_possibilities(s, Color.RED)}
+    assert own <= moves

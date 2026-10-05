@@ -146,4 +146,4 @@ records/
 recorder/node_modules/
 
 # colonist-ai: training data and trained nets are large; keep them out of git
-models/
+/models/

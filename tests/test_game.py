@@ -244,9 +244,18 @@ def test_friendly_robber_filters_tiles_in_game_playable_actions(fake_roll_dice):
         action.value[0] for action in friendly_game.playable_actions
     }
 
+    # Every player is at 2 points after setup, so the friendly robber
+    # protects both: BLUE's tiles and RED's own (colonist's rule).
+    board = friendly_game.state.board
+    protected = {
+        coordinate
+        for coordinate, tile in board.map.land_tiles.items()
+        if any(n in board.buildings for n in tile.nodes.values())
+    }
+    assert blocked_coordinates <= protected
     assert blocked_coordinates.issubset(regular_coordinates)
     assert blocked_coordinates.isdisjoint(friendly_coordinates)
-    assert friendly_coordinates == regular_coordinates - blocked_coordinates
+    assert friendly_coordinates == regular_coordinates - protected
 
 
 @patch("catanatron.apply_action.roll_dice")

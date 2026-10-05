@@ -212,7 +212,7 @@ def robber_possibilities(state, color) -> List[Action]:
 
     filtered_actions = list(
         filter(
-            lambda action: not _robber_action_blocks_low_vp_enemy(state, color, action),
+            lambda action: not _robber_action_blocks_low_vp_player(state, action),
             actions,
         )
     )
@@ -249,7 +249,13 @@ def _robber_possibilities_without_friendly_robber(state, color) -> List[Action]:
     return actions
 
 
-def _robber_action_blocks_low_vp_enemy(state, color, action) -> bool:
+def _robber_action_blocks_low_vp_player(state, action) -> bool:
+    """Would this robber move block a player with 2 or fewer visible points?
+
+    That includes the player moving the robber: colonist.io's friendly robber
+    protects every low-point player. A live game showed it: colonist ignored
+    the bot moving the robber onto its own tile at 2 points, then placed it
+    on a tile touching nobody."""
     coordinate, _ = action.value
     tile = state.board.map.land_tiles[coordinate]
     for node_id in tile.nodes.values():
@@ -258,9 +264,6 @@ def _robber_action_blocks_low_vp_enemy(state, color, action) -> bool:
             continue
 
         candidate_color = building[0]
-        if color == candidate_color:
-            continue
-
         # Visible points only: counting hidden victory point cards would let the
         # legal moves reveal them.
         if get_visible_victory_points(state, candidate_color) < 3:
