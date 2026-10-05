@@ -54,6 +54,11 @@ azureuser@<ip>` and look around; the log is `/var/log/colonist-job.log`).
 - $100 of credit, no credit card: when it runs out, resources stop rather
   than billing you. Check what is left in the Azure portal (Cost Management or
   the Education hub).
+- Only some VM sizes are open to the subscription in each region (in
+  canadacentral, mainly ARM sizes such as `Standard_D4ps_v5`). `deploy.sh`
+  asks Azure which are open and tries those, using the ARM Ubuntu image for
+  ARM sizes. To see the list yourself:
+  `az vm list-skus -l canadacentral --resource-type virtualMachines --query "[?restrictions==\`[]\`].name" -o tsv`
 - A small vCPU quota per region; `deploy.sh` prints usage and limit. A VM
   larger than the quota fails to create: use a smaller `VM_SIZE`, or request a
   quota increase in the portal (Quotas).

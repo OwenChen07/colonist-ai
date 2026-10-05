@@ -33,7 +33,9 @@ case "$JOB" in
   *) echo "unknown job $JOB (datagen, train or selfplay)" >&2; exit 1 ;;
 esac
 
-VM_SIZE=${VM_SIZE:-Standard_F4s_v2 Standard_F4as_v6 Standard_D4as_v5 Standard_D4s_v5 Standard_D4as_v6 Standard_D4s_v6 Standard_D4ads_v5 Standard_F2s_v2 Standard_D2as_v5 Standard_D2s_v5}
+# x86 sizes first, then ARM ones (a "p" in the name: Ampere chips; the code and
+# its packages run on both), 4 vCPUs before 2.
+VM_SIZE=${VM_SIZE:-Standard_F4s_v2 Standard_F4as_v6 Standard_D4as_v5 Standard_D4s_v5 Standard_D4as_v6 Standard_D4s_v6 Standard_D4ps_v5 Standard_D4pls_v5 Standard_D4pds_v5 Standard_F2s_v2 Standard_D2as_v5 Standard_D2s_v5 Standard_D2ps_v5 Standard_D2pls_v5}
 PRIORITY=${PRIORITY:-Regular}
 VM=${VM:-colonist-$JOB-$(date +%m%d-%H%M)}
 
@@ -82,8 +84,9 @@ write_files:
       exec >>/var/log/colonist-job.log 2>&1
       source /opt/colonist/job.env
       export HOME=/root AZCOPY_AUTO_LOGIN_TYPE=MSI
-      curl -sSL https://aka.ms/downloadazcopy-v10-linux -o /tmp/azcopy.tgz
-      tar xzf /tmp/azcopy.tgz -C /tmp && cp /tmp/azcopy_linux_amd64_*/azcopy /usr/local/bin/
+      if [ "\$(uname -m)" = aarch64 ]; then arch=-arm64; else arch=; fi
+      curl -sSL "https://aka.ms/downloadazcopy-v10-linux\$arch" -o /tmp/azcopy.tgz
+      tar xzf /tmp/azcopy.tgz -C /tmp && cp /tmp/azcopy_linux_*/azcopy /usr/local/bin/
       # The VM's access to storage can take a few minutes to take effect.
       for i in \$(seq 60); do
         azcopy copy "https://\$ACCOUNT.blob.core.windows.net/\$CONTAINER/code/\$VM.tgz" /opt/colonist/code.tgz && break
@@ -102,10 +105,30 @@ if [ "$PRIORITY" = "Spot" ]; then
 fi
 # Which sizes have capacity varies by subscription and region (Azure for
 # Students is restricted), so try the candidates in order.
-created=
+# Skip sizes this subscription can't use here at all (one query, ~10 s).
+open_sizes=$(az vm list-skus -l "$LOCATION" --resource-type virtualMachines \
+  --query "[?restrictions==\`[]\`].name" -o tsv 2>/dev/null || true)
+candidates=
 for size in $VM_SIZE; do
+  if [ -z "$open_sizes" ] || printf '%s\n' $open_sizes | grep -qx "$size"; then
+    candidates="$candidates $size"
+  fi
+done
+if [ -z "$candidates" ]; then
+  echo "None of these sizes is open to this subscription in $LOCATION: $VM_SIZE" >&2
+  echo "Pick one from 'az vm list-skus ...' (see azure/README.md) with VM_SIZE=..., or try another LOCATION." >&2
+  exit 1
+fi
+created=
+for size in $candidates; do
+  # ARM sizes (a "p" after the vCPU count, e.g. D4ps_v5) need the ARM image.
+  if printf %s "$size" | grep -qE '^Standard_[A-Z]+[0-9]+[a-z]*p[a-z]*_'; then
+    image=Canonical:ubuntu-24_04-lts:server-arm64:latest
+  else
+    image=Ubuntu2404
+  fi
   echo "== creating VM $VM ($size, $PRIORITY) in $LOCATION"
-  if az vm create -g "$VM_GROUP" -n "$VM" --image Ubuntu2404 --size "$size" \
+  if az vm create -g "$VM_GROUP" -n "$VM" --image "$image" --size "$size" \
     ${spot[@]+"${spot[@]}"} --assign-identity '[system]' --admin-username azureuser \
     --generate-ssh-keys --os-disk-size-gb 64 --custom-data "$tmp/cloud-init.yaml" \
     --tags project=colonist-ai job="$JOB" name="$NAME" --only-show-errors -o none \
