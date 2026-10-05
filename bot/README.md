@@ -42,16 +42,15 @@ doing. The bridge's terminal prints each move it suggests.
   has a decision to make, once per position.
 - **Discards:** colonist takes all of a 7's discards at once, so the bridge returns the
   whole set.
+- **Checks every move it plays:** the next update must show exactly the move it sent, by
+  the bot, within `--move-timeout` seconds (default 15); otherwise it stops for that game.
+- **Reconnects safely:** if the bridge restarts mid-game, the page resends the game from
+  the start, marked as a replay, and the bridge answers only the current position.
 
 ## Rules for playing (see PLAN.md, Phase 4)
 
 colonist has allowed this bot (confirmed with their team). The bot plays from a
 clearly labelled bot account and says in the game chat that it is a bot.
-
-- **Checks every move it plays:** the next update must show exactly the move it sent, by
-  the bot, within `--move-timeout` seconds (default 15); otherwise it stops for that game.
-- **Reconnects safely:** if the bridge restarts mid-game, the page resends the game from
-  the start, marked as a replay, and the bridge answers only the current position.
 
 ## Message formats
 
