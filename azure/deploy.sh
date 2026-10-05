@@ -13,7 +13,9 @@
 #
 # Settings (environment variables):
 #   LOCATION   Azure region (default eastus; Azure for Students allows only some)
-#   VM_SIZE    default Standard_F4s_v2 (4 vCPUs, compute optimized)
+#   VM_SIZE    one size, or a space-separated list to try in order. Default:
+#              4-vCPU compute/general sizes, then 2-vCPU ones; the first one
+#              Azure has capacity for (on this subscription and region) is used
 #   PRIORITY   Regular (default) or Spot (much cheaper; may be evicted, and
 #              a rerun resumes)
 #   KEEP_VM=1  leave the VM running after the job, for debugging
@@ -31,7 +33,7 @@ case "$JOB" in
   *) echo "unknown job $JOB (datagen, train or selfplay)" >&2; exit 1 ;;
 esac
 
-VM_SIZE=${VM_SIZE:-Standard_F4s_v2}
+VM_SIZE=${VM_SIZE:-Standard_F4s_v2 Standard_F4as_v6 Standard_D4as_v5 Standard_D4s_v5 Standard_D4as_v6 Standard_D4s_v6 Standard_D4ads_v5 Standard_F2s_v2 Standard_D2as_v5 Standard_D2s_v5}
 PRIORITY=${PRIORITY:-Regular}
 VM=${VM:-colonist-$JOB-$(date +%m%d-%H%M)}
 
@@ -51,7 +53,7 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 git archive --format=tar.gz -o "$tmp/code.tgz" HEAD
 az storage blob upload --account-name "$ACCOUNT" --auth-mode key -c "$CONTAINER" \
-  -n "code/$VM.tgz" -f "$tmp/code.tgz" --overwrite -o none
+  -n "code/$VM.tgz" -f "$tmp/code.tgz" --overwrite --only-show-errors -o none
 
 # What the VM needs to know, and its first script (it then runs azure/vm-job.sh
 # from the uploaded code).
@@ -93,16 +95,37 @@ runcmd:
   - [/opt/colonist/boot.sh]
 EOF
 
-echo "== creating VM $VM ($VM_SIZE, $PRIORITY) in $LOCATION"
 ensure_group "$VM_GROUP"
 spot=()
 if [ "$PRIORITY" = "Spot" ]; then
   spot=(--priority Spot --eviction-policy Deallocate --max-price -1)
 fi
-az vm create -g "$VM_GROUP" -n "$VM" --image Ubuntu2404 --size "$VM_SIZE" \
-  ${spot[@]+"${spot[@]}"} --assign-identity '[system]' --admin-username azureuser \
-  --generate-ssh-keys --os-disk-size-gb 64 --custom-data "$tmp/cloud-init.yaml" \
-  --tags project=colonist-ai job="$JOB" name="$NAME" -o none
+# Which sizes have capacity varies by subscription and region (Azure for
+# Students is restricted), so try the candidates in order.
+created=
+for size in $VM_SIZE; do
+  echo "== creating VM $VM ($size, $PRIORITY) in $LOCATION"
+  if az vm create -g "$VM_GROUP" -n "$VM" --image Ubuntu2404 --size "$size" \
+    ${spot[@]+"${spot[@]}"} --assign-identity '[system]' --admin-username azureuser \
+    --generate-ssh-keys --os-disk-size-gb 64 --custom-data "$tmp/cloud-init.yaml" \
+    --tags project=colonist-ai job="$JOB" name="$NAME" --only-show-errors -o none \
+    2>"$tmp/err"; then
+    created=$size
+    break
+  fi
+  if grep -qE "SkuNotAvailable|NotAvailableForSubscription|QuotaExceeded|exceeding approved|Capacity" "$tmp/err"; then
+    echo "   $size isn't available here (capacity, subscription or quota); trying the next size"
+  else
+    cat "$tmp/err" >&2
+    exit 1
+  fi
+done
+if [ -z "$created" ]; then
+  echo "None of these sizes could be created in $LOCATION: $VM_SIZE" >&2
+  echo "Try another allowed region (LOCATION=...), or list sizes with:" >&2
+  echo "  az vm list-skus -l $LOCATION --resource-type virtualMachines --query \"[?restrictions==\\\`[]\\\`].name\" -o tsv" >&2
+  exit 1
+fi
 
 echo "== granting the VM access to storage and to deallocating itself"
 principal=$(az vm show -g "$VM_GROUP" -n "$VM" --query identity.principalId -o tsv)

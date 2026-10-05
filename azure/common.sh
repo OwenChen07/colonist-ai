@@ -86,7 +86,7 @@ ensure_storage() {
       --sku Standard_LRS --kind StorageV2 --min-tls-version TLS1_2 \
       --allow-blob-public-access false -o none
   fi
-  az storage container create --account-name "$ACCOUNT" --auth-mode key \
+  az storage container create --account-name "$ACCOUNT" --auth-mode key --only-show-errors \
     -n "$CONTAINER" -o none
   ACCOUNT_ID=$(az storage account show -n "$ACCOUNT" -g "$GROUP" --query id -o tsv)
 }

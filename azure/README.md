@@ -43,7 +43,7 @@ azure/teardown.sh                             # delete all VMs; data stays
 `azure/fetch.sh --up data/ab2` uploads data recorded on the laptop, e.g. to
 train on Azure.
 
-Settings: `VM_SIZE` (default `Standard_F4s_v2`, 4 vCPUs), `PRIORITY=Spot`
+Settings: `VM_SIZE` (a size or a list to try in order; by default 4-vCPU sizes, then 2-vCPU ones, using the first Azure has capacity for), `PRIORITY=Spot`
 (much cheaper where the subscription allows it; an evicted VM loses at most
 the shards in progress, and redeploying with the same name resumes),
 `LOCATION`, and `KEEP_VM=1` to leave the VM running after the job (to `ssh
