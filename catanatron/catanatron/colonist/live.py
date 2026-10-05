@@ -116,6 +116,8 @@ class LiveGame:
             return False
         if self.game.winning_color() is not None:
             return False
+        if self.conv.pending_robber is not None:
+            return False  # the robber moved; its steal hasn't been logged yet
         return self.game.state.current_color() == self.bot
 
     @property

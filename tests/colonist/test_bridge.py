@@ -300,3 +300,65 @@ def test_resent_full_game_messages_are_not_new_games():
         statuses += [r for r in bridge.handle(message) if r["kind"] == "status"]
     assert [s["state"] for s in statuses] == ["following", "waiting"]
     assert bridge.live.error is None
+
+
+def _follow(frames):
+    start = next(f for f in frames if f.dir == "in" and f.type == C.GAME_STATE)
+    live = LiveGame(start.data["data"]["payload"])
+    for f in frames:
+        if f.seq > start.seq:
+            live.apply(f)
+            assert live.error is None, live.error
+            if live.conv.pending_robber is not None:
+                assert not live.bot_to_move
+    return live
+
+
+def _robber_diffs(frames, steals):
+    for f in frames:
+        if f.type != C.DIFF:
+            continue
+        log = f.data["data"]["payload"].get("diff", {}).get("gameLogState", {})
+        keys = sorted(log, key=int)
+        kinds = [log[k].get("text", {}).get("type") for k in keys]
+        if C.LOG_MOVED_ROBBER in kinds and kinds[-1] in steals:
+            yield f, log, keys[-1]
+
+
+def test_steal_logged_in_a_later_update():
+    """Live, colonist can send the robber move and its steal separately."""
+    import copy
+
+    frames = load(os.path.join(FIXTURES, "capture_full_game.json"))
+    expected = _follow(frames).record["log"]
+    split, n = [], 0
+    for f in frames:
+        split.append(f)
+        found = next(_robber_diffs([f], C.STEALS), None)
+        if found is None:
+            continue
+        f, log, last = found
+        steal = copy.deepcopy(f)
+        del log[last]
+        steal.data["data"]["payload"]["diff"] = {
+            "gameLogState": {
+                last: steal.data["data"]["payload"]["diff"]["gameLogState"][last]
+            }
+        }
+        split.append(steal)
+        n += 1
+    assert n > 0
+    assert _follow(split).record["log"] == expected
+
+
+def test_robber_move_with_nothing_logged_robs_nobody():
+    """With nobody to rob, colonist may log no "nothing to steal" entry."""
+    frames = load(os.path.join(FIXTURES, "capture_full_game.json"))
+    found = list(_robber_diffs(frames, (C.LOG_ROBBER_NOTHING_TO_STEAL,)))
+    if not found:
+        pytest.skip("no robber move without a steal in this capture")
+    for _, log, last in found:
+        del log[last]
+    log = _follow(frames).record["log"]
+    robs = [e for e in log if e[0][1] == "MOVE_ROBBER" and e[0][2][1] is None]
+    assert len(robs) >= len(found)

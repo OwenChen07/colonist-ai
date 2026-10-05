@@ -92,6 +92,7 @@ LOG_YEAR_OF_PLENTY = 21  # the cards taken
 LOG_WON = 45
 LOG_DISCARDED = 55
 LOG_ROBBER_NOTHING_TO_STEAL = 74
+STEALS = (LOG_YOU_STOLE, LOG_STOLE_FROM_YOU, LOG_ROBBER_NOTHING_TO_STEAL)
 LOG_MONOPOLY = 86  # the resource taken
 LOG_RESIGNED = 112
 LOG_TRADED_WITH_BANK = 116
@@ -198,6 +199,8 @@ class _Unsupported(Exception):
 
 
 class _Converter:
+    pending_robber = None  # (color, tile) awaiting its steal entry
+
     def __init__(self, payload, start):
         self.payload = payload
         state = payload["gameState"]
@@ -270,6 +273,7 @@ class _Converter:
 
     # ----- helpers -----
     def emit(self, color, action_type, value, result=None):
+        self._resolve_robber()
         self._flush_discards()
         self.log.append([[self.seat[color], action_type, value], result])
 
@@ -282,6 +286,19 @@ class _Converter:
             self.log.append(
                 [[self.seat[color], ActionType.DISCARD_RESOURCE.value, card], card]
             )
+
+    def _resolve_robber(self, steal=None):
+        """Emit the waiting robber move: with the card stolen in `steal`, or,
+        without one, as a move that robbed nobody."""
+        if self.pending_robber is None:
+            return
+        (color, coordinate), self.pending_robber = self.pending_robber, None
+        if steal is None or steal["type"] == LOG_ROBBER_NOTHING_TO_STEAL:
+            victim, card = None, None
+        else:
+            victim = self.seat[self._other(color)]
+            card = RESOURCE[steal["cardEnums"][0]]
+        self.emit(color, ActionType.MOVE_ROBBER.value, [coordinate, victim], card)
 
     def _tile_cube(self, index):
         h = self.hexes[str(index)]
@@ -318,7 +335,7 @@ class _Converter:
             diff.get("gameLogState", {}).items(), key=lambda kv: int(kv[0])
         )
         texts = [e.get("text", {}) for _, e in entries]
-        for i, text in enumerate(texts):
+        for text in texts:
             kind = text.get("type")
             color = text.get("playerColor")
             if kind in (LOG_PLACED_SETUP, LOG_BUILT):
@@ -340,38 +357,15 @@ class _Converter:
                     raise _Unsupported(
                         f"robber moved without a new robber tile: {text}"
                     )
-                steal = next(
-                    (
-                        t
-                        for t in texts[i + 1 :]
-                        if t.get("type")
-                        in (
-                            LOG_YOU_STOLE,
-                            LOG_STOLE_FROM_YOU,
-                            LOG_ROBBER_NOTHING_TO_STEAL,
-                        )
-                    ),
-                    None,
-                )
-                if steal is None:
-                    raise _Unsupported(
-                        f"robber moved with no steal or no-steal entry: {text}"
-                    )
-                if steal["type"] == LOG_ROBBER_NOTHING_TO_STEAL:
-                    victim, card = None, None
-                else:
-                    victim = self.seat[self._other(color)]
-                    card = RESOURCE[steal["cardEnums"][0]]
-                coordinate = list(self._tile_cube(robber))
-                self.emit(
-                    color, ActionType.MOVE_ROBBER.value, [coordinate, victim], card
-                )
-            elif kind in (
-                LOG_YOU_STOLE,
-                LOG_STOLE_FROM_YOU,
-                LOG_ROBBER_NOTHING_TO_STEAL,
-            ):
-                continue  # taken with the robber move above
+                # The steal (or "nothing to steal") entry follows, in this
+                # update or, live, in a later one. With nobody to rob colonist
+                # may log nothing at all: the next other entry settles that.
+                self._resolve_robber()
+                self.pending_robber = (color, list(self._tile_cube(robber)))
+            elif kind in STEALS:
+                if self.pending_robber is None:
+                    raise _Unsupported(f"steal without a robber move: {text}")
+                self._resolve_robber(text)
             elif kind == LOG_BOUGHT_DEV_CARD:
                 bought.setdefault(color, 0)
                 bought[color] += 1
@@ -492,7 +486,8 @@ class _Converter:
                     p.get(0, 0) + 2 * p.get(1, 0) + 2 * p.get(3, 0) + 2 * p.get(4, 0)
                 )
             cards = ps.get("resourceCards", {}).get("cards")
-            if cards is not None:
+            # A steal may be counted before its log entry arrives.
+            if cards is not None and self.pending_robber is None:
                 check["resources"] = len(cards)
                 if color == self.you:
                     hand = {r: 0 for r in RESOURCE.values()}
