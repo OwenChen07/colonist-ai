@@ -265,3 +265,38 @@ def test_playing_with_the_real_encoder_sends_game_messages_on_the_channel():
     assert {s["body"]["action"] for s in sent} >= {2, 6, 11, 15}
     assert "secret" not in json.dumps(bridge.__dict__, default=str)
     assert discards > 0  # no discard format yet: suggested, not sent
+
+
+def test_resent_full_game_messages_are_not_new_games():
+    """colonist resends the whole game (type 4) during play. Following the
+    game from such a mid-game snapshot would lose the moves before it."""
+    import base64
+
+    import msgpack
+
+    messages = _messages("capture_full_game")
+    start = next(
+        m
+        for m in messages
+        if msgpack.unpackb(base64.b64decode(m["b64"]), strict_map_key=False)
+        .get("data", {})
+        .get("type")
+        == 4
+    )
+    odd = base64.b64encode(
+        msgpack.packb({"data": {"type": 4, "payload": [1, 2]}})
+    ).decode()
+    bridge = Bridge(random_net(hidden=(8,)), 2)
+    bridge.reset()
+    statuses = []
+    for i, message in enumerate(messages):
+        if i in (60, 120):  # the full game again, mid-play, and another layout
+            statuses += [r for r in bridge.handle(start) if r["kind"] == "status"]
+            statuses += [
+                r
+                for r in bridge.handle({**message, "b64": odd})
+                if r["kind"] == "status"
+            ]
+        statuses += [r for r in bridge.handle(message) if r["kind"] == "status"]
+    assert [s["state"] for s in statuses] == ["following", "waiting"]
+    assert bridge.live.error is None

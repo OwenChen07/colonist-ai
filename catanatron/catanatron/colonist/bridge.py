@@ -76,6 +76,7 @@ class Bridge:
         # The room's serverId: the channel game messages are sent on. (The
         # same message carries a reconnect token, which is never kept.)
         self.channel = None
+        self.game_id = None  # colonist's id for the game being followed
         self.expect = (
             None  # (position key, described move, time sent) while unconfirmed
         )
@@ -83,7 +84,7 @@ class Bridge:
 
     def reset(self):
         self.live, self.answered, self.expect = None, None, None
-        self.channel = None
+        self.channel = self.game_id = None
         return [self.status("waiting", "waiting for a game to start")]
 
     @staticmethod
@@ -132,7 +133,17 @@ class Bridge:
                 self.channel = str(payload["serverId"])
             return self.check_timeout() if self.live else []
         if frame.type == C.GAME_STATE:
-            self.live = LiveGame(frame.data["data"]["payload"], frame.t)
+            payload = frame.data["data"].get("payload")
+            if not isinstance(payload, dict) or "gameState" not in payload:
+                return []  # same message type, another layout: not a game start
+            game_id = (payload.get("gameSettings") or {}).get("id")
+            if self.live is not None and not self.live.over and game_id == self.game_id:
+                # colonist resends the whole game during play; the game is
+                # already followed update by update, and rebuilding from a
+                # mid-game snapshot would lose the moves before it.
+                return self.check_timeout()
+            self.game_id = game_id
+            self.live = LiveGame(payload, frame.t)
             self.answered, self.expect = None, None
             self.socket = message.get("socket")
             if self.live.error:
