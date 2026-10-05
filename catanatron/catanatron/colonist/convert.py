@@ -101,12 +101,13 @@ LOG_TRADED_WITH_BANK = 116
 #: income (47, checked through hand counts instead), tiles blocked by the
 #: robber (49), colonist's timer starting to move the robber for a player
 #: (58; the move itself follows as 11), "move the robber" prompts (60),
+#: colonist's timer choosing a player's discards (64; the discard follows as 55),
 #: longest road / largest army
 #: changing hands (66, 68), which Catanatron works out itself, trade offers
 #: between players (118: an offer alone changes nothing; an accepted trade
 #: logs its own entry, which is not mapped yet and so stops the record), and
 #: a pre-game counter (130).
-LOG_IGNORED = {0, 2, 22, 24, 44, 47, 49, 58, 60, 66, 68, 118, 130}
+LOG_IGNORED = {0, 2, 22, 24, 44, 47, 49, 58, 60, 64, 66, 68, 118, 130}
 PIECE = {0: "road", 2: "settlement", 3: "city"}
 BUILDING = {1: "settlement", 2: "city"}
 BUILD_ACTION = {

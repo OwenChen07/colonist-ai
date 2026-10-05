@@ -211,10 +211,17 @@ def test_incomplete_conversion_fails_the_replay_check(frames):
     assert "stopped early" in report.errors[0]
 
 
-def test_timer_moving_the_robber_is_skipped(frames):
-    """When a player's timer runs out on a 7, colonist logs 58 ("Bot is
-    selecting where to place Robber for ...") before the move itself (11)."""
-    conv = convert(
-        with_extra_log_entry(frames, {"type": 58, "playerColor": 1, "pieceEnum": 5})
-    )
+@pytest.mark.parametrize(
+    "notice",
+    [
+        # "Bot is selecting where to place Robber for ...": the move follows as 11
+        {"type": 58, "playerColor": 1, "pieceEnum": 5},
+        # "Bot is selecting cards to discard for ...": the discard follows as 55
+        {"type": 64, "playerColor": 1},
+    ],
+)
+def test_timer_playing_for_a_player_is_skipped(frames, notice):
+    """When a player's timer runs out, colonist plays for them and logs a
+    notice before the move itself (both seen live)."""
+    conv = convert(with_extra_log_entry(frames, notice))
     assert not conv.unsupported
