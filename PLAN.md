@@ -243,6 +243,24 @@ MODEL=ab2 azure/deploy.sh loop r1 --rounds 20 --extra-data data/ab2   # the same
 - **Gate:** one full private game against you on colonist, with no manual help and no loss
   of sync.
 
+**Status (5 Oct 2026).** colonist allows bots: Owen confirmed it with their team (5 Oct). The
+bot plays unranked games from a clearly labelled bot account and says in chat that it is
+a bot. Built so far, in advisor mode (it shows its move but doesn't click yet):
+
+- `colonist/live.py` follows a game as it happens: each update goes through the replay
+  converter, and the simulator is checked against colonist's card counts and points after
+  every one. The three captured games follow to the end with no loss of sync (about 8 ms
+  per update). On any disagreement it stops for that game.
+- `colonist/bridge.py` is the local server the extension talks to (ws://127.0.0.1:8765):
+  whenever the bot's account has a decision, it runs the network and search (with no
+  exploration noise) and returns the move in colonist's own numbering, the top
+  alternatives and a win estimate. A 7's discards come back as one set.
+- `bot/` is the Chrome extension: it copies colonist's game messages (in order, from the
+  start of the game) to the bridge and shows the answers in a panel.
+
+Next: the actor (clicking colonist's controls), declining trades, the chat notice, and
+running unattended in a headless browser on a cloud VM.
+
 ### Phase 5: strength and the human test
 
 - Longer training runs, a larger network and deeper search at play time.

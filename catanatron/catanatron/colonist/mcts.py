@@ -180,7 +180,14 @@ class Search:
     """One search from a position, for the player to move there."""
 
     def __init__(
-        self, net, simulations=50, considered=16, c_visit=50.0, c_scale=1.0, rng=None
+        self,
+        net,
+        simulations=50,
+        considered=16,
+        c_visit=50.0,
+        c_scale=1.0,
+        rng=None,
+        noise=True,
     ):
         self.net = net
         self.simulations = simulations
@@ -188,6 +195,9 @@ class Search:
         self.c_visit = c_visit
         self.c_scale = c_scale
         self.rng = rng or random.Random()
+        # Gumbel noise makes the root's choice a sample: right for self-play,
+        # which should explore. Without it the search plays its best move.
+        self.noise = noise
         self.evaluations = 0
 
     # ----- building nodes
@@ -340,9 +350,12 @@ class Search:
             raise ValueError("search needs a position with a choice to make")
         yield [root]
         n = len(root.actions)
-        gumbel = np.array(
-            [-math.log(-math.log(self.rng.random() or 1e-300)) for _ in range(n)]
-        )
+        if self.noise:
+            gumbel = np.array(
+                [-math.log(-math.log(self.rng.random() or 1e-300)) for _ in range(n)]
+            )
+        else:
+            gumbel = np.zeros(n)
         m = min(self.considered, n)
         candidates = list(np.argsort(-(gumbel + root.logits))[:m])
         # Sequential halving: equal visits per round to each candidate, then

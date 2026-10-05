@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Colonist AI Bot",
+  "version": "0.1.0",
+  "description": "Connects colonist.io games to the colonist-ai bridge running on this computer. Advisor mode: shows the AI's move; it does not click yet.",
+  "background": { "service_worker": "src/background.js" },
+  "content_scripts": [
+    {
+      "matches": ["https://colonist.io/*", "https://*.colonist.io/*"],
+      "js": ["src/page.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": true
+    },
+    {
+      "matches": ["https://colonist.io/*", "https://*.colonist.io/*"],
+      "js": ["src/relay.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ]
+}

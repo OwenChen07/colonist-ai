@@ -1,0 +1,8 @@
+{
+  "name": "colonist-ai-bot",
+  "private": true,
+  "description": "Chrome extension linking colonist.io to the colonist-ai bridge",
+  "scripts": {
+    "test": "node test/page.test.js"
+  }
+}
