@@ -91,7 +91,22 @@ class Bridge:
         return {"kind": "status", "state": state, "text": text}
 
     def handle(self, message):
-        """One message from the extension -> list of replies."""
+        """One message from the extension -> list of replies. Never raises: a
+        failure stops the bot for this game (with the error in the status)
+        instead of dropping the connection."""
+        try:
+            return self._handle(message)
+        except Exception as e:
+            import traceback
+
+            traceback.print_exc()
+            where = f"bridge error on a {message.get('kind')} message: {e!r}"
+            if self.live is not None:
+                self.live.error = where
+            self.expect = None
+            return [self.status("stopped", where)]
+
+    def _handle(self, message):
         kind = message.get("kind")
         if kind == "reset":
             return self.reset()
@@ -274,6 +289,13 @@ class Bridge:
         return plan
 
 
+def _dumps(reply):
+    """JSON for the extension; numpy numbers become plain ones."""
+    return json.dumps(
+        reply, default=lambda o: o.item() if hasattr(o, "item") else str(o)
+    )
+
+
 async def serve_forever(make_bridge, host=HOST, port=PORT):
     """Serve until stopped. Each connection (one per colonist tab) gets its own
     Bridge from make_bridge(), so two tabs never mix their games."""
@@ -283,7 +305,7 @@ async def serve_forever(make_bridge, host=HOST, port=PORT):
         bridge = make_bridge()
         print(f"extension connected from {socket.remote_address}", flush=True)
         for reply in bridge.reset():
-            await socket.send(json.dumps(reply))
+            await socket.send(_dumps(reply))
         async for raw in socket:
             try:
                 message = json.loads(raw)
@@ -300,7 +322,7 @@ async def serve_forever(make_bridge, host=HOST, port=PORT):
                     )
                 elif reply["kind"] == "status":
                     print(f"  {reply['state']}: {reply['text']}", flush=True)
-                await socket.send(json.dumps(reply))
+                await socket.send(_dumps(reply))
         print("extension disconnected", flush=True)
 
     async with serve(handler, host, port, max_size=2**24):
