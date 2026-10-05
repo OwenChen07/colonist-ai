@@ -232,8 +232,8 @@ MODEL=ab2 azure/deploy.sh loop r1 --rounds 20 --extra-data data/ab2   # the same
 ### Phase 4: play on colonist
 
 - Extend the Phase 0 recorder into a two-way bridge. Turn the colonist board and log into a
-  simulator position, ask the AI for a move, and play the move by clicking colonist's own
-  controls. The bridge never builds or sends game messages itself.
+  simulator position, ask the AI for a move, and play it by sending the same message
+  colonist's own client sends (colonist allows bots; this replaced clicking on 5 Oct).
 - Safety rails in code: act only in private rooms, post a message in the game chat at the
   start saying the player is a bot, and stop if the simulator position stops matching
   colonist's (card counts, buildings, dice).
@@ -258,8 +258,16 @@ a bot. Built so far, in advisor mode (it shows its move but doesn't click yet):
 - `bot/` is the Chrome extension: it copies colonist's game messages (in order, from the
   start of the game) to the bridge and shows the answers in a panel.
 
-Next: the actor (clicking colonist's controls), declining trades, the chat notice, and
-running unattended in a headless browser on a cloud VM.
+- Playing (5 Oct): colonist allows bots to send the client's own messages, so the bot
+  plays that way rather than by clicking (decided 5 Oct). With `--play` the bridge
+  encodes each move (`colonist/client.py`), the extension sends it on the game socket,
+  and the bridge checks that the next update shows exactly that move, or stops. The
+  message formats come from recorded games (`colonist/protocol.py` pairs each message
+  the client sent with the move it caused); until they are filled in, moves are only
+  suggested.
+
+Next: the message formats, declining trades, the chat notice, and running unattended
+in a headless browser on a cloud VM.
 
 ### Phase 5: strength and the human test
 

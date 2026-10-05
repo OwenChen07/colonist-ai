@@ -3,9 +3,11 @@
 A Chrome extension that connects colonist.io games to the colonist-ai bridge running on
 the same computer (PLAN.md, Phase 4).
 
-**Advisor mode for now:** a panel on the page shows the move the AI would play, its
-top alternatives and its estimated chance to win. It does not click anything yet; that
-comes next (see "Next" below).
+A panel on the page shows the move the AI plays, its top alternatives and its estimated
+chance to win. With `--play`, the bridge also plays the moves: it sends the same messages
+colonist's own client sends (colonist allows bots), and checks that colonist then shows
+exactly that move. Until a move type's message format is known (see "Message formats"),
+that move is only suggested.
 
 ```
 colonist.io tab                         this computer
@@ -20,6 +22,7 @@ colonist.io tab                         this computer
    ```bash
    .venv/bin/python -m catanatron.colonist.bridge models/ab2/net.npz --simulations 200
    ```
+   Add `--play` to have it play its moves.
 2. In Chrome, open `chrome://extensions`, turn on **Developer mode**, click **Load
    unpacked** and pick this `bot/` folder.
 3. Open colonist.io and start a game. The extension has to be on from the start of the
@@ -45,10 +48,27 @@ doing. The bridge's terminal prints each move it suggests.
 colonist has allowed this bot (confirmed with their team). The bot plays from a
 clearly labelled bot account and says in the game chat that it is a bot.
 
+- **Checks every move it plays:** the next update must show exactly the move it sent, by
+  the bot, within `--move-timeout` seconds (default 15); otherwise it stops for that game.
+- **Reconnects safely:** if the bridge restarts mid-game, the page resends the game from
+  the start, marked as a replay, and the bridge answers only the current position.
+
+## Message formats
+
+The messages for each move type come from games recorded with the recorder extension
+(`recorder/`), which saves what colonist's client sends as well as what it receives:
+
+```bash
+.venv/bin/python -m catanatron.colonist.protocol captures/*.json -o protocol.json
+```
+
+This pairs each message the client sent with the move it caused, and lists the move
+types not seen yet. Names, chat and long strings are scrubbed, so the file can be shared.
+The formats then go into `catanatron/colonist/client.py`.
+
 ## Next
 
-- The actor: turning the bridge's move (corner, edge and tile indexes, resource ids, all
-  in colonist's own numbering) into clicks on colonist's buttons and board.
+- Fill in `client.py` from `protocol.json`.
 - Declining trade offers, and posting the bot notice in chat.
 - Running it unattended in a headless browser on a cloud VM.
 

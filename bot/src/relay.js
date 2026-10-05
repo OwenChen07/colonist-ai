@@ -29,6 +29,10 @@
   });
 
   function onBridge(msg) {
+    if (msg.kind === 'send') {
+      window.postMessage({ [TAG]: 'send', socket: msg.socket, b64: msg.b64 }, '*');
+      return;
+    }
     if (msg.kind === 'bridge-connected') {
       // A fresh bridge knows nothing: send this page's game from the start.
       window.postMessage({ [TAG]: 'replay-backlog' }, '*');
@@ -38,7 +42,7 @@
 
   // ----- panel -----
   let panel = null;
-  const view = { link: 'connecting to the bridge…', state: '', text: '', move: null };
+  const view = { link: 'connecting to the bridge…', state: '', text: '', move: null, playing: false };
 
   function mount() {
     if (window.top !== window || panel || !document.body) return;
@@ -59,7 +63,7 @@
 
   function render() {
     if (!panel) return;
-    let html = `<b>Colonist AI</b> <span style="color:#666">(advisor: it doesn't click yet)</span><br>`;
+    let html = `<b>Colonist AI</b> <span style="color:#666">(${view.playing ? 'playing' : 'advisor'})</span><br>`;
     html += `<span style="color:#666">${esc(view.link)}</span>`;
     if (view.text) html += `<br>${esc(view.state)}: ${esc(view.text)}`;
     const m = view.move;
@@ -84,7 +88,10 @@
       view.state = msg.state;
       view.text = msg.text;
       if (msg.state !== 'following') view.move = null;
-    } else if (msg.kind === 'move') view.move = msg;
+    } else if (msg.kind === 'move') {
+      view.move = msg;
+      view.playing = !!msg.played;
+    }
     render();
   }
 

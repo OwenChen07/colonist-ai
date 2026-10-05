@@ -49,6 +49,19 @@ const frame = Uint8Array.from([0x82, 0xa2, 0x69, 0x64, 0xa3, 0x31, 0x33, 0x30]);
   posted.length = 0;
   fromPage({ [TAG]: 'replay-backlog' });
   const replayed = posted.filter((p) => p[TAG] === 'to-relay').map((p) => p.msg.kind);
-  assert.deepStrictEqual(replayed, ['reset', 'frame', 'frame', 'frame']);
+  assert.deepStrictEqual(replayed, ['reset', 'frame', 'frame', 'frame', 'replay-done']);
+  assert(posted.filter((p) => p[TAG] === 'to-relay' && p.msg.kind === 'frame').every((p) => p.msg.replay));
+
+  // Sending a move: the bytes go out on the named socket, and are copied
+  // back like any outgoing message.
+  posted.length = 0;
+  ws.readyState = FakeWebSocket.OPEN;
+  fromPage({ [TAG]: 'send', socket: 1, b64: Buffer.from([1, 2, 3]).toString('base64') });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepStrictEqual(Array.from(ws.sent[1]), [1, 2, 3]);
+  const echoed = posted.filter((p) => p[TAG] === 'to-relay').map((p) => p.msg);
+  assert.deepStrictEqual(echoed.map((m) => [m.dir, m.socket, m.b64]), [['out', 1, 'AQID']]);
+  fromPage({ [TAG]: 'send', socket: 7, b64: 'AQID' });  // unknown socket: nothing sent
+  assert.strictEqual(ws.sent.length, 2);
   console.log('page.js: all checks passed');
 })().catch((e) => { console.error(e); process.exit(1); });

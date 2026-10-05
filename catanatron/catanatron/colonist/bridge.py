@@ -1,6 +1,7 @@
 """The bridge between colonist in the browser and the AI (PLAN.md, Phase 4).
 
     python -m catanatron.colonist.bridge models/ab2/net.npz --simulations 200
+    python -m catanatron.colonist.bridge models/ab2/net.npz --play     # plays its moves
 
 Runs a small server on this machine (ws://127.0.0.1:8765) that the bot
 extension (bot/) connects to. The extension forwards every message colonist
@@ -12,20 +13,30 @@ account has a decision to make, runs the network and search and sends back:
   - the top few moves with their share of the search, and the AI's estimate
     of its chance to win, for the overlay.
 
+With --play, it also sends each move: the same message colonist's own client
+sends (client.py; colonist allows bots), through the extension, on the game's
+socket. Then it checks the result: the next update must show exactly that move
+by the bot, within --move-timeout seconds, or it stops for that game. Moves
+whose message format isn't known yet are only suggested.
+
 If the position ever stops matching colonist's (see live.py), the bridge
 reports it and suggests nothing more for that game.
 
 Messages are JSON. From the extension:
-  {"kind": "frame", "dir": "in"|"out", "b64": "<MessagePack bytes>", "t": ms}
+  {"kind": "frame", "dir": "in"|"out", "b64": "<MessagePack bytes>", "t": ms,
+   "socket": id, "replay": true if resent after a reconnect}
   {"kind": "reset"}                       (a new page: forget the game)
+  {"kind": "replay-done"}                 (the resent game is complete)
 To the extension:
   {"kind": "status", "state": "waiting"|"following"|"thinking"|"stopped", "text": ...}
   {"kind": "move", "position": n, "move": {...}, "plan": [...], "options": [...],
-   "win_chance": p, "ms": t}
+   "win_chance": p, "ms": t, "played": bool}
+  {"kind": "send", "socket": id, "b64": "<MessagePack bytes>"}   (--play)
 """
 
 import argparse
 import asyncio
+import base64
 import json
 import random
 import sys
@@ -38,6 +49,7 @@ from catanatron.colonist import encode as E
 from catanatron.colonist.capture import decode
 from catanatron.colonist.live import LiveGame
 from catanatron.models.enums import ActionType
+from catanatron.serialization import action_from_json
 
 HOST, PORT = "127.0.0.1", 8765
 
@@ -46,16 +58,27 @@ class Bridge:
     """The bridge's logic, without the network: feed it messages, get back
     the replies to send."""
 
-    def __init__(self, net, simulations=200, seed=0):
+    def __init__(
+        self, net, simulations=200, seed=0, play=False, move_timeout=15.0, encode=None
+    ):
         self.net = net
         self.simulations = simulations
         self.rng = random.Random(seed)
+        self.play = play
+        self.move_timeout = move_timeout
+        if encode is None:
+            from catanatron.colonist.client import encode
+        self.encode = encode
         self.live = None
         self.answered = None  # position key of the last move sent
+        self.socket = None  # the game's socket, as the extension numbers them
+        self.expect = (
+            None  # (position key, described move, time sent) while unconfirmed
+        )
         self.seq = 0
 
     def reset(self):
-        self.live, self.answered = None, None
+        self.live, self.answered, self.expect = None, None, None
         return [self.status("waiting", "waiting for a game to start")]
 
     @staticmethod
@@ -67,24 +90,36 @@ class Bridge:
         kind = message.get("kind")
         if kind == "reset":
             return self.reset()
+        if kind == "replay-done":
+            return self.think() if self.live and not self.live.error else []
         if kind != "frame":
             return []
         self.seq += 1
         frame = decode(
-            {**message, "seq": self.seq, "socket": 0, "t": message.get("t", 0)}
+            {
+                **message,
+                "seq": self.seq,
+                "t": message.get("t", 0),
+                "socket": message.get("socket", 0),
+            }
         )
         if frame.dir != "in":
             return []
+        replaying = bool(message.get("replay"))
         if frame.type == C.GAME_STATE:
             self.live = LiveGame(frame.data["data"]["payload"], frame.t)
-            self.answered = None
+            self.answered, self.expect = None, None
+            self.socket = message.get("socket")
             if self.live.error:
                 return [self.status("stopped", self.live.error)]
             who = self.live.bot.value if self.live.bot else "a spectator"
             replies = [self.status("following", f"game started; playing as {who}")]
-            return replies + self.think()
-        if self.live is None or not self.live.apply(frame):
+            return replies + ([] if replaying else self.think())
+        if self.live is None:
             return []
+        before = self.live.position_key
+        if not self.live.apply(frame):
+            return self.check_timeout()
         if self.live.error:
             return [
                 self.status(
@@ -93,7 +128,45 @@ class Bridge:
             ]
         if self.live.over:
             return [self.status("waiting", "game over")]
-        return self.think()
+        stop = self.check_played(before)
+        if stop:
+            return stop
+        return [] if replaying else self.think()
+
+    def check_played(self, before):
+        """After the position changed: if a move was sent, it must be exactly
+        what the bot did next."""
+        if self.expect is None or self.live.position_key == before:
+            return []
+        _, expected, _ = self.expect
+        self.expect = None
+        mine = [
+            action_from_json(entry[0])
+            for entry in self.live.record["log"][before:]
+            if entry[0][0] == self.live.bot.value
+        ]
+        if not mine:
+            return []  # the update was someone else's (e.g. the opponent's discard)
+        try:
+            done = self.live.describe(mine[0])
+        except Exception:
+            done = {"label": str(mine[0])}
+        if {k: v for k, v in done.items() if k != "label"} != {
+            k: v for k, v in expected.items() if k != "label"
+        }:
+            self.live.error = (
+                f"sent {expected['label']}, but colonist recorded {done['label']}"
+            )
+            return [self.status("stopped", self.live.error)]
+        return []
+
+    def check_timeout(self):
+        if self.expect and time.time() - self.expect[2] > self.move_timeout:
+            label = self.expect[1]["label"]
+            self.expect = None
+            self.live.error = f"sent {label}, but colonist didn't show it within {self.move_timeout:.0f} s"
+            return [self.status("stopped", self.live.error)]
+        return []
 
     def think(self):
         live = self.live
@@ -107,19 +180,37 @@ class Bridge:
         if move.action_type == ActionType.DISCARD_RESOURCE:
             # colonist takes all discards at once; the simulator one at a time.
             plan = [live.describe(a) for a in self.plan_discards(game)]
-        return [
-            {
-                "kind": "move",
-                "position": live.position_key,
-                "move": plan[0],
-                "plan": plan,
-                "options": [
-                    {"move": live.describe(a), "share": round(s, 3)} for a, s in options
-                ],
-                "win_chance": round((value + 1) / 2, 3),
-                "ms": int((time.time() - start) * 1000),
-            }
-        ]
+        replies = []
+        played = False
+        if self.play:
+            from catanatron.colonist.client import NotKnownYet
+
+            try:
+                for raw in self.encode(plan, {"live": live}):
+                    replies.append(
+                        {
+                            "kind": "send",
+                            "socket": self.socket,
+                            "b64": base64.b64encode(raw).decode(),
+                        }
+                    )
+                played = True
+                self.expect = (live.position_key, plan[0], time.time())
+            except NotKnownYet as e:
+                replies.append(self.status("following", f"suggesting only: {e}"))
+        move = {
+            "kind": "move",
+            "position": live.position_key,
+            "move": plan[0],
+            "plan": plan,
+            "options": [
+                {"move": live.describe(a), "share": round(s, 3)} for a, s in options
+            ],
+            "win_chance": round((value + 1) / 2, 3),
+            "ms": int((time.time() - start) * 1000),
+            "played": played,
+        }
+        return [move] + replies
 
     def choose(self, game):
         """(move, [(move, share)], value for the player to move)."""
@@ -208,13 +299,27 @@ def main(argv=None):
     parser.add_argument("net", help="net.npz")
     parser.add_argument("--simulations", type=int, default=200)
     parser.add_argument("--port", type=int, default=PORT)
+    parser.add_argument(
+        "--play",
+        action="store_true",
+        help="send the bot's moves (otherwise only suggest)",
+    )
+    parser.add_argument("--move-timeout", type=float, default=15.0)
     args = parser.parse_args(argv)
     from catanatron.colonist.net import Net
 
     net = Net.load(args.net)
     try:
         asyncio.run(
-            serve_forever(lambda: Bridge(net, args.simulations), port=args.port)
+            serve_forever(
+                lambda: Bridge(
+                    net,
+                    args.simulations,
+                    play=args.play,
+                    move_timeout=args.move_timeout,
+                ),
+                port=args.port,
+            )
         )
     except KeyboardInterrupt:
         pass

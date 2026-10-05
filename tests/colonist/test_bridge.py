@@ -111,3 +111,113 @@ def test_bridge_server_end_to_end():
     assert got[0]["state"] == "waiting"
     assert any(g["kind"] == "status" and g["state"] == "following" for g in got)
     assert any(g["kind"] == "move" for g in got)
+
+
+# ----- playing (--play) -----
+def _recorded_log(name):
+    from catanatron.colonist.convert import convert
+    from catanatron.colonist.record import resolve_hidden_draws
+
+    record = convert(load(os.path.join(FIXTURES, name + ".json"))).record
+    return resolve_hidden_draws(record)
+
+
+def _player_of_record(name):
+    """A choose() that plays what was really played next, so every move the
+    bridge sends is the one colonist then records."""
+    from catanatron.colonist.replay import decision_of
+    from catanatron.serialization import action_from_json
+
+    log = _recorded_log(name)
+
+    def choose(game):
+        entry = log[len(game.state.action_records)]
+        move = decision_of(action_from_json(entry[0]), game.playable_actions)
+        return move, [(move, 1.0)], 0.0
+
+    return choose
+
+
+def _fake_encode(plan, context):
+    return [json.dumps(plan).encode()]
+
+
+def test_playing_sends_moves_and_confirms_each_one():
+    bridge = Bridge(random_net(hidden=(8,)), 2, play=True, encode=_fake_encode)
+    bridge.choose = _player_of_record("capture_full_game")
+    bridge.reset()
+    sends = stops = 0
+    for message in _messages("capture_full_game"):
+        message = {**message, "socket": 3}
+        for reply in bridge.handle(message):
+            if reply["kind"] == "send":
+                sends += 1
+                assert reply["socket"] == 3
+            if reply["kind"] == "status" and reply["state"] == "stopped":
+                stops += 1
+    assert stops == 0, bridge.live.error
+    assert sends > 50
+
+
+def test_playing_stops_when_colonist_records_another_move():
+    bridge = Bridge(random_net(hidden=(8,)), 2, play=True, encode=_fake_encode)
+    real = _player_of_record("capture_full_game")
+
+    def wrong(game):  # a legal move, but not the one that was played
+        move, _, _ = real(game)
+        other = next((a for a in game.playable_actions if a != move), move)
+        return other, [(other, 1.0)], 0.0
+
+    bridge.choose = wrong
+    bridge.reset()
+    statuses = []
+    for message in _messages("capture_full_game"):
+        statuses += [r for r in bridge.handle(message) if r["kind"] == "status"]
+        if statuses and statuses[-1]["state"] == "stopped":
+            break
+    assert statuses[-1]["state"] == "stopped"
+    assert "colonist recorded" in statuses[-1]["text"]
+
+
+def test_playing_stops_when_a_move_never_shows_up():
+    import base64
+
+    import msgpack
+
+    bridge = Bridge(
+        random_net(hidden=(8,)), 2, play=True, encode=_fake_encode, move_timeout=-1
+    )
+    bridge.reset()
+    for message in _messages("capture_full_game"):
+        if any(r["kind"] == "send" for r in bridge.handle(message)):
+            break
+    # Only a message that changes nothing arrives (a ping, say): the move is overdue.
+    ping = base64.b64encode(msgpack.packb({"data": {"type": 1}})).decode()
+    replies = bridge.handle({"kind": "frame", "dir": "in", "b64": ping})
+    assert replies[-1]["state"] == "stopped"
+    assert "didn't show it" in replies[-1]["text"]
+
+
+def test_replayed_frames_are_never_answered():
+    bridge = Bridge(random_net(hidden=(8,)), 2, play=True, encode=_fake_encode)
+    bridge.reset()
+    replies = []
+    for message in _messages("capture_short_game"):
+        replies += bridge.handle({**message, "replay": True})
+    assert not [r for r in replies if r["kind"] in ("move", "send")]
+    after = bridge.handle({"kind": "replay-done"})
+    assert [r["kind"] for r in after] == (
+        ["move", "send"] if bridge.live.bot_to_move else []
+    )
+
+
+def test_moves_without_a_known_format_are_only_suggested():
+    bridge = Bridge(random_net(hidden=(8,)), 2, play=True)  # the real, empty client
+    bridge.reset()
+    replies = []
+    for message in _messages("capture_short_game"):
+        replies += bridge.handle(message)
+    moves = [r for r in replies if r["kind"] == "move"]
+    assert moves and not any(r["kind"] == "send" for r in replies)
+    assert not any(m["played"] for m in moves)
+    assert any("suggesting only" in r.get("text", "") for r in replies)
