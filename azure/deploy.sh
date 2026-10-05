@@ -137,7 +137,9 @@ for size in $candidates; do
     break
   fi
   if grep -qE "SkuNotAvailable|NotAvailableForSubscription|QuotaExceeded|exceeding approved|Capacity" "$tmp/err"; then
-    echo "   $size isn't available here (capacity, subscription or quota); trying the next size"
+    reason=$(grep -oE "(SkuNotAvailable|NotAvailableForSubscription|QuotaExceeded|OperationNotAllowed)[^.]*\.[^.]*" "$tmp/err" | head -1)
+    echo "   $size refused: ${reason:-$(tail -1 "$tmp/err")}"
+    echo "   trying the next size"
   else
     cat "$tmp/err" >&2
     exit 1
