@@ -48,6 +48,8 @@ in `captures/`, which git ignores.
   has a decision to make, once per position.
 - **Discards:** colonist takes all of a 7's discards at once, so the bridge returns the
   whole set.
+- **Declines every trade offer** from the other player, at once (with `--play`). The bot
+  never trades with players (PLAN.md); bank and port trades are ordinary moves.
 - **Checks every move it plays:** the next update must show exactly the move it sent, by
   the bot, within `--move-timeout` seconds (default 15); otherwise it stops for that game.
 - **Reconnects safely:** if the bridge restarts mid-game, the page resends the game from

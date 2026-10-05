@@ -29,6 +29,10 @@ What the client sends (worked out from recorded games with protocol.py):
         47 then 49: bank or port trade (true, then the offer:
            {creator, isBankTrade, counterOfferInResponseToTradeId,
             offeredResources, wantedResources}, resources as colonist ids)
+        50 answer a trade offer from another player ({"id": offer id,
+           "response": 1} declines; colonist then shows the bot's response
+           as 2 and closes the offer). The bot never trades with players,
+           so declining is the only answer it sends.
     The client also sends interface messages the server doesn't need for a
     move (53: open the card menu, 66: hover a spot); the bot doesn't.
   - Not seen yet: discards. Road Building (48 with card 14, then 11 + 21 per
@@ -146,3 +150,13 @@ def encode(described_plan, context):
         pack_client(GAME_HEADER, context["channel"], b)
         for b in bodies(described_plan, context)
     ]
+
+
+def decline_trade(offer_id, context):
+    """[bytes to send] to decline another player's trade offer."""
+    if not context.get("channel"):
+        raise NotKnownYet(
+            "the game's channel isn't known yet (no room-join message seen)"
+        )
+    body = _msg(50, {"id": offer_id, "response": 1})
+    return [pack_client(GAME_HEADER, context["channel"], body)]

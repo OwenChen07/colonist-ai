@@ -409,3 +409,59 @@ def test_timeout_names_what_colonist_sent_instead():
     ping = base64.b64encode(msgpack.packb({"data": {"type": 999}})).decode()
     replies = bridge.handle({"kind": "frame", "dir": "in", "b64": ping})
     assert "message types: 999" in replies[-1]["text"]
+
+
+def _join(bridge):
+    import base64
+
+    import msgpack
+
+    join = {"id": "1", "data": {"type": 1, "payload": {"serverId": "AB12CD"}}}
+    bridge.handle(
+        {
+            "kind": "frame",
+            "dir": "in",
+            "b64": base64.b64encode(msgpack.packb(join)).decode(),
+        }
+    )
+
+
+def _sent_actions(replies):
+    import base64
+
+    from catanatron.colonist.capture import unpack_client
+
+    return [
+        unpack_client(base64.b64decode(r["b64"]))["body"]
+        for r in replies
+        if r["kind"] == "send"
+    ]
+
+
+def test_declines_trade_offers_once():
+    """The bot never trades with players: an offer waiting on its answer is
+    declined at once with colonist's message (50, response 1), and only once.
+    The fixture has a real offer from the opponent to the recording seat."""
+    bridge = Bridge(random_net(hidden=(8,)), 2, play=True)
+    bridge.choose = _player_of_record("capture_road_building")
+    bridge.reset()
+    _join(bridge)
+    sent = []
+    for message in _messages("capture_road_building"):
+        sent += _sent_actions(bridge.handle(message))
+    declines = [b for b in sent if b["action"] == 50]
+    assert declines == [
+        {"action": 50, "payload": {"id": "nZRC", "response": 1}, "sequence": 0}
+    ]
+
+
+def test_replayed_offers_are_not_declined():
+    bridge = Bridge(random_net(hidden=(8,)), 2, play=True)
+    bridge.choose = _player_of_record("capture_road_building")
+    bridge.reset()
+    _join(bridge)
+    sent = []
+    for message in _messages("capture_road_building"):
+        sent += _sent_actions(bridge.handle({**message, "replay": True}))
+    sent += _sent_actions(bridge.handle({"kind": "replay-done"}))
+    assert not [b for b in sent if b["action"] == 50]  # closed long before the end

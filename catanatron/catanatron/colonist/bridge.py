@@ -110,9 +110,12 @@ class Bridge:
         self.frames = []  # this game's messages, for save()
         self.saved_path = None
         self.since_sent = []  # message types colonist sent since the last move
+        self.offers = {}  # open trade offers between players: id -> offer
+        self.declined = set()  # offer ids the bot has declined
 
     def reset(self):
         self.live, self.answered, self.expect = None, None, None
+        self.offers, self.declined = {}, set()
         self.channel = self.game_id = None
         return [self.status("waiting", "waiting for a game to start")]
 
@@ -141,7 +144,9 @@ class Bridge:
         if kind == "reset":
             return self.reset()
         if kind == "replay-done":
-            return self.think() if self.live and not self.live.error else []
+            if not self.live or self.live.error:
+                return []
+            return self.decline_offers() + self.think()
         if kind != "frame":
             return []
         self.seq += 1
@@ -179,6 +184,7 @@ class Bridge:
                 self.frames, self.saved_path = self.frames[-1:], None
             self.live = LiveGame(payload, frame.t)
             self.answered, self.expect = None, None
+            self.offers, self.declined = {}, set()
             self.socket = message.get("socket")
             if self.live.error:
                 return [self.status("stopped", self.live.error)]
@@ -192,9 +198,11 @@ class Bridge:
             return []
         if self.expect is not None:
             self.since_sent.append(frame.type)
+        self.track_offers(frame)
+        declines = [] if replaying else self.decline_offers()
         before = self.live.position_key
         if not self.live.apply(frame):
-            return self.check_timeout()
+            return declines + self.check_timeout()
         if self.live.error:
             return [
                 self.status(
@@ -202,11 +210,57 @@ class Bridge:
                 )
             ]
         if self.live.over:
-            return [self.status("waiting", "game over")]
+            return declines + [self.status("waiting", "game over")]
         stop = self.check_played(before)
         if stop:
-            return stop
-        return [] if replaying else self.think()
+            return declines + stop
+        return declines + ([] if replaying else self.think())
+
+    def track_offers(self, frame):
+        """Keep the open trade offers between players up to date."""
+        if frame.type != C.DIFF:
+            return
+        diff = (frame.data["data"].get("payload") or {}).get("diff") or {}
+        active = (diff.get("tradeState") or {}).get("activeOffers") or {}
+        for offer_id, change in active.items():
+            if change is None:
+                self.offers.pop(offer_id, None)
+            else:
+                offer = self.offers.setdefault(offer_id, {})
+                for key, value in change.items():
+                    if isinstance(value, dict) and isinstance(offer.get(key), dict):
+                        offer[key] = {**offer[key], **value}
+                    else:
+                        offer[key] = value
+
+    def decline_offers(self):
+        """The bot never trades with players (PLAN.md): decline every offer
+        that is waiting on its answer, once."""
+        if not self.play or self.live is None or self.live.error:
+            return []
+        you = str(self.live.conv.you)
+        replies = []
+        for offer_id, offer in self.offers.items():
+            pending = (offer.get("playerResponses") or {}).get(you) == 0
+            if not pending or offer_id in self.declined:
+                continue
+            from catanatron.colonist.client import NotKnownYet, decline_trade
+
+            try:
+                raws = decline_trade(offer_id, {"channel": self.channel})
+            except NotKnownYet:
+                continue
+            self.declined.add(offer_id)
+            replies += [
+                {
+                    "kind": "send",
+                    "socket": self.socket,
+                    "b64": base64.b64encode(r).decode(),
+                }
+                for r in raws
+            ]
+            replies.append(self.status("following", f"declined trade offer {offer_id}"))
+        return replies
 
     def check_played(self, before):
         """After the position changed: if a move was sent, it must be exactly
