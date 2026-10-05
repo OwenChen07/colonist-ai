@@ -273,9 +273,11 @@ class _Converter:
         self.current = state["currentState"].get("currentTurnPlayerColor")
         self.discards = []  # waiting for the robber, then emitted in seat order
         self.pending_play = None  # a monopoly or year of plenty awaiting its cards
+        self.your_cards = []  # the recording player's resource cards (colonist ids)
 
     # ----- helpers -----
     def emit(self, color, action_type, value, result=None):
+        self._resolve_unfinished_play()
         self._resolve_robber()
         self._flush_discards()
         self.log.append([[self.seat[color], action_type, value], result])
@@ -346,9 +348,7 @@ class _Converter:
                 and kind not in (LOG_MONOPOLY, LOG_YEAR_OF_PLENTY)
                 and kind not in LOG_IGNORED
             ):
-                raise _Unsupported(
-                    f"{self.pending_play} played, then {text} before its cards"
-                )
+                self._resolve_unfinished_play()
             if kind in (LOG_PLACED_SETUP, LOG_BUILT):
                 piece = PIECE.get(text.get("pieceEnum"))
                 match = next(
@@ -437,6 +437,32 @@ class _Converter:
         self.pending_play = None
         self.emit(color, action_type, value)
 
+    def _resolve_unfinished_play(self):
+        """Something else happened before a played monopoly or year of plenty
+        got its cards. colonist's Easy bot has played Monopoly and let its turn
+        end without choosing (seen live): the card is spent and nothing moves.
+        In 1v1 the victim is the recording player, whose hand is known, so a
+        monopoly on a resource they hold none of has exactly that effect."""
+        if self.pending_play is None:
+            return
+        color, card = self.pending_play
+        if card == MONOPOLY and color != self.you:
+            for r in sorted(RESOURCE):
+                if r not in self.your_cards:
+                    self.pending_play = None
+                    self.log.append(
+                        [
+                            [
+                                self.seat[color],
+                                ActionType.PLAY_MONOPOLY.value,
+                                RESOURCE[r],
+                            ],
+                            None,
+                        ]
+                    )
+                    return
+        raise _Unsupported(f"{self.pending_play} played, but its cards never came")
+
     def _bank_trade(self, color, given, received):
         """One colonist entry can hold several trades: split the cards given
         into lots at the player's rate for each resource, one per card received."""
@@ -496,6 +522,8 @@ class _Converter:
                     p.get(0, 0) + 2 * p.get(1, 0) + 2 * p.get(3, 0) + 2 * p.get(4, 0)
                 )
             cards = ps.get("resourceCards", {}).get("cards")
+            if cards is not None and color == self.you:
+                self.your_cards = list(cards)
             # A steal may be counted before its log entry arrives.
             if cards is not None and self.pending_robber is None:
                 check["resources"] = len(cards)

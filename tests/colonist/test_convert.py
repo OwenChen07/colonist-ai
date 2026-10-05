@@ -170,6 +170,7 @@ def bank_trade(given, received, ratios):
 
     c = _Converter.__new__(_Converter)
     c.log, c.discards, c.seat = [], [], {1: "RED"}
+    c.pending_play = None
     c.ratios = {1: ratios}
     c._bank_trade(1, given, received)
     return [e[0][2] for e in c.log]
@@ -258,9 +259,20 @@ def test_monopoly_cards_in_a_later_update(full_game):
     assert conv.record["log"] == full_game.record["log"]
 
 
-def test_other_moves_before_a_monopolys_cards_stop_the_record(frames):
+def test_unfinished_opponent_monopoly_takes_nothing(frames):
+    """colonist's Easy bot has played Monopoly and let its turn end without
+    choosing (seen live). The card is spent and nothing moves: recorded as a
+    monopoly on a resource the recording player holds none of."""
     conv = convert(
         with_extra_log_entry(frames, {"type": 20, "playerColor": 1, "cardEnum": 13})
     )
-    # The monopoly waits for its cards; the next real move must not slip in.
-    assert conv.unsupported and "before its cards" in conv.unsupported[0]
+    assert not conv.unsupported, conv.unsupported
+    plays = [e for e in conv.record["log"] if e[0][1] == "PLAY_MONOPOLY"]
+    assert len(plays) == 1 and plays[0][0][0] == "RED"
+
+
+def test_unfinished_year_of_plenty_stops_the_record(frames):
+    conv = convert(
+        with_extra_log_entry(frames, {"type": 20, "playerColor": 1, "cardEnum": 15})
+    )
+    assert conv.unsupported and "never came" in conv.unsupported[0]
