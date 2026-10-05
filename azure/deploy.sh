@@ -33,9 +33,12 @@ case "$JOB" in
   *) echo "unknown job $JOB (datagen, train or selfplay)" >&2; exit 1 ;;
 esac
 
-# x86 sizes first, then ARM ones (a "p" in the name: Ampere chips; the code and
-# its packages run on both), 4 vCPUs before 2.
-VM_SIZE=${VM_SIZE:-Standard_F4s_v2 Standard_F4as_v6 Standard_D4as_v5 Standard_D4s_v5 Standard_D4as_v6 Standard_D4s_v6 Standard_D4ps_v5 Standard_D4pls_v5 Standard_D4pds_v5 Standard_F2s_v2 Standard_D2as_v5 Standard_D2s_v5 Standard_D2ps_v5 Standard_D2pls_v5}
+# Sizes to consider, in order of preference: dedicated 4-vCPU sizes (x86, then
+# ARM: a "p" in the name, Ampere chips; the code runs on both), then burstable
+# B sizes (cheap, but slow down once their CPU credits run out under sustained
+# load), then 2-vCPU sizes. Only sizes this subscription can create in
+# LOCATION are tried; see pick_sizes below.
+VM_SIZE=${VM_SIZE:-Standard_F4s_v2 Standard_D4s_v5 Standard_D4as_v5 Standard_D4s_v4 Standard_D4as_v4 Standard_D4s_v3 Standard_D4ps_v5 Standard_D4pls_v5 Standard_B4ps_v2 Standard_B4pls_v2 Standard_B4as_v2 Standard_B4s_v2 Standard_F2s_v2 Standard_D2s_v5 Standard_D2s_v4 Standard_D2s_v3 Standard_D2ps_v5 Standard_B2ps_v2 Standard_B2s_v2}
 PRIORITY=${PRIORITY:-Regular}
 VM=${VM:-colonist-$JOB-$(date +%m%d-%H%M)}
 
@@ -105,30 +108,58 @@ if [ "$PRIORITY" = "Spot" ]; then
 fi
 # Which sizes have capacity varies by subscription and region (Azure for
 # Students is restricted), so try the candidates in order.
-# Skip sizes this subscription can't use here at all (one query, ~10 s).
-open_sizes=$(az vm list-skus -l "$LOCATION" --resource-type virtualMachines \
-  --query "[?restrictions==\`[]\`].name" -o tsv 2>/dev/null || true)
-candidates=
-for size in $VM_SIZE; do
-  if [ -z "$open_sizes" ] || printf '%s\n' $open_sizes | grep -qx "$size"; then
-    candidates="$candidates $size"
-  fi
-done
-if [ -z "$candidates" ]; then
-  echo "None of these sizes is open to this subscription in $LOCATION: $VM_SIZE" >&2
-  echo "Pick one from 'az vm list-skus ...' (see azure/README.md) with VM_SIZE=..., or try another LOCATION." >&2
+# Keep the sizes that are open to this subscription in LOCATION and whose VM
+# family, and the region, have enough free vCPU quota (Azure for Students
+# gives some families 0). Prints "size arch" lines, in VM_SIZE order.
+pick_sizes() {
+  local skus usage
+  skus=$(az vm list-skus -l "$LOCATION" --resource-type virtualMachines -o json 2>/dev/null) || return 1
+  usage=$(az vm list-usage -l "$LOCATION" -o json 2>/dev/null) || return 1
+  SKUS="$skus" USAGE="$usage" WANT="$VM_SIZE" python3 -c '
+import json, os
+skus = json.loads(os.environ["SKUS"])
+usage = json.loads(os.environ["USAGE"])
+free = {u["name"]["value"].lower(): int(u["limit"]) - int(u["currentValue"]) for u in usage}
+info = {}
+for s in skus:
+    if s.get("restrictions"):
+        continue
+    caps = {c["name"]: c["value"] for c in s.get("capabilities", [])}
+    info[s["name"]] = (
+        (s.get("family") or "").lower(),
+        int(float(caps.get("vCPUs", "0"))),
+        "arm64" if caps.get("CpuArchitectureType", "").lower() == "arm64" else "x64",
+    )
+regional = free.get("cores", 10**6)
+for name in os.environ["WANT"].split():
+    if name not in info:
+        continue
+    family, vcpus, arch = info[name]
+    if free.get(family, 0) >= vcpus and regional >= vcpus:
+        print(name, arch)
+'
+}
+echo "== finding VM sizes this subscription can create in $LOCATION"
+if ! candidates=$(pick_sizes) || [ -z "$candidates" ]; then
+  echo "No size in VM_SIZE is both open and within quota in $LOCATION." >&2
+  echo "Try another allowed region (LOCATION=...), or set VM_SIZE to one from:" >&2
+  echo "  az vm list-skus -l $LOCATION --resource-type virtualMachines --query \"[?restrictions==\\\`[]\\\`].[name, family]\" -o tsv" >&2
+  echo "  az vm list-usage -l $LOCATION -o table    (family quotas)" >&2
   exit 1
 fi
+printf '   %s (%s)\n' $candidates
 created=
-for size in $candidates; do
-  # ARM sizes (a "p" after the vCPU count, e.g. D4ps_v5) need the ARM image.
-  if printf %s "$size" | grep -qE '^Standard_[A-Z]+[0-9]+[a-z]*p[a-z]*_'; then
+set -- $candidates
+while [ $# -ge 2 ]; do
+  size=$1 arch=$2
+  shift 2
+  if [ "$arch" = arm64 ]; then
     image=Canonical:ubuntu-24_04-lts:server-arm64:latest
   else
     image=Ubuntu2404
   fi
   echo "== creating VM $VM ($size, $PRIORITY) in $LOCATION"
-  if az vm create -g "$VM_GROUP" -n "$VM" --image "$image" --size "$size" \
+  if az vm create -g "$VM_GROUP" -n "$VM" -l "$LOCATION" --image "$image" --size "$size" \
     ${spot[@]+"${spot[@]}"} --assign-identity '[system]' --admin-username azureuser \
     --generate-ssh-keys --os-disk-size-gb 64 --custom-data "$tmp/cloud-init.yaml" \
     --tags project=colonist-ai job="$JOB" name="$NAME" --only-show-errors -o none \
