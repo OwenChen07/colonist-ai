@@ -319,6 +319,7 @@ extension, so Phase 0 rechecks it against real games.
 | Discards | Player chooses which cards | Player chooses, one card at a time | None |
 | Friendly robber | A player with 2 or fewer visible points can't be blocked or robbed, **including the player moving the robber** (seen live, 5 Oct) | Option exists, but counted hidden victory point cards and protected only opponents | Fixed: visible points only, and every low-point player is protected |
 | Dice | Balanced deck (below) | Two plain random dice | Port from the tracker |
+| Longest road | An opponent's settlement breaks a road, but the road leading into it still counts (seen live, 5 Oct) | Dropped the segment leading into an opponent's settlement | Fixed |
 | Trading with the opponent | **Allowed** (seen in a captured game; the table said None before) | Supported as actions, but built-in bots never offer or accept trades | None for the AI: it never trades with the opponent (decided 4 Oct). The converter still needs accepted trades, for recorded games where a player trades |
 | Development cards | One per turn, before or after rolling, not on the turn bought | Same | None |
 | Board | Standard 19-hex board | Supported | None |

@@ -366,16 +366,19 @@ def longest_acyclic_path(board: Board, node_set: Set[int], color: Color):
         while len(agenda) > 0:
             node, path_thus_far = agenda.pop()
 
+            # An enemy building breaks the road: a path may end at it (the
+            # road leading in still counts, as colonist.io counts it) but
+            # can't go on through it.
+            if path_thus_far and board.is_enemy_node(node, color):
+                paths_from_this_node.append(path_thus_far)
+                continue
+
             able_to_navigate = False
             for neighbor_node in STATIC_GRAPH.neighbors(node):
                 edge = tuple(sorted((node, neighbor_node)))
 
                 # Must travel on a friendly road.
                 if not board.is_friendly_road(edge, color):
-                    continue
-
-                # Can't expand past an enemy node.
-                if board.is_enemy_node(neighbor_node, color):
                     continue
 
                 if edge not in path_thus_far:

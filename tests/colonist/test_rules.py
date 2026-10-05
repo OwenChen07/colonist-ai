@@ -94,3 +94,40 @@ def test_friendly_robber_protects_the_mover_too():
     s.player_state[f"{player_key(s, Color.BLUE)}_VICTORY_POINTS"] = 3
     moves = {a.value[0] for a in robber_possibilities(s, Color.RED)}
     assert own <= moves
+
+
+def test_road_into_an_opponent_settlement_counts_but_stops_there():
+    """An opponent's settlement breaks a road: the road leading into it still
+    counts toward longest road, but nothing past it does. (Seen live: colonist
+    counted 6 where the simulator counted 5 and gave longest road away.)"""
+    from catanatron.models.board import Board, longest_acyclic_path
+    from catanatron.models.enums import NodeRef
+
+    board = Board()
+    tile = board.map.land_tiles[(0, 0, 0)]
+    refs = (NodeRef.NORTH, NodeRef.NORTHEAST, NodeRef.SOUTHEAST, NodeRef.SOUTH)
+    ring = [tile.nodes[r] for r in refs]
+    board.build_settlement(Color.RED, ring[0], initial_build_phase=True)
+    for a, b in zip(ring, ring[1:]):
+        board.build_road(Color.RED, (a, b))
+
+    def red_longest():
+        return max(
+            len(longest_acyclic_path(board, component, Color.RED))
+            for component in board.connected_components[Color.RED]
+        )
+
+    assert red_longest() == 3
+    # BLUE's settlement at the far end, as build_settlement leaves it (the
+    # node is dropped from RED's road component): the road into it still
+    # counts...
+    board.buildings[ring[-1]] = (Color.BLUE, "SETTLEMENT")
+    for component in board.connected_components[Color.RED]:
+        component.discard(ring[-1])
+    assert red_longest() == 3
+    # ...but a settlement in the middle splits it (no counting through).
+    del board.buildings[ring[-1]]
+    for component in board.connected_components[Color.RED]:
+        component.add(ring[-1])
+    board.buildings[ring[1]] = (Color.BLUE, "SETTLEMENT")
+    assert red_longest() == 2
