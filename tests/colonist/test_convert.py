@@ -225,3 +225,42 @@ def test_timer_playing_for_a_player_is_skipped(frames, notice):
     notice before the move itself (both seen live)."""
     conv = convert(with_extra_log_entry(frames, notice))
     assert not conv.unsupported
+
+
+def test_monopoly_cards_in_a_later_update(full_game):
+    """colonist's computer players choose a monopoly's resource in a separate
+    step, so the card (20) and what it took (86) can come in different
+    updates (seen live). The record must come out the same."""
+    import dataclasses
+
+    frames = load(FULL_GAME)
+    i = next(
+        i
+        for i, f in enumerate(frames)
+        if f.type == 91
+        and any(
+            e["text"].get("type") == 86
+            for e in f.data["data"]["payload"]["diff"].get("gameLogState", {}).values()
+        )
+    )
+    first = copy.deepcopy(frames[i])
+    diff = first.data["data"]["payload"]["diff"]
+    logs = diff["gameLogState"]
+    later_logs = {k: v for k, v in logs.items() if v["text"].get("type") == 86}
+    diff["gameLogState"] = {k: v for k, v in logs.items() if k not in later_logs}
+    moved = {k: diff.pop(k) for k in ("playerStates", "bankState") if k in diff}
+    second = copy.deepcopy(first)
+    second.data["data"]["payload"]["diff"] = {"gameLogState": later_logs, **moved}
+    second = dataclasses.replace(second, seq=frames[i].seq)
+    split = frames[:i] + [first, second] + frames[i + 1 :]
+    conv = convert(split)
+    assert not conv.unsupported, conv.unsupported
+    assert conv.record["log"] == full_game.record["log"]
+
+
+def test_other_moves_before_a_monopolys_cards_stop_the_record(frames):
+    conv = convert(
+        with_extra_log_entry(frames, {"type": 20, "playerColor": 1, "cardEnum": 13})
+    )
+    # The monopoly waits for its cards; the next real move must not slip in.
+    assert conv.unsupported and "before its cards" in conv.unsupported[0]

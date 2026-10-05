@@ -341,6 +341,14 @@ class _Converter:
         for text in texts:
             kind = text.get("type")
             color = text.get("playerColor")
+            if (
+                self.pending_play is not None
+                and kind not in (LOG_MONOPOLY, LOG_YEAR_OF_PLENTY)
+                and kind not in LOG_IGNORED
+            ):
+                raise _Unsupported(
+                    f"{self.pending_play} played, then {text} before its cards"
+                )
             if kind in (LOG_PLACED_SETUP, LOG_BUILT):
                 piece = PIECE.get(text.get("pieceEnum"))
                 match = next(
@@ -411,10 +419,9 @@ class _Converter:
                 raise _Unsupported(f"log entry type {kind}: {text}")
         if placed:
             raise _Unsupported(f"board changes without a log entry: {placed}")
-        if self.pending_play is not None:
-            raise _Unsupported(
-                f"{self.pending_play} played without its cards in the log"
-            )
+        # A monopoly or year of plenty may wait for its cards in a later
+        # update: colonist's own bots choose them in a separate step (seen
+        # live). Anything else logged in between stops the record (above).
         if robber is not None:
             self.robber_tile = robber
 
