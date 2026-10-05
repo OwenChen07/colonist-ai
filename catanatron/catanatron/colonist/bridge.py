@@ -64,6 +64,18 @@ HOST, PORT = "127.0.0.1", 8765
 ROOM_JOINED = 1  # message type when joining a game room: carries its serverId
 
 
+def in_progress(payload):
+    """Is this full-game message a snapshot of a game already under way?"""
+    state = payload.get("gameState") or {}
+    if (state.get("currentState") or {}).get("completedTurns", 0) > 0:
+        return True
+    board = state.get("mapState") or {}
+    pieces = list((board.get("tileCornerStates") or {}).values()) + list(
+        (board.get("tileEdgeStates") or {}).values()
+    )
+    return any(p.get("owner") for p in pieces)
+
+
 def game_phase(game):
     """The phase colonist's client messages depend on (see client.py)."""
     if game.state.is_initial_build_phase:
@@ -186,6 +198,15 @@ class Bridge:
             self.answered, self.expect = None, None
             self.offers, self.declined = {}, set()
             self.socket = message.get("socket")
+            if not self.live.error and in_progress(payload):
+                # A game joined midway (e.g. after a page reload) comes as a
+                # snapshot without its history, and the converter can only
+                # follow a game from its start. Playing on it once sent a
+                # setup move into a game in progress.
+                self.live.error = (
+                    "joined a game already in progress; the bot only follows "
+                    "games it saw from the start"
+                )
             if self.live.error:
                 return [self.status("stopped", self.live.error)]
             who = self.live.bot.value if self.live.bot else "a spectator"

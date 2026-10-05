@@ -463,3 +463,33 @@ def test_replayed_offers_are_not_declined():
         sent += _sent_actions(bridge.handle({**message, "replay": True}))
     sent += _sent_actions(bridge.handle({"kind": "replay-done"}))
     assert not [b for b in sent if b["action"] == 50]  # closed long before the end
+
+
+def test_a_game_joined_midway_is_not_played():
+    """After a page reload colonist sends the game as it stands, without its
+    history. The bridge must not treat that as a new game and play on it."""
+    import base64
+    import copy
+
+    import msgpack
+
+    bridge = Bridge(random_net(hidden=(8,)), 2, play=True)
+    bridge.reset()
+    _join(bridge)
+    replies = []
+    for message in _messages("capture_full_game"):
+        doc = msgpack.unpackb(
+            base64.b64decode(message["b64"]), raw=False, strict_map_key=False
+        )
+        if isinstance(doc, dict) and doc.get("data", {}).get("type") == C.GAME_STATE:
+            doc = copy.deepcopy(doc)
+            doc["data"]["payload"]["gameState"]["currentState"]["completedTurns"] = 12
+            message = {**message, "b64": base64.b64encode(msgpack.packb(doc)).decode()}
+        replies += bridge.handle(message)
+        if any(r["kind"] == "status" and r["state"] == "stopped" for r in replies):
+            break
+    assert not [r for r in replies if r["kind"] == "send"]
+    stops = [
+        r["text"] for r in replies if r["kind"] == "status" and r["state"] == "stopped"
+    ]
+    assert stops and "already in progress" in stops[0]
