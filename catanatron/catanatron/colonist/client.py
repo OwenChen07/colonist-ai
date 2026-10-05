@@ -24,8 +24,10 @@ What the client sends (worked out from recorded games with protocol.py):
         17 then 18: city (true, then the corner index)
         48 play a development card (card code: 11 knight, 13 monopoly,
            14 road building, 15 year of plenty)
-        8  choose resources for monopoly / year of plenty (the choice so far)
-        7  confirm that choice
+        8  choose resources for monopoly / year of plenty, or the cards to
+           discard on a 7 (the choice so far, sent after each pick)
+        7  confirm that choice. A discard is just 8s then 7, with no card
+           played first (from a discard made by hand in a live game).
         47 then 49: bank or port trade (true, then the offer:
            {creator, isBankTrade, counterOfferInResponseToTradeId,
             offeredResources, wantedResources}, resources as colonist ids)
@@ -35,7 +37,7 @@ What the client sends (worked out from recorded games with protocol.py):
            so declining is the only answer it sends.
     The client also sends interface messages the server doesn't need for a
     move (53: open the card menu, 66: hover a spot); the bot doesn't.
-  - Not seen yet: discards. Road Building (48 with card 14, then 11 + 21 per
+  - Road Building (48 with card 14, then 11 + 21 per
     free road) is taken from one recorded game but not yet played live; the
     bridge confirms every move it sends, so a wrong format stops the game
     rather than going unnoticed.
@@ -63,6 +65,16 @@ def _resource_choice(card, resources):
     chosen = []
     for r in resources:
         chosen.append(r)
+        msgs.append(_msg(8, list(chosen)))
+    msgs.append(_msg(7, list(chosen)))
+    return msgs
+
+
+def _discard(plan):
+    """A 7's discards: the whole plan at once, as one choice."""
+    msgs, chosen = [], []
+    for move in plan:
+        chosen.append(move["resource"])
         msgs.append(_msg(8, list(chosen)))
     msgs.append(_msg(7, list(chosen)))
     return msgs
@@ -129,6 +141,8 @@ FORMATS = {
 def bodies(described_plan, context):
     """The message bodies for a plan (one move, or a 7's discards)."""
     kind = described_plan[0]["type"]
+    if kind == "DISCARD_RESOURCE":
+        return _discard(described_plan)
     build = FORMATS.get(kind)
     if build is None:
         raise NotKnownYet(

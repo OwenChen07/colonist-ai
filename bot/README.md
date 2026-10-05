@@ -46,8 +46,8 @@ in `captures/`, which git ignores.
   bot must never play on a position it isn't sure of.
 - **Answers only for its own seat:** it suggests a move only when the logged-in account
   has a decision to make, once per position.
-- **Discards:** colonist takes all of a 7's discards at once, so the bridge returns the
-  whole set.
+- **Discards:** colonist takes all of a 7's discards at once, so the bridge sends the
+  whole set as one choice and checks colonist recorded the same cards.
 - **Declines every trade offer** from the other player, at once (with `--play`). The bot
   never trades with players (PLAN.md); bank and port trades are ordinary moves.
 - **Checks every move it plays:** the next update must show exactly the move it sent, by
@@ -66,9 +66,9 @@ Worked out from a recorded game (see `catanatron/colonist/client.py` for the det
 a game message is the header bytes `3, 1`, the room's `serverId`, then MessagePack
 `{action, payload, sequence}`. Roll, end turn, build, buy and play development cards,
 move the robber, and bank and port trades all have known formats, checked against every
-move in that game. **Discards are not known yet**, so on a 7 the bot only suggests its
-discards (colonist's timer picks for it if nobody does). Road building is a best guess
-that no capture has checked yet.
+move in that game. Roads and settlements after setup are announced first (10 / 14), and
+discards are the cards picked one by one (8) then confirmed (7); both were learned in live
+games. Road Building comes from one recorded game and hasn't been played live yet.
 
 The extension numbers every outgoing game message itself (`sequence` must count up),
 so the bot's messages and colonist's client's never share a number.
@@ -84,8 +84,8 @@ types not seen yet. Names, chat and long strings are scrubbed.
 
 ## Next
 
-- Discards and road building, from a capture that has them.
-- Declining trade offers, and posting the bot notice in chat.
+- Road Building, played live.
+- Posting the bot notice in chat.
 - Running it unattended in a headless browser on a cloud VM.
 
 ## Test

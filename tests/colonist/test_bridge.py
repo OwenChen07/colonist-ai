@@ -250,21 +250,19 @@ def test_playing_with_the_real_encoder_sends_game_messages_on_the_channel():
             "b64": base64.b64encode(msgpack.packb(join)).decode(),
         }
     )
-    sent, stops, discards = [], 0, 0
+    sent, stops = [], 0
     for message in _messages("capture_full_game"):
         for reply in bridge.handle(message):
             if reply["kind"] == "send":
                 sent.append(unpack_client(base64.b64decode(reply["b64"])))
             elif reply["kind"] == "status" and reply["state"] == "stopped":
                 stops += 1
-            elif reply["kind"] == "move" and not reply["played"]:
-                discards += reply["move"]["type"] == "DISCARD_RESOURCE"
-    assert stops == 0
+    assert stops == 0  # every move confirmed, discards included
     assert len(sent) > 50
     assert all(s["header"] == [3, 1] and s["channel"] == "AB12CD" for s in sent)
     assert {s["body"]["action"] for s in sent} >= {2, 6, 11, 15}
     assert "secret" not in json.dumps(bridge.__dict__, default=str)
-    assert discards > 0  # no discard format yet: suggested, not sent
+    assert 7 in {s["body"]["action"] for s in sent}  # discards are sent
 
 
 def test_resent_full_game_messages_are_not_new_games():

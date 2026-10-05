@@ -79,11 +79,6 @@ def test_encode_needs_the_channel_and_a_known_format():
         encode(roll, {"creator": 2})
     [raw] = encode(roll, {"channel": "AB12", "creator": 2})
     assert unpack_client(raw)["body"]["action"] == 2
-    with pytest.raises(NotKnownYet):
-        encode(
-            [{"type": "DISCARD_RESOURCE", "resource": 1, "label": "discard"}],
-            {"channel": "AB12", "creator": 2},
-        )
     # a city is the client's two messages, in order
     city = encode(
         [{"type": "BUILD_CITY", "corner": 37, "label": "city"}],
@@ -127,3 +122,22 @@ def test_bridge_reports_the_phase():
     assert game_phase(game) == "main"
     game.state.is_road_building = True
     assert game_phase(game) == "road_building"
+
+
+def test_discards_are_one_choice():
+    """From a discard made by hand in a live game (6 grain): one 8 after each
+    pick with the choice so far, then 7 with the whole set; no card played."""
+    plan = [{"type": "DISCARD_RESOURCE", "resource": 4, "label": "discard"}] * 6
+    assert _actions(plan, "main") == [
+        (8, [4]),
+        (8, [4, 4]),
+        (8, [4, 4, 4]),
+        (8, [4, 4, 4, 4]),
+        (8, [4, 4, 4, 4, 4]),
+        (8, [4, 4, 4, 4, 4, 4]),
+        (7, [4, 4, 4, 4, 4, 4]),
+    ]
+    mixed = [
+        {"type": "DISCARD_RESOURCE", "resource": r, "label": "discard"} for r in (1, 5)
+    ]
+    assert _actions(mixed, "main") == [(8, [1]), (8, [1, 5]), (7, [1, 5])]

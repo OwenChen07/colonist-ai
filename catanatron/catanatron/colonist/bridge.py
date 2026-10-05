@@ -103,7 +103,7 @@ class Bridge:
         self.channel = None
         self.game_id = None  # colonist's id for the game being followed
         self.expect = (
-            None  # (position key, described move, time sent) while unconfirmed
+            None  # (position key, described plan, time sent) while unconfirmed
         )
         self.seq = 0
         self.save_dir = save_dir
@@ -267,7 +267,8 @@ class Bridge:
         what the bot did next."""
         if self.expect is None or self.live.position_key == before:
             return []
-        _, expected, _ = self.expect
+        _, plan, _ = self.expect
+        expected = plan[0]
         self.expect = None
         mine = [
             action_from_json(entry[0])
@@ -276,6 +277,20 @@ class Bridge:
         ]
         if not mine:
             return []  # the update was someone else's (e.g. the opponent's discard)
+        if expected["type"] == "DISCARD_RESOURCE":
+            # colonist logs a 7's discards together, in its own order.
+            sent = sorted(m["resource"] for m in plan)
+            done = sorted(
+                self.live.describe(a)["resource"]
+                for a in mine
+                if a.action_type == ActionType.DISCARD_RESOURCE
+            )
+            if sent != done:
+                self.live.error = (
+                    f"sent discards {sent}, but colonist recorded discards {done}"
+                )
+                return [self.status("stopped", self.live.error)]
+            return []
         try:
             done = self.live.describe(mine[0])
         except Exception:
@@ -291,7 +306,7 @@ class Bridge:
 
     def check_timeout(self):
         if self.expect and time.time() - self.expect[2] > self.move_timeout:
-            label = self.expect[1]["label"]
+            label = self.expect[1][0]["label"]
             self.expect = None
             seen = ", ".join(str(t) for t in self.since_sent) or "nothing"
             self.live.error = (
@@ -333,7 +348,7 @@ class Bridge:
                         }
                     )
                 played = True
-                self.expect = (live.position_key, plan[0], time.time())
+                self.expect = (live.position_key, plan, time.time())
                 self.since_sent = []
             except NotKnownYet as e:
                 replies.append(self.status("following", f"suggesting only: {e}"))
