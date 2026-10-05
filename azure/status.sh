@@ -6,6 +6,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 source azure/common.sh
 LINES=${1:-5}
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
 
 echo "== VMs"
 az vm list -g "$VM_GROUP" -d \
@@ -15,6 +17,7 @@ echo "== logs"
 for blob in $(az storage blob list --account-name "$ACCOUNT" --auth-mode key --only-show-errors -c "$CONTAINER" \
   --prefix logs/ --query "[].name" -o tsv 2>/dev/null); do
   echo "-- $blob"
+  # Download to a file: the CLI can't write to /dev/stdout on macOS.
   az storage blob download --account-name "$ACCOUNT" --auth-mode key --only-show-errors -c "$CONTAINER" \
-    -n "$blob" -f /dev/stdout -o none 2>/dev/null | tail -n "$LINES"
+    -n "$blob" -f "$tmp/log" -o none && tail -n "$LINES" "$tmp/log"
 done
