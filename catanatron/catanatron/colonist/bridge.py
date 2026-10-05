@@ -64,6 +64,15 @@ HOST, PORT = "127.0.0.1", 8765
 ROOM_JOINED = 1  # message type when joining a game room: carries its serverId
 
 
+def game_phase(game):
+    """The phase colonist's client messages depend on (see client.py)."""
+    if game.state.is_initial_build_phase:
+        return "setup"
+    if game.state.is_road_building:
+        return "road_building"
+    return "main"
+
+
 class Bridge:
     """The bridge's logic, without the network: feed it messages, get back
     the replies to send."""
@@ -256,7 +265,11 @@ class Bridge:
             from catanatron.colonist.client import NotKnownYet
 
             try:
-                context = {"channel": self.channel, "creator": live.conv.you}
+                context = {
+                    "channel": self.channel,
+                    "creator": live.conv.you,
+                    "phase": game_phase(game),
+                }
                 for raw in self.encode(plan, context):
                     replies.append(
                         {

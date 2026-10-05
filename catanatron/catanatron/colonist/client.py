@@ -17,6 +17,10 @@ What the client sends (worked out from recorded games with protocol.py):
         9  buy development card (true)  3  move robber (tile index; in 1v1
                                            the steal is automatic)
         11 road (edge index)            15 settlement (corner index)
+           In setup each is sent alone. In the main game the client first
+           sends 10 (true) before a road and 14 (true) before a settlement;
+           colonist ignores a bare 11 or 15 there (seen live). The free
+           roads of Road Building are 11 then 21, both with the edge.
         17 then 18: city (true, then the corner index)
         48 play a development card (card code: 11 knight, 13 monopoly,
            14 road building, 15 year of plenty)
@@ -27,10 +31,10 @@ What the client sends (worked out from recorded games with protocol.py):
             offeredResources, wantedResources}, resources as colonist ids)
     The client also sends interface messages the server doesn't need for a
     move (53: open the card menu, 66: hover a spot); the bot doesn't.
-  - Not seen yet: discards. Road building is assumed to be code 48 with card
-    14 (colonist's code for that card, as the converter maps it), but no
-    capture checked here includes one; the bridge confirms every move it
-    sends, so a wrong guess stops the game rather than going unnoticed.
+  - Not seen yet: discards. Road Building (48 with card 14, then 11 + 21 per
+    free road) is taken from one recorded game but not yet played live; the
+    bridge confirms every move it sends, so a wrong format stops the game
+    rather than going unnoticed.
 
 Until a move type's format is known, encode() raises NotKnownYet and the
 bridge only suggests that move.
@@ -76,13 +80,36 @@ def _trade(move, context):
     ]
 
 
+def _phase(context):
+    """ "setup", "road_building" (Road Building's free roads) or "main"."""
+    phase = context.get("phase")
+    if phase not in ("setup", "road_building", "main"):
+        raise ValueError(f"building needs the game phase in the context, got {phase!r}")
+    return phase
+
+
+def _road(move, context):
+    edge = move["edge"]
+    return {
+        "setup": [_msg(11, edge)],
+        "road_building": [_msg(11, edge), _msg(21, edge)],
+        "main": [_msg(10, True), _msg(11, edge)],
+    }[_phase(context)]
+
+
+def _settlement(move, context):
+    if _phase(context) == "setup":
+        return [_msg(15, move["corner"])]
+    return [_msg(14, True), _msg(15, move["corner"])]
+
+
 # move type -> function(described move, context) -> [message bodies]
 FORMATS = {
     "ROLL": lambda m, c: [_msg(2, True)],
     "END_TURN": lambda m, c: [_msg(6, True)],
     "BUY_DEVELOPMENT_CARD": lambda m, c: [_msg(9, True)],
-    "BUILD_ROAD": lambda m, c: [_msg(11, m["edge"])],
-    "BUILD_SETTLEMENT": lambda m, c: [_msg(15, m["corner"])],
+    "BUILD_ROAD": _road,
+    "BUILD_SETTLEMENT": _settlement,
     "BUILD_CITY": lambda m, c: [_msg(17, True), _msg(18, m["corner"])],
     "MOVE_ROBBER": lambda m, c: [_msg(3, m["tile"])],
     "PLAY_KNIGHT_CARD": lambda m, c: [_msg(48, CARD["knight"])],
@@ -109,7 +136,8 @@ def bodies(described_plan, context):
 
 def encode(described_plan, context):
     """[bytes to send] for a plan. context: {"channel": the game's serverId,
-    "creator": the bot's colonist color}."""
+    "creator": the bot's colonist color, "phase": "setup" | "road_building" |
+    "main" (needed for roads and settlements)}."""
     if not context.get("channel"):
         raise NotKnownYet(
             "the game's channel isn't known yet (no room-join message seen)"
