@@ -31,6 +31,12 @@ colonist.io tab                         this computer
 The panel in the top-right corner says whether the bridge is connected and what it is
 doing. The bridge's terminal prints each move it suggests.
 
+Every game the bridge follows is saved to `captures/bridge-<time>.json` (the
+recorder's format; `--save DIR` to change, `--save ''` to turn off) when the bot
+stops, the game ends or the tab closes. When it stops, that file shows what colonist
+sent back. It holds usernames and chat (the reconnect token is removed), so it stays
+in `captures/`, which git ignores.
+
 ## What it does on its own
 
 - **Follows the game:** every update colonist sends goes through the same converter that

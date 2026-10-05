@@ -22,6 +22,12 @@ whose message format isn't known yet are only suggested.
 If the position ever stops matching colonist's (see live.py), the bridge
 reports it and suggests nothing more for that game.
 
+With --save DIR (default captures/, which git ignores), every game it follows
+is saved as a capture, the recorder's format, whenever the bot stops, the
+game ends or the tab disconnects: the file to look at when something goes
+wrong. Room-join messages lose their reconnect token first; nothing else is
+changed, so the file holds usernames and chat and stays on this machine.
+
 Messages are JSON. From the extension:
   {"kind": "frame", "dir": "in"|"out", "b64": "<MessagePack bytes>", "t": ms,
    "socket": id, "replay": true if resent after a reconnect}
@@ -38,15 +44,18 @@ import argparse
 import asyncio
 import base64
 import json
+import os
 import random
 import sys
 import time
+
+import msgpack
 
 import numpy as np
 
 from catanatron.colonist import convert as C
 from catanatron.colonist import encode as E
-from catanatron.colonist.capture import decode
+from catanatron.colonist.capture import FORMAT, decode
 from catanatron.colonist.live import LiveGame
 from catanatron.models.enums import ActionType
 from catanatron.serialization import action_from_json
@@ -60,7 +69,14 @@ class Bridge:
     the replies to send."""
 
     def __init__(
-        self, net, simulations=200, seed=0, play=False, move_timeout=15.0, encode=None
+        self,
+        net,
+        simulations=200,
+        seed=0,
+        play=False,
+        move_timeout=15.0,
+        encode=None,
+        save_dir=None,
     ):
         self.net = net
         self.simulations = simulations
@@ -81,6 +97,10 @@ class Bridge:
             None  # (position key, described move, time sent) while unconfirmed
         )
         self.seq = 0
+        self.save_dir = save_dir
+        self.frames = []  # this game's messages, for save()
+        self.saved_path = None
+        self.since_sent = []  # message types colonist sent since the last move
 
     def reset(self):
         self.live, self.answered, self.expect = None, None, None
@@ -116,6 +136,7 @@ class Bridge:
         if kind != "frame":
             return []
         self.seq += 1
+        self._keep(message)
         frame = decode(
             {
                 **message,
@@ -143,6 +164,10 @@ class Bridge:
                 # mid-game snapshot would lose the moves before it.
                 return self.check_timeout()
             self.game_id = game_id
+            if self.live is not None:
+                # A new game: the previous one's messages go to their own file.
+                self.save()
+                self.frames, self.saved_path = self.frames[-1:], None
             self.live = LiveGame(payload, frame.t)
             self.answered, self.expect = None, None
             self.socket = message.get("socket")
@@ -156,6 +181,8 @@ class Bridge:
             return replies + ([] if replaying else self.think())
         if self.live is None:
             return []
+        if self.expect is not None:
+            self.since_sent.append(frame.type)
         before = self.live.position_key
         if not self.live.apply(frame):
             return self.check_timeout()
@@ -203,7 +230,11 @@ class Bridge:
         if self.expect and time.time() - self.expect[2] > self.move_timeout:
             label = self.expect[1]["label"]
             self.expect = None
-            self.live.error = f"sent {label}, but colonist didn't show it within {self.move_timeout:.0f} s"
+            seen = ", ".join(str(t) for t in self.since_sent) or "nothing"
+            self.live.error = (
+                f"sent {label}, but colonist didn't show it within "
+                f"{self.move_timeout:.0f} s (colonist sent message types: {seen})"
+            )
             return [self.status("stopped", self.live.error)]
         return []
 
@@ -236,6 +267,7 @@ class Bridge:
                     )
                 played = True
                 self.expect = (live.position_key, plan[0], time.time())
+                self.since_sent = []
             except NotKnownYet as e:
                 replies.append(self.status("following", f"suggesting only: {e}"))
         move = {
@@ -251,6 +283,41 @@ class Bridge:
             "played": played,
         }
         return [move] + replies
+
+    # ----- saving games -----
+    def _keep(self, message):
+        if self.save_dir is None or "b64" not in message:
+            return
+        b64 = message["b64"]
+        if message.get("dir") == "in":
+            b64 = _without_token(b64)
+        self.frames.append(
+            {
+                "seq": len(self.frames),
+                "t": message.get("t", 0),
+                "dir": message.get("dir"),
+                "socket": message.get("socket", 0),
+                "b64": b64,
+            }
+        )
+
+    def save(self):
+        """Write this game's messages as a capture; returns the path (or None
+        with nothing to save). The same game keeps one file, rewritten."""
+        if self.save_dir is None or self.live is None or not self.frames:
+            return None
+        if self.saved_path is None:
+            os.makedirs(self.save_dir, exist_ok=True)
+            stamp = time.strftime("%Y%m%d-%H%M%S")
+            self.saved_path = os.path.join(self.save_dir, f"bridge-{stamp}.json")
+        doc = {"format": FORMAT, "source": "bridge", "messages": self.frames}
+        try:
+            with open(self.saved_path, "w") as f:
+                json.dump(doc, f)
+        except OSError as e:
+            print(f"  could not save the game: {e}", flush=True)
+            return None
+        return self.saved_path
 
     def choose(self, game):
         """(move, [(move, share)], value for the player to move)."""
@@ -300,6 +367,20 @@ class Bridge:
         return plan
 
 
+def _without_token(b64):
+    """A room-join message without its reconnect token (anything else as is)."""
+    try:
+        doc = msgpack.unpackb(base64.b64decode(b64), raw=False, strict_map_key=False)
+    except Exception:
+        return b64
+    data = doc.get("data") if isinstance(doc, dict) else None
+    payload = data.get("payload") if isinstance(data, dict) else None
+    if not isinstance(payload, dict) or "reconnectToken" not in payload:
+        return b64
+    payload["reconnectToken"] = "<removed>"
+    return base64.b64encode(msgpack.packb(doc)).decode()
+
+
 def _dumps(reply):
     """JSON for the extension; numpy numbers become plain ones."""
     return json.dumps(
@@ -324,6 +405,13 @@ async def serve_forever(make_bridge, host=HOST, port=PORT):
                 continue
             # Thinking can take a second or two: keep the connection responsive.
             replies = await asyncio.to_thread(bridge.handle, message)
+            if any(
+                r["kind"] == "status" and r["state"] in ("stopped", "waiting")
+                for r in replies
+            ):
+                saved = bridge.save()
+                if saved:
+                    print(f"  game saved to {saved}", flush=True)
             for reply in replies:
                 if reply["kind"] == "move":
                     print(
@@ -334,7 +422,11 @@ async def serve_forever(make_bridge, host=HOST, port=PORT):
                 elif reply["kind"] == "status":
                     print(f"  {reply['state']}: {reply['text']}", flush=True)
                 await socket.send(_dumps(reply))
-        print("extension disconnected", flush=True)
+        saved = bridge.save()
+        print(
+            "extension disconnected" + (f"; game saved to {saved}" if saved else ""),
+            flush=True,
+        )
 
     async with serve(handler, host, port, max_size=2**24):
         print(f"bridge listening on ws://{host}:{port}", flush=True)
@@ -352,6 +444,12 @@ def main(argv=None):
         help="send the bot's moves (otherwise only suggest)",
     )
     parser.add_argument("--move-timeout", type=float, default=15.0)
+    parser.add_argument(
+        "--save",
+        default="captures",
+        metavar="DIR",
+        help="save each game followed here (default captures/); '' to turn off",
+    )
     args = parser.parse_args(argv)
     from catanatron.colonist.net import Net
 
@@ -364,6 +462,7 @@ def main(argv=None):
                     args.simulations,
                     play=args.play,
                     move_timeout=args.move_timeout,
+                    save_dir=args.save or None,
                 ),
                 port=args.port,
             )

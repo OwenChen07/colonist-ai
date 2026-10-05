@@ -362,3 +362,50 @@ def test_robber_move_with_nothing_logged_robs_nobody():
     log = _follow(frames).record["log"]
     robs = [e for e in log if e[0][1] == "MOVE_ROBBER" and e[0][2][1] is None]
     assert len(robs) >= len(found)
+
+
+def test_saves_each_game_as_a_capture_without_the_reconnect_token(tmp_path):
+    import base64
+
+    import msgpack
+
+    from catanatron.colonist.convert import convert
+
+    join = {"data": {"type": 1, "payload": {"serverId": "AB", "reconnectToken": "s3"}}}
+    bridge = Bridge(random_net(hidden=(8,)), 2, save_dir=str(tmp_path))
+    bridge.reset()
+    bridge.handle(
+        {
+            "kind": "frame",
+            "dir": "in",
+            "b64": base64.b64encode(msgpack.packb(join)).decode(),
+        }
+    )
+    for message in _messages("capture_full_game"):
+        bridge.handle(message)
+    path = bridge.save()
+    assert path and path.startswith(str(tmp_path))
+    frames = load(path)
+    assert "s3" not in json.dumps([f.data for f in frames], default=str)
+    assert any(f.type == 1 for f in frames)
+    saved = convert(load(path)).record["log"]
+    original = convert(load(os.path.join(FIXTURES, "capture_full_game.json")))
+    assert saved == original.record["log"]
+    assert bridge.channel == "AB"
+
+
+def test_timeout_names_what_colonist_sent_instead():
+    import base64
+
+    import msgpack
+
+    bridge = Bridge(
+        random_net(hidden=(8,)), 2, play=True, encode=_fake_encode, move_timeout=-1
+    )
+    bridge.reset()
+    for message in _messages("capture_full_game"):
+        if any(r["kind"] == "send" for r in bridge.handle(message)):
+            break
+    ping = base64.b64encode(msgpack.packb({"data": {"type": 999}})).decode()
+    replies = bridge.handle({"kind": "frame", "dir": "in", "b64": ping})
+    assert "message types: 999" in replies[-1]["text"]
