@@ -54,20 +54,29 @@ clearly labelled bot account and says in the game chat that it is a bot.
 
 ## Message formats
 
-The messages for each move type come from games recorded with the recorder extension
-(`recorder/`), which saves what colonist's client sends as well as what it receives:
+Worked out from a recorded game (see `catanatron/colonist/client.py` for the details):
+a game message is the header bytes `3, 1`, the room's `serverId`, then MessagePack
+`{action, payload, sequence}`. Roll, end turn, build, buy and play development cards,
+move the robber, and bank and port trades all have known formats, checked against every
+move in that game. **Discards are not known yet**, so on a 7 the bot only suggests its
+discards (colonist's timer picks for it if nobody does). Road building is a best guess
+that no capture has checked yet.
+
+The extension numbers every outgoing game message itself (`sequence` must count up),
+so the bot's messages and colonist's client's never share a number.
+
+To learn more formats, record games with the recorder extension (`recorder/`) and run:
 
 ```bash
 .venv/bin/python -m catanatron.colonist.protocol captures/*.json -o protocol.json
 ```
 
-This pairs each message the client sent with the move it caused, and lists the move
-types not seen yet. Names, chat and long strings are scrubbed, so the file can be shared.
-The formats then go into `catanatron/colonist/client.py`.
+It pairs each game message the client sent with the move it caused, and lists the move
+types not seen yet. Names, chat and long strings are scrubbed.
 
 ## Next
 
-- Fill in `client.py` from `protocol.json`.
+- Discards and road building, from a capture that has them.
 - Declining trade offers, and posting the bot notice in chat.
 - Running it unattended in a headless browser on a cloud VM.
 

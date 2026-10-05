@@ -52,6 +52,7 @@ from catanatron.models.enums import ActionType
 from catanatron.serialization import action_from_json
 
 HOST, PORT = "127.0.0.1", 8765
+ROOM_JOINED = 1  # message type when joining a game room: carries its serverId
 
 
 class Bridge:
@@ -72,6 +73,9 @@ class Bridge:
         self.live = None
         self.answered = None  # position key of the last move sent
         self.socket = None  # the game's socket, as the extension numbers them
+        # The room's serverId: the channel game messages are sent on. (The
+        # same message carries a reconnect token, which is never kept.)
+        self.channel = None
         self.expect = (
             None  # (position key, described move, time sent) while unconfirmed
         )
@@ -79,6 +83,7 @@ class Bridge:
 
     def reset(self):
         self.live, self.answered, self.expect = None, None, None
+        self.channel = None
         return [self.status("waiting", "waiting for a game to start")]
 
     @staticmethod
@@ -106,6 +111,11 @@ class Bridge:
         if frame.dir != "in":
             return []
         replaying = bool(message.get("replay"))
+        if frame.type == ROOM_JOINED:
+            payload = frame.data["data"].get("payload")
+            if isinstance(payload, dict) and payload.get("serverId"):
+                self.channel = str(payload["serverId"])
+            return self.check_timeout() if self.live else []
         if frame.type == C.GAME_STATE:
             self.live = LiveGame(frame.data["data"]["payload"], frame.t)
             self.answered, self.expect = None, None
@@ -114,6 +124,9 @@ class Bridge:
                 return [self.status("stopped", self.live.error)]
             who = self.live.bot.value if self.live.bot else "a spectator"
             replies = [self.status("following", f"game started; playing as {who}")]
+            if not replaying:
+                # The page restarts its count of game messages (sequence numbers).
+                replies.insert(0, {"kind": "new-game"})
             return replies + ([] if replaying else self.think())
         if self.live is None:
             return []
@@ -186,7 +199,8 @@ class Bridge:
             from catanatron.colonist.client import NotKnownYet
 
             try:
-                for raw in self.encode(plan, {"live": live}):
+                context = {"channel": self.channel, "creator": live.conv.you}
+                for raw in self.encode(plan, context):
                     replies.append(
                         {
                             "kind": "send",

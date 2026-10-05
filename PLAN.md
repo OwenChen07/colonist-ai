@@ -261,13 +261,17 @@ a bot. Built so far, in advisor mode (it shows its move but doesn't click yet):
 - Playing (5 Oct): colonist allows bots to send the client's own messages, so the bot
   plays that way rather than by clicking (decided 5 Oct). With `--play` the bridge
   encodes each move (`colonist/client.py`), the extension sends it on the game socket,
-  and the bridge checks that the next update shows exactly that move, or stops. The
-  message formats come from recorded games (`colonist/protocol.py` pairs each message
-  the client sent with the move it caused); until they are filled in, moves are only
-  suggested.
+  and the bridge checks that the next update shows exactly that move, or stops.
+- Message formats, from a recorded game (5 Oct): a header (3, 1), the room's serverId,
+  then MessagePack {action, payload, sequence}. Every move type except discards has a
+  format; the encoder reproduces 115 of the game's 116 moves exactly (the other was a
+  double click on the trade panel). Road building is still a guess. The extension
+  renumbers every outgoing game message, so the bot's and the client's never collide.
+- Found on the way: colonist lists year of plenty's two cards in the order picked,
+  which the replay check rejected; fixed (that game now replays all 224 entries).
 
-Next: the message formats, declining trades, the chat notice, and running unattended
-in a headless browser on a cloud VM.
+Next: discards and road building (a capture with them), declining trades, the chat
+notice, a first live game with `--play`, and running unattended on a cloud VM.
 
 ### Phase 5: strength and the human test
 

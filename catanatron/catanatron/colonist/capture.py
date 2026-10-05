@@ -49,13 +49,39 @@ def load(path) -> List[Frame]:
     return [decode(m) for m in doc["messages"]]
 
 
+def unpack_client(raw):
+    """A message colonist's client sends: two header bytes (kind, subkind), a
+    length-prefixed channel name (the game's id, "lobby", or empty), then
+    MessagePack. Returns {"header": [kind, subkind], "channel": ..., "body": ...},
+    or None if the bytes aren't in that layout."""
+    if len(raw) < 3 or len(raw) < 3 + raw[2]:
+        return None
+    n = raw[2]
+    try:
+        channel = raw[3 : 3 + n].decode()
+        body = msgpack.unpackb(raw[3 + n :], raw=False, strict_map_key=False)
+    except Exception:
+        return None
+    return {"header": [raw[0], raw[1]], "channel": channel, "body": body}
+
+
+def pack_client(header, channel, body):
+    """The inverse of unpack_client."""
+    name = channel.encode()
+    return bytes([header[0], header[1], len(name)]) + name + msgpack.packb(body)
+
+
 def decode(message) -> Frame:
     if "b64" in message:
         raw = base64.b64decode(message["b64"])
         try:
             data = msgpack.unpackb(raw, raw=False, strict_map_key=False)
         except Exception:
-            data = raw
+            # Messages the client sends carry a short header before the
+            # MessagePack (see unpack_client).
+            data = unpack_client(raw) if message.get("dir") == "out" else None
+            if data is None:
+                data = raw
         size = len(raw)
     else:
         data = message.get("text")

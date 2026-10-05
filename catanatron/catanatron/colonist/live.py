@@ -165,7 +165,9 @@ class LiveGame:
             out["get"] = RESOURCE_ID[v[4]]
             label = f"trade {len(give)} {give[0]} for 1 {v[4]}"
         elif t == ActionType.PLAY_YEAR_OF_PLENTY:
-            out["resources"] = [RESOURCE_ID[r] for r in v]
+            # In a fixed order, so the same choice always compares equal
+            # (colonist lists them in the order they were picked).
+            out["resources"] = sorted(RESOURCE_ID[r] for r in v)
             label = "year of plenty: " + " + ".join(v)
         elif t == ActionType.PLAY_MONOPOLY:
             out["resource"] = RESOURCE_ID[v]

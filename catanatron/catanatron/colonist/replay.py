@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 
 from catanatron.game import Game
-from catanatron.models.enums import Action, ActionRecord, ActionType
+from catanatron.models.enums import RESOURCES, Action, ActionRecord, ActionType
 from catanatron.models.actions import generate_playable_actions
 from catanatron.models.player import Color, Player
 from catanatron.serialization import _tupled, action_from_json, map_from_json
@@ -97,6 +97,20 @@ def decision_of(action: Action, playable_actions) -> Action:
         )
         if flipped in playable_actions:
             return flipped
+    if (
+        action.action_type == ActionType.PLAY_YEAR_OF_PLENTY
+        and action not in playable_actions
+        and isinstance(action.value, tuple)
+    ):
+        # colonist lists the two cards in the order they were picked;
+        # Catanatron's moves list them in resource order.
+        ordered = Action(
+            action.color,
+            action.action_type,
+            tuple(sorted(action.value, key=RESOURCES.index)),
+        )
+        if ordered in playable_actions:
+            return ordered
     return action
 
 

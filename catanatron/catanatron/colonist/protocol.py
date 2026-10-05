@@ -78,7 +78,14 @@ def pair(frames):
         if f.seq < start.seq:
             continue
         if f.dir == "out":
-            waiting.append(f.data)
+            data = f.data
+            if isinstance(data, dict) and "header" in data:
+                # Only game messages (header 3, 1) can make a move; heartbeats
+                # and lobby messages are left out. Keep the body.
+                if data["header"] != [3, 1]:
+                    continue
+                data = data["body"]
+            waiting.append(data)
             continue
         if f.dir != "in" or f.type != C.DIFF:
             continue

@@ -65,7 +65,10 @@ def test_bridge_suggests_legal_moves_only_on_the_bots_turn():
     moves, statuses = [], []
     for message in _messages("capture_full_game"):
         for reply in bridge.handle(message):
-            (moves if reply["kind"] == "move" else statuses).append(reply)
+            if reply["kind"] == "status":
+                statuses.append(reply)
+            elif reply["kind"] == "move":
+                moves.append(reply)
             if reply["kind"] == "move":
                 # The move is one of the bot's legal moves at that moment.
                 legal = [
@@ -192,7 +195,7 @@ def test_playing_stops_when_a_move_never_shows_up():
         if any(r["kind"] == "send" for r in bridge.handle(message)):
             break
     # Only a message that changes nothing arrives (a ping, say): the move is overdue.
-    ping = base64.b64encode(msgpack.packb({"data": {"type": 1}})).decode()
+    ping = base64.b64encode(msgpack.packb({"data": {"type": 999}})).decode()
     replies = bridge.handle({"kind": "frame", "dir": "in", "b64": ping})
     assert replies[-1]["state"] == "stopped"
     assert "didn't show it" in replies[-1]["text"]
@@ -221,3 +224,44 @@ def test_moves_without_a_known_format_are_only_suggested():
     assert moves and not any(r["kind"] == "send" for r in replies)
     assert not any(m["played"] for m in moves)
     assert any("suggesting only" in r.get("text", "") for r in replies)
+
+
+def test_playing_with_the_real_encoder_sends_game_messages_on_the_channel():
+    import base64
+
+    import msgpack
+
+    from catanatron.colonist.capture import unpack_client
+
+    bridge = Bridge(random_net(hidden=(8,)), 2, play=True)  # the real client.encode
+    bridge.choose = _player_of_record("capture_full_game")
+    bridge.reset()
+    join = {
+        "id": "1",
+        "data": {
+            "type": 1,
+            "payload": {"serverId": "AB12CD", "reconnectToken": "secret"},
+        },
+    }
+    bridge.handle(
+        {
+            "kind": "frame",
+            "dir": "in",
+            "b64": base64.b64encode(msgpack.packb(join)).decode(),
+        }
+    )
+    sent, stops, discards = [], 0, 0
+    for message in _messages("capture_full_game"):
+        for reply in bridge.handle(message):
+            if reply["kind"] == "send":
+                sent.append(unpack_client(base64.b64decode(reply["b64"])))
+            elif reply["kind"] == "status" and reply["state"] == "stopped":
+                stops += 1
+            elif reply["kind"] == "move" and not reply["played"]:
+                discards += reply["move"]["type"] == "DISCARD_RESOURCE"
+    assert stops == 0
+    assert len(sent) > 50
+    assert all(s["header"] == [3, 1] and s["channel"] == "AB12CD" for s in sent)
+    assert {s["body"]["action"] for s in sent} >= {2, 6, 11, 15}
+    assert "secret" not in json.dumps(bridge.__dict__, default=str)
+    assert discards > 0  # no discard format yet: suggested, not sent

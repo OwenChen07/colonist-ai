@@ -1,0 +1,1812 @@
+{
+ "creator": 2,
+ "pairs": [
+  {
+   "moves": [
+    {
+     "type": "BUILD_SETTLEMENT",
+     "corner": 37,
+     "label": "settlement at corner 37"
+    }
+   ],
+   "sent": [
+    {
+     "action": 15,
+     "payload": 37
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "BUILD_ROAD",
+     "edge": 44,
+     "label": "road on edge 44"
+    }
+   ],
+   "sent": [
+    {
+     "action": 11,
+     "payload": 44
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "BUILD_SETTLEMENT",
+     "corner": 53,
+     "label": "settlement at corner 53"
+    }
+   ],
+   "sent": [
+    {
+     "action": 15,
+     "payload": 53
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "BUILD_ROAD",
+     "edge": 69,
+     "label": "road on edge 69"
+    }
+   ],
+   "sent": [
+    {
+     "action": 11,
+     "payload": 69
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "ROLL",
+     "label": "roll"
+    }
+   ],
+   "sent": [
+    {
+     "action": 2,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "END_TURN",
+     "label": "end turn"
+    }
+   ],
+   "sent": [
+    {
+     "action": 6,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "ROLL",
+     "label": "roll"
+    }
+   ],
+   "sent": [
+    {
+     "action": 2,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "END_TURN",
+     "label": "end turn"
+    }
+   ],
+   "sent": [
+    {
+     "action": 6,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "END_TURN",
+     "label": "end turn"
+    }
+   ],
+   "sent": [
+    {
+     "action": 6,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "ROLL",
+     "label": "roll"
+    }
+   ],
+   "sent": [
+    {
+     "action": 2,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "MARITIME_TRADE",
+     "give": 3,
+     "give_count": 4,
+     "get": 5,
+     "label": "trade 4 SHEEP for 1 ORE"
+    }
+   ],
+   "sent": [
+    {
+     "action": 47,
+     "payload": true
+    },
+    {
+     "action": 49,
+     "payload": {
+      "creator": 2,
+      "isBankTrade": true,
+      "counterOfferInResponseToTradeId": null,
+      "offeredResources": [
+       3,
+       3,
+       3,
+       3
+      ],
+      "wantedResources": [
+       5
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "BUY_DEVELOPMENT_CARD",
+     "label": "buy development card"
+    }
+   ],
+   "sent": [
+    {
+     "action": 9,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "END_TURN",
+     "label": "end turn"
+    }
+   ],
+   "sent": [
+    {
+     "action": 6,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "ROLL",
+     "label": "roll"
+    }
+   ],
+   "sent": [
+    {
+     "action": 2,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "BUY_DEVELOPMENT_CARD",
+     "label": "buy development card"
+    }
+   ],
+   "sent": [
+    {
+     "action": 9,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "END_TURN",
+     "label": "end turn"
+    }
+   ],
+   "sent": [
+    {
+     "action": 6,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "ROLL",
+     "label": "roll"
+    }
+   ],
+   "sent": [
+    {
+     "action": 2,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "END_TURN",
+     "label": "end turn"
+    }
+   ],
+   "sent": [
+    {
+     "action": 6,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "ROLL",
+     "label": "roll"
+    }
+   ],
+   "sent": [
+    {
+     "action": 2,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "END_TURN",
+     "label": "end turn"
+    }
+   ],
+   "sent": [
+    {
+     "action": 6,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "ROLL",
+     "label": "roll"
+    }
+   ],
+   "sent": [
+    {
+     "action": 2,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "MOVE_ROBBER",
+     "tile": 3,
+     "victim": 1,
+     "label": "robber to tile 3, rob BLUE"
+    }
+   ],
+   "sent": [
+    {
+     "action": 3,
+     "payload": 3
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "END_TURN",
+     "label": "end turn"
+    }
+   ],
+   "sent": [
+    {
+     "action": 6,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "ROLL",
+     "label": "roll"
+    }
+   ],
+   "sent": [
+    {
+     "action": 2,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "END_TURN",
+     "label": "end turn"
+    }
+   ],
+   "sent": [
+    {
+     "action": 6,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "ROLL",
+     "label": "roll"
+    }
+   ],
+   "sent": [
+    {
+     "action": 2,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "END_TURN",
+     "label": "end turn"
+    }
+   ],
+   "sent": [
+    {
+     "action": 6,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "ROLL",
+     "label": "roll"
+    }
+   ],
+   "sent": [
+    {
+     "action": 2,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "MOVE_ROBBER",
+     "tile": 2,
+     "victim": 1,
+     "label": "robber to tile 2, rob BLUE"
+    }
+   ],
+   "sent": [
+    {
+     "action": 3,
+     "payload": 2
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "END_TURN",
+     "label": "end turn"
+    }
+   ],
+   "sent": [
+    {
+     "action": 6,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "ROLL",
+     "label": "roll"
+    }
+   ],
+   "sent": [
+    {
+     "action": 2,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "BUILD_CITY",
+     "corner": 37,
+     "label": "city at corner 37"
+    }
+   ],
+   "sent": [
+    {
+     "action": 17,
+     "payload": true
+    },
+    {
+     "action": 18,
+     "payload": 37
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "END_TURN",
+     "label": "end turn"
+    }
+   ],
+   "sent": [
+    {
+     "action": 6,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "ROLL",
+     "label": "roll"
+    }
+   ],
+   "sent": [
+    {
+     "action": 2,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "MARITIME_TRADE",
+     "give": 4,
+     "give_count": 4,
+     "get": 5,
+     "label": "trade 4 WHEAT for 1 ORE"
+    }
+   ],
+   "sent": [
+    {
+     "action": 47,
+     "payload": true
+    },
+    {
+     "action": 49,
+     "payload": {
+      "creator": 2,
+      "isBankTrade": true,
+      "counterOfferInResponseToTradeId": null,
+      "offeredResources": [
+       4,
+       4,
+       4,
+       4
+      ],
+      "wantedResources": [
+       5
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "BUY_DEVELOPMENT_CARD",
+     "label": "buy development card"
+    }
+   ],
+   "sent": [
+    {
+     "action": 9,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "END_TURN",
+     "label": "end turn"
+    }
+   ],
+   "sent": [
+    {
+     "action": 6,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "ROLL",
+     "label": "roll"
+    }
+   ],
+   "sent": [
+    {
+     "action": 2,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "END_TURN",
+     "label": "end turn"
+    }
+   ],
+   "sent": [
+    {
+     "action": 6,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "PLAY_KNIGHT_CARD",
+     "label": "play knight card"
+    }
+   ],
+   "sent": [
+    {
+     "action": 48,
+     "payload": 11
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "MOVE_ROBBER",
+     "tile": 14,
+     "victim": 1,
+     "label": "robber to tile 14, rob BLUE"
+    }
+   ],
+   "sent": [
+    {
+     "action": 3,
+     "payload": 14
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "ROLL",
+     "label": "roll"
+    }
+   ],
+   "sent": [
+    {
+     "action": 2,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "END_TURN",
+     "label": "end turn"
+    }
+   ],
+   "sent": [
+    {
+     "action": 6,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "ROLL",
+     "label": "roll"
+    }
+   ],
+   "sent": [
+    {
+     "action": 2,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "END_TURN",
+     "label": "end turn"
+    }
+   ],
+   "sent": [
+    {
+     "action": 6,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "ROLL",
+     "label": "roll"
+    }
+   ],
+   "sent": [
+    {
+     "action": 2,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "END_TURN",
+     "label": "end turn"
+    }
+   ],
+   "sent": [
+    {
+     "action": 6,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "ROLL",
+     "label": "roll"
+    }
+   ],
+   "sent": [
+    {
+     "action": 2,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "BUY_DEVELOPMENT_CARD",
+     "label": "buy development card"
+    }
+   ],
+   "sent": [
+    {
+     "action": 9,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "BUY_DEVELOPMENT_CARD",
+     "label": "buy development card"
+    }
+   ],
+   "sent": [
+    {
+     "action": 9,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "END_TURN",
+     "label": "end turn"
+    }
+   ],
+   "sent": [
+    {
+     "action": 6,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "ROLL",
+     "label": "roll"
+    }
+   ],
+   "sent": [
+    {
+     "action": 2,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "MOVE_ROBBER",
+     "tile": 2,
+     "victim": 1,
+     "label": "robber to tile 2, rob BLUE"
+    }
+   ],
+   "sent": [
+    {
+     "action": 3,
+     "payload": 2
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "END_TURN",
+     "label": "end turn"
+    }
+   ],
+   "sent": [
+    {
+     "action": 6,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "ROLL",
+     "label": "roll"
+    }
+   ],
+   "sent": [
+    {
+     "action": 2,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "END_TURN",
+     "label": "end turn"
+    }
+   ],
+   "sent": [
+    {
+     "action": 6,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "ROLL",
+     "label": "roll"
+    }
+   ],
+   "sent": [
+    {
+     "action": 2,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "BUY_DEVELOPMENT_CARD",
+     "label": "buy development card"
+    }
+   ],
+   "sent": [
+    {
+     "action": 9,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "BUY_DEVELOPMENT_CARD",
+     "label": "buy development card"
+    }
+   ],
+   "sent": [
+    {
+     "action": 9,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "END_TURN",
+     "label": "end turn"
+    }
+   ],
+   "sent": [
+    {
+     "action": 6,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "ROLL",
+     "label": "roll"
+    }
+   ],
+   "sent": [
+    {
+     "action": 2,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "END_TURN",
+     "label": "end turn"
+    }
+   ],
+   "sent": [
+    {
+     "action": 6,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "ROLL",
+     "label": "roll"
+    }
+   ],
+   "sent": [
+    {
+     "action": 2,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "MARITIME_TRADE",
+     "give": 3,
+     "give_count": 4,
+     "get": 5,
+     "label": "trade 4 SHEEP for 1 ORE"
+    }
+   ],
+   "sent": [
+    {
+     "action": 47,
+     "payload": true
+    },
+    {
+     "action": 47,
+     "payload": true
+    },
+    {
+     "action": 49,
+     "payload": {
+      "creator": 2,
+      "isBankTrade": true,
+      "counterOfferInResponseToTradeId": null,
+      "offeredResources": [
+       3,
+       3,
+       3,
+       3
+      ],
+      "wantedResources": [
+       5
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "END_TURN",
+     "label": "end turn"
+    }
+   ],
+   "sent": [
+    {
+     "action": 6,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "ROLL",
+     "label": "roll"
+    }
+   ],
+   "sent": [
+    {
+     "action": 2,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "BUY_DEVELOPMENT_CARD",
+     "label": "buy development card"
+    }
+   ],
+   "sent": [
+    {
+     "action": 9,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "END_TURN",
+     "label": "end turn"
+    }
+   ],
+   "sent": [
+    {
+     "action": 6,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "ROLL",
+     "label": "roll"
+    }
+   ],
+   "sent": [
+    {
+     "action": 2,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "PLAY_MONOPOLY",
+     "resource": 4,
+     "label": "monopoly on WHEAT"
+    }
+   ],
+   "sent": [
+    {
+     "action": 48,
+     "payload": 13
+    },
+    {
+     "action": 8,
+     "payload": [
+      4
+     ]
+    },
+    {
+     "action": 7,
+     "payload": [
+      4
+     ]
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "BUY_DEVELOPMENT_CARD",
+     "label": "buy development card"
+    }
+   ],
+   "sent": [
+    {
+     "action": 9,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "BUY_DEVELOPMENT_CARD",
+     "label": "buy development card"
+    }
+   ],
+   "sent": [
+    {
+     "action": 9,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "END_TURN",
+     "label": "end turn"
+    }
+   ],
+   "sent": [
+    {
+     "action": 6,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "ROLL",
+     "label": "roll"
+    }
+   ],
+   "sent": [
+    {
+     "action": 2,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "MOVE_ROBBER",
+     "tile": 3,
+     "victim": 1,
+     "label": "robber to tile 3, rob BLUE"
+    }
+   ],
+   "sent": [
+    {
+     "action": 3,
+     "payload": 3
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "END_TURN",
+     "label": "end turn"
+    }
+   ],
+   "sent": [
+    {
+     "action": 6,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "ROLL",
+     "label": "roll"
+    }
+   ],
+   "sent": [
+    {
+     "action": 2,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "BUY_DEVELOPMENT_CARD",
+     "label": "buy development card"
+    }
+   ],
+   "sent": [
+    {
+     "action": 9,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "BUY_DEVELOPMENT_CARD",
+     "label": "buy development card"
+    }
+   ],
+   "sent": [
+    {
+     "action": 9,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "PLAY_KNIGHT_CARD",
+     "label": "play knight card"
+    }
+   ],
+   "sent": [
+    {
+     "action": 48,
+     "payload": 11
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "MOVE_ROBBER",
+     "tile": 2,
+     "victim": 1,
+     "label": "robber to tile 2, rob BLUE"
+    }
+   ],
+   "sent": [
+    {
+     "action": 3,
+     "payload": 2
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "END_TURN",
+     "label": "end turn"
+    }
+   ],
+   "sent": [
+    {
+     "action": 6,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "PLAY_KNIGHT_CARD",
+     "label": "play knight card"
+    }
+   ],
+   "sent": [
+    {
+     "action": 48,
+     "payload": 11
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "MOVE_ROBBER",
+     "tile": 2,
+     "victim": 1,
+     "label": "robber to tile 2, rob BLUE"
+    }
+   ],
+   "sent": [
+    {
+     "action": 3,
+     "payload": 2
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "ROLL",
+     "label": "roll"
+    }
+   ],
+   "sent": [
+    {
+     "action": 2,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "END_TURN",
+     "label": "end turn"
+    }
+   ],
+   "sent": [
+    {
+     "action": 6,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "ROLL",
+     "label": "roll"
+    }
+   ],
+   "sent": [
+    {
+     "action": 2,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "END_TURN",
+     "label": "end turn"
+    }
+   ],
+   "sent": [
+    {
+     "action": 6,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "ROLL",
+     "label": "roll"
+    }
+   ],
+   "sent": [
+    {
+     "action": 2,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "END_TURN",
+     "label": "end turn"
+    }
+   ],
+   "sent": [
+    {
+     "action": 6,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "ROLL",
+     "label": "roll"
+    }
+   ],
+   "sent": [
+    {
+     "action": 2,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "END_TURN",
+     "label": "end turn"
+    }
+   ],
+   "sent": [
+    {
+     "action": 6,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "ROLL",
+     "label": "roll"
+    }
+   ],
+   "sent": [
+    {
+     "action": 2,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "BUY_DEVELOPMENT_CARD",
+     "label": "buy development card"
+    }
+   ],
+   "sent": [
+    {
+     "action": 9,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "BUY_DEVELOPMENT_CARD",
+     "label": "buy development card"
+    }
+   ],
+   "sent": [
+    {
+     "action": 9,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "PLAY_KNIGHT_CARD",
+     "label": "play knight card"
+    }
+   ],
+   "sent": [
+    {
+     "action": 48,
+     "payload": 11
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "MOVE_ROBBER",
+     "tile": 10,
+     "victim": 1,
+     "label": "robber to tile 10, rob BLUE"
+    }
+   ],
+   "sent": [
+    {
+     "action": 3,
+     "payload": 10
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "END_TURN",
+     "label": "end turn"
+    }
+   ],
+   "sent": [
+    {
+     "action": 6,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "ROLL",
+     "label": "roll"
+    }
+   ],
+   "sent": [
+    {
+     "action": 2,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "END_TURN",
+     "label": "end turn"
+    }
+   ],
+   "sent": [
+    {
+     "action": 6,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "ROLL",
+     "label": "roll"
+    }
+   ],
+   "sent": [
+    {
+     "action": 2,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "END_TURN",
+     "label": "end turn"
+    }
+   ],
+   "sent": [
+    {
+     "action": 6,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "ROLL",
+     "label": "roll"
+    }
+   ],
+   "sent": [
+    {
+     "action": 2,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "MARITIME_TRADE",
+     "give": 3,
+     "give_count": 4,
+     "get": 5,
+     "label": "trade 4 SHEEP for 1 ORE"
+    }
+   ],
+   "sent": [
+    {
+     "action": 47,
+     "payload": true
+    },
+    {
+     "action": 49,
+     "payload": {
+      "creator": 2,
+      "isBankTrade": true,
+      "counterOfferInResponseToTradeId": null,
+      "offeredResources": [
+       3,
+       3,
+       3,
+       3
+      ],
+      "wantedResources": [
+       5
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "BUY_DEVELOPMENT_CARD",
+     "label": "buy development card"
+    }
+   ],
+   "sent": [
+    {
+     "action": 9,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "PLAY_KNIGHT_CARD",
+     "label": "play knight card"
+    }
+   ],
+   "sent": [
+    {
+     "action": 48,
+     "payload": 11
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "MOVE_ROBBER",
+     "tile": 6,
+     "victim": 1,
+     "label": "robber to tile 6, rob BLUE"
+    }
+   ],
+   "sent": [
+    {
+     "action": 3,
+     "payload": 6
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "END_TURN",
+     "label": "end turn"
+    }
+   ],
+   "sent": [
+    {
+     "action": 6,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "ROLL",
+     "label": "roll"
+    }
+   ],
+   "sent": [
+    {
+     "action": 2,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "MOVE_ROBBER",
+     "tile": 2,
+     "victim": 1,
+     "label": "robber to tile 2, rob BLUE"
+    }
+   ],
+   "sent": [
+    {
+     "action": 3,
+     "payload": 2
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "PLAY_MONOPOLY",
+     "resource": 4,
+     "label": "monopoly on WHEAT"
+    }
+   ],
+   "sent": [
+    {
+     "action": 48,
+     "payload": 13
+    },
+    {
+     "action": 8,
+     "payload": [
+      4
+     ]
+    },
+    {
+     "action": 7,
+     "payload": [
+      4
+     ]
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "MARITIME_TRADE",
+     "give": 4,
+     "give_count": 4,
+     "get": 5,
+     "label": "trade 4 WHEAT for 1 ORE"
+    }
+   ],
+   "sent": [
+    {
+     "action": 47,
+     "payload": true
+    },
+    {
+     "action": 49,
+     "payload": {
+      "creator": 2,
+      "isBankTrade": true,
+      "counterOfferInResponseToTradeId": null,
+      "offeredResources": [
+       4,
+       4,
+       4,
+       4
+      ],
+      "wantedResources": [
+       5
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "BUY_DEVELOPMENT_CARD",
+     "label": "buy development card"
+    }
+   ],
+   "sent": [
+    {
+     "action": 9,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "END_TURN",
+     "label": "end turn"
+    }
+   ],
+   "sent": [
+    {
+     "action": 6,
+     "payload": true
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "PLAY_YEAR_OF_PLENTY",
+     "resources": [
+      4,
+      5
+     ],
+     "label": "year of plenty: ORE + WHEAT"
+    }
+   ],
+   "sent": [
+    {
+     "action": 48,
+     "payload": 15
+    },
+    {
+     "action": 8,
+     "payload": [
+      5
+     ]
+    },
+    {
+     "action": 8,
+     "payload": [
+      5,
+      4
+     ]
+    },
+    {
+     "action": 7,
+     "payload": [
+      5,
+      4
+     ]
+    }
+   ]
+  },
+  {
+   "moves": [
+    {
+     "type": "ROLL",
+     "label": "roll"
+    }
+   ],
+   "sent": [
+    {
+     "action": 2,
+     "payload": true
+    }
+   ]
+  }
+ ]
+}

@@ -33,6 +33,10 @@
       window.postMessage({ [TAG]: 'send', socket: msg.socket, b64: msg.b64 }, '*');
       return;
     }
+    if (msg.kind === 'new-game') {
+      window.postMessage({ [TAG]: 'new-game' }, '*');
+      return;
+    }
     if (msg.kind === 'bridge-connected') {
       // A fresh bridge knows nothing: send this page's game from the start.
       window.postMessage({ [TAG]: 'replay-backlog' }, '*');
