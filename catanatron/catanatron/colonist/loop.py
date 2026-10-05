@@ -1,0 +1,290 @@
+"""The self-play training loop (PLAN.md, Phase 3: How it learns).
+
+    python -m catanatron.colonist.loop runs/r1 --init models/ab2/net.npz --rounds 20
+    python -m catanatron.colonist.loop runs/r1 --rounds 20        # resumes
+
+Each round:
+
+  1. Self-play: the current best net plays --games games against itself
+     (and, in --opponent-rate of them, against an older version or a
+     reference bot), recording its search's move odds and value.
+  2. Train: a new net starts from the best one and trains on the last
+     --window rounds of self-play data (plus --extra-data, e.g. the bot games
+     Phase 2 learned from).
+  3. Promotion match: new net against best, paired boards, an SPRT of 50%
+     against 54% (so 52% is the bar), at most --max-games games. The new net
+     replaces the best only if the test says so.
+  4. When the best net changed, it plays --benchmark (default AlphaBeta) on
+     a fixed set of boards, to track progress toward the 65% gate.
+
+Everything lives in the run directory, and the loop can be stopped at any
+time and rerun with the same directory to continue where it stopped:
+
+  state.json            round, step, current best, history
+  best.npz              the current best net
+  nets/round_NNN.npz    every net trained (promoted or not)
+  round_NNN/data/       that round's self-play shards
+  round_NNN/train/      that round's training output
+  log.csv               one row per round: promoted?, match score, benchmark
+
+A warning is printed when nothing has been promoted for 5 rounds (PLAN.md's
+sign that self-play has stalled).
+"""
+
+import argparse
+import csv
+import json
+import os
+import shutil
+import signal
+import sys
+import time
+
+STEPS = ("selfplay", "train", "match", "benchmark", "done")
+STALL_ROUNDS = 5
+
+
+class Run:
+    def __init__(self, root):
+        self.root = root
+        self.state_path = os.path.join(root, "state.json")
+        self.best = os.path.join(root, "best.npz")
+        if os.path.exists(self.state_path):
+            with open(self.state_path) as f:
+                self.state = json.load(f)
+        else:
+            self.state = None
+
+    def start(self, init):
+        os.makedirs(os.path.join(self.root, "nets"), exist_ok=True)
+        shutil.copyfile(init, self.best)
+        shutil.copyfile(init, self.net(0))
+        self.state = {
+            "round": 1,
+            "step": "selfplay",
+            "best_round": 0,
+            "since_promotion": 0,
+            "history": [],
+        }
+        self.save()
+
+    def save(self):
+        tmp = self.state_path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(self.state, f, indent=2)
+        os.replace(tmp, self.state_path)
+
+    def dir(self, n, *parts):
+        return os.path.join(self.root, f"round_{n:03d}", *parts)
+
+    def net(self, n):
+        return os.path.join(self.root, "nets", f"round_{n:03d}.npz")
+
+    def log_row(self, row):
+        path = os.path.join(self.root, "log.csv")
+        new = not os.path.exists(path)
+        with open(path, "a", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=list(row))
+            if new:
+                w.writeheader()
+            w.writerow(row)
+
+
+def say(msg):
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
+def play(run, n, args):
+    from catanatron.colonist import selfplay
+
+    # Opponents: up to 3 recent earlier nets, plus the reference bots.
+    best_round = run.state["best_round"]
+    older = [run.net(k) for k in range(max(0, best_round - 3), best_round)]
+    opponents = [p for p in older if os.path.exists(p)] + args.reference
+    say(f"round {n}: self-play, {args.games} games, opponents {opponents or 'none'}")
+    selfplay.run(
+        run.best,
+        run.dir(n, "data"),
+        games=args.games,
+        seed=args.seed + n * 1_000_000,  # fresh boards every round
+        simulations=args.simulations,
+        workers=args.workers,
+        opponents=opponents,
+        opponent_rate=args.opponent_rate if opponents else 0.0,
+        log=lambda m: say("  " + m),
+    )
+
+
+def train(run, n, args):
+    from catanatron.colonist import train as T
+
+    data = [run.dir(k, "data") for k in range(max(1, n - args.window + 1), n + 1)]
+    data = [d for d in data if os.path.isdir(d)] + args.extra_data
+    say(f"round {n}: training on {len(data)} data folders, from the best net")
+    argv = [
+        *data,
+        "--out",
+        run.dir(n, "train"),
+        "--init",
+        run.best,
+        "--epochs",
+        str(args.epochs),
+        "--lr",
+        str(args.lr),
+    ]
+    if args.device:
+        argv += ["--device", args.device]
+    if T.main(argv) != 0:
+        raise SystemExit("training failed")
+    shutil.copyfile(run.dir(n, "train", "net.npz"), run.net(n))
+
+
+def match(run, n, args):
+    from catanatron.colonist.evaluate import sprt
+
+    # The best round's own file, not best.npz: rerunning this step after a
+    # crash then still compares against the same net.
+    new = f"Z:{run.net(n)}:{args.match_simulations}"
+    best = f"Z:{run.net(run.state['best_round'])}:{args.match_simulations}"
+    say(f"round {n}: promotion match, new vs best (at most {args.max_games} games)")
+    result = sprt(
+        new,
+        best,
+        seed=args.seed + n * 1_000_000 + 500_000,
+        workers=args.workers,
+        max_games=args.max_games,
+        batch_pairs=args.batch_pairs,
+        progress=lambda r: say(f"  {r.n} games: {r.score:.1%} ± {r.margin:.1%}"),
+    )
+    promoted = result.decision == "promote"
+    say(f"  {result.summary()}")
+    record = {
+        "round": n,
+        "games": result.n,
+        "score": round(result.score, 4),
+        "decision": result.decision or "undecided",
+        "promoted": promoted,
+    }
+    if promoted:
+        shutil.copyfile(run.net(n), run.best)
+        run.state["best_round"] = n
+        run.state["since_promotion"] = 0
+        say(f"  promoted: round {n} is the new best")
+    else:
+        run.state["since_promotion"] += 1
+        say(f"  kept round {run.state['best_round']} as best")
+        if run.state["since_promotion"] >= STALL_ROUNDS:
+            say(
+                f"  WARNING: no promotion for {run.state['since_promotion']} rounds; "
+                "PLAN.md's fallbacks: more simulations, more opponents, a bigger net"
+            )
+    run.state["history"].append(record)
+
+
+def benchmark(run, n, args):
+    record = run.state["history"][-1]
+    record.setdefault("benchmark", "")
+    # Only when the best net changed (or the first round): otherwise the same
+    # net would replay the same boards.
+    if not args.benchmark or n % args.benchmark_every:
+        return
+    if not record["promoted"] and n != 1:
+        return
+    from catanatron.colonist.evaluate import match as play_match
+
+    say(f"round {n}: benchmark, best vs {args.benchmark}, {args.benchmark_games} games")
+    result = play_match(
+        f"Z:{run.best}:{args.match_simulations}",
+        args.benchmark,
+        games=args.benchmark_games,
+        seed=args.seed + 900_000_000,  # the same boards every time, to compare rounds
+        workers=args.workers,
+    )
+    say(f"  {result.summary()}")
+    record["benchmark"] = f"{result.score:.4f}"
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("run_dir")
+    parser.add_argument("--init", help="starting net (Phase 2's), for a new run")
+    parser.add_argument("--rounds", type=int, default=10, help="stop after this round")
+    parser.add_argument(
+        "--games", type=int, default=5000, help="self-play games per round"
+    )
+    parser.add_argument(
+        "--simulations", type=int, default=50, help="per move in self-play"
+    )
+    parser.add_argument("--opponent-rate", type=float, default=0.2)
+    parser.add_argument(
+        "--reference",
+        default="AB:2",
+        help="comma-separated bot specs used as opponents",
+    )
+    parser.add_argument(
+        "--window", type=int, default=10, help="rounds of data to train on"
+    )
+    parser.add_argument("--extra-data", default="", help="comma-separated data folders")
+    parser.add_argument("--epochs", type=int, default=3)
+    parser.add_argument("--lr", type=float, default=3e-4)
+    parser.add_argument("--device", default=None)
+    parser.add_argument("--match-simulations", type=int, default=100)
+    parser.add_argument("--max-games", type=int, default=2000)
+    parser.add_argument("--batch-pairs", type=int, default=50)
+    parser.add_argument("--benchmark", default="AB:2")
+    parser.add_argument("--benchmark-every", type=int, default=1)
+    parser.add_argument("--benchmark-games", type=int, default=400)
+    parser.add_argument("--seed", type=int, default=3_000_000_000)
+    parser.add_argument("--workers", type=int, default=None)
+    args = parser.parse_args(argv)
+    args.reference = [r for r in args.reference.split(",") if r]
+    args.extra_data = [d for d in args.extra_data.split(",") if d]
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
+    for var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
+        os.environ.setdefault(var, "1")
+
+    run = Run(args.run_dir)
+    if run.state is None:
+        if not args.init:
+            parser.error("a new run needs --init <net.npz>")
+        os.makedirs(args.run_dir, exist_ok=True)
+        run.start(args.init)
+        say(f"new run in {args.run_dir} from {args.init}")
+    else:
+        s = run.state
+        say(
+            f"resuming {args.run_dir}: round {s['round']}, step {s['step']}, "
+            f"best from round {s['best_round']}"
+        )
+
+    actions = {"selfplay": play, "train": train, "match": match, "benchmark": benchmark}
+    while run.state["round"] <= args.rounds:
+        n = run.state["round"]
+        step = run.state["step"]
+        if step == "done":
+            record = run.state["history"][-1]
+            run.log_row(
+                {
+                    "round": n,
+                    "promoted": record["promoted"],
+                    "match_games": record["games"],
+                    "match_score": record["score"],
+                    "best_round": run.state["best_round"],
+                    "benchmark": record.get("benchmark", ""),
+                }
+            )
+            run.state["round"] = n + 1
+            run.state["step"] = "selfplay"
+            run.save()
+            continue
+        actions[step](run, n, args)
+        run.state["step"] = STEPS[STEPS.index(step) + 1]
+        run.save()
+    say(
+        f"finished round {args.rounds}; best net: {run.best} (round {run.state['best_round']})"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

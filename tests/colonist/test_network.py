@@ -276,3 +276,23 @@ def test_selfplay_shard_and_mixed_training(tmp_path):
         )
         == 0
     )
+
+
+def test_train_init_loads_weights(tmp_path):
+    pytest.importorskip("torch")
+    from catanatron.colonist.train import build_model, export, hidden_of, load_weights
+
+    path = str(tmp_path / "start.npz")
+    random_net(hidden=(16, 8), seed=3).save(path)
+    assert hidden_of(path) == [16, 8]
+    model = build_model([16, 8])
+    load_weights(model, path)
+    out = str(tmp_path / "again.npz")
+    export(model, out)
+    a, b = Net.load(path), Net.load(out)
+    for (w1, b1), (w2, b2) in zip(
+        [*a.hidden, a.policy, a.value], [*b.hidden, b.policy, b.value]
+    ):
+        assert np.array_equal(w1, w2) and np.array_equal(b1, b2)
+    with pytest.raises(ValueError):
+        load_weights(build_model([16, 16]), path)

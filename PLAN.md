@@ -208,6 +208,27 @@ scripts/setup.sh                                                      # once per
   so clear results stop early.
 - **Gate:** wins at least 65% against AlphaBeta.
 
+**Status (5 Oct 2026).** The loop is built and tested; it waits for a Phase 2 net to start
+from:
+
+```
+python -m catanatron.colonist.loop runs/r1 --init models/ab2/net.npz --rounds 20 \
+    --extra-data data/ab2                 # rerun the same command to continue
+MODEL=ab2 azure/deploy.sh loop r1 --rounds 20 --extra-data data/ab2   # the same on Azure
+```
+
+- `colonist/loop.py` runs the rounds of How it learns: self-play with the best net, training
+  a new net from the best one's weights (`train --init`) on the last 10 rounds of data (plus
+  the AlphaBeta games, if given), the SPRT promotion match (50% vs 54%, at most 2,000 games,
+  100 simulations per move), and a benchmark against AlphaBeta on fixed boards whenever the
+  best changes. It saves its state after every step, so a stopped run continues where it
+  was, and it warns after 5 rounds without a promotion.
+- Self-play puts a random opponent in one seat of 20% of games: one of the 3 most recent
+  earlier nets or AlphaBeta (`--opponents`, `--opponent-rate`). Only the main net's moves
+  become training data.
+- Tested end to end with tiny settings (2 to 4 games a round): rounds, promotion, resuming,
+  opponents, and the Azure job (against a stand-in for `azcopy`).
+
 ### Phase 4: play on colonist
 
 - Extend the Phase 0 recorder into a two-way bridge. Turn the colonist board and log into a

@@ -60,6 +60,19 @@ case "$JOB" in
     OUT=models/$NAME
     CMD=($PY -m catanatron.colonist.train "data/$NAME" --out "$OUT" "${ARGS[@]}")
     ;;
+  loop)
+    # A run directory holds its own state; a rerun continues it. --init is
+    # only read when the run is new.
+    pull "models/$MODEL"
+    for ((i = 0; i < ${#ARGS[@]}; i++)); do  # data folders named by --extra-data
+      if [ "${ARGS[$i]}" = --extra-data ]; then
+        IFS=, read -r -a extra <<<"${ARGS[$((i + 1))]}"
+        for d in "${extra[@]}"; do pull "$d"; done
+      fi
+    done
+    OUT=runs/$NAME
+    CMD=($PY -m catanatron.colonist.loop "$OUT" --init "models/$MODEL/net.npz" "${ARGS[@]}")
+    ;;
   selfplay)
     pull "models/$MODEL"
     OUT=data/$NAME

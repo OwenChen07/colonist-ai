@@ -65,6 +65,33 @@ def export(model, path, meta=None):
     Net(layers, meta).save(path)
 
 
+def load_weights(model, path):
+    """Start from the weights of a net.npz (the inverse of export)."""
+    import torch
+
+    from catanatron.colonist.net import Net
+
+    net = Net.load(path)
+    layers = [*net.hidden, net.policy, net.value]
+    targets = [*model.body, model.policy, model.value]
+    if len(layers) != len(targets):
+        raise ValueError(f"{path} has {len(net.hidden)} hidden layers")
+    with torch.no_grad():
+        for (w, b), lin in zip(layers, targets):
+            if tuple(lin.weight.shape) != w.T.shape:
+                raise ValueError(
+                    f"{path}: layer shape {w.T.shape} != {tuple(lin.weight.shape)}"
+                )
+            lin.weight.copy_(torch.from_numpy(w.T.copy()))
+            lin.bias.copy_(torch.from_numpy(b.copy()))
+
+
+def hidden_of(path):
+    from catanatron.colonist.net import Net
+
+    return [w.shape[1] for w, _ in Net.load(path).hidden]
+
+
 def pick_device(name=None):
     import torch
 
@@ -210,7 +237,12 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("data", nargs="+", help="directories of datagen shards")
     parser.add_argument("--out", required=True)
-    parser.add_argument("--hidden", default="512,512,512")
+    parser.add_argument(
+        "--hidden", default=None, help="layer sizes (default 512,512,512, or --init's)"
+    )
+    parser.add_argument(
+        "--init", default=None, help="start from this net.npz instead of random weights"
+    )
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--batch", type=int, default=1024)
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -256,8 +288,16 @@ def main(argv=None):
     print(f"validation value loss of always guessing 0: {baseline:.3f}", flush=True)
     del d
 
-    hidden = [int(h) for h in args.hidden.split(",")]
-    model = build_model(hidden).to(device)
+    if args.hidden:
+        hidden = [int(h) for h in args.hidden.split(",")]
+    elif args.init:
+        hidden = hidden_of(args.init)
+    else:
+        hidden = [512, 512, 512]
+    model = build_model(hidden)
+    if args.init:
+        load_weights(model, args.init)
+    model = model.to(device)
     params = sum(p.numel() for p in model.parameters())
     opt = torch.optim.AdamW(
         model.parameters(), lr=args.lr, weight_decay=args.weight_decay

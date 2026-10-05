@@ -36,7 +36,8 @@ azure/status.sh                               # VM state and the end of each log
 azure/deploy.sh datagen ab2 --games 40000     # same name: resumes, adds the rest
 azure/deploy.sh train ab2 --epochs 20         # trains on data/ab2 -> models/ab2
 azure/fetch.sh models/ab2                     # download the trained net
-MODEL=ab2 azure/deploy.sh selfplay sp1 --games 5000   # Phase 3 self-play
+MODEL=ab2 azure/deploy.sh selfplay sp1 --games 5000   # one batch of self-play
+MODEL=ab2 azure/deploy.sh loop r1 --rounds 20 --extra-data data/ab2   # Phase 3 loop
 azure/teardown.sh                             # delete all VMs; data stays
 ```
 

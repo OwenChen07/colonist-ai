@@ -5,6 +5,7 @@
 #   azure/deploy.sh datagen ab2 --games 40000      # -> data/ab2 in blob storage
 #   azure/deploy.sh train ab2 --epochs 20          # data/ab2 -> models/ab2
 #   MODEL=ab2 azure/deploy.sh selfplay sp1 --games 5000   # models/ab2 -> data/sp1
+#   MODEL=ab2 azure/deploy.sh loop r1 --rounds 20         # Phase 3 loop -> runs/r1
 #
 # The VM runs the code of your current commit (uncommitted changes are not
 # included), uploads its output to blob storage every few minutes, and
@@ -23,14 +24,14 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 source azure/common.sh
 
-JOB=${1:?usage: azure/deploy.sh datagen|train|selfplay NAME [args...]}
-NAME=${2:?usage: azure/deploy.sh datagen|train|selfplay NAME [args...]}
+JOB=${1:?usage: azure/deploy.sh datagen|train|selfplay|loop NAME [args...]}
+NAME=${2:?usage: azure/deploy.sh datagen|train|selfplay|loop NAME [args...]}
 shift 2
 JOB_ARGS="$*"
 case "$JOB" in
   datagen | train) ;;
-  selfplay) : "${MODEL:?selfplay needs MODEL=<name of a trained model in storage>}" ;;
-  *) echo "unknown job $JOB (datagen, train or selfplay)" >&2; exit 1 ;;
+  selfplay | loop) : "${MODEL:?$JOB needs MODEL=<name of a trained model in storage>}" ;;
+  *) echo "unknown job $JOB (datagen, train, selfplay or loop)" >&2; exit 1 ;;
 esac
 
 # Sizes to consider, in order of preference: dedicated 4-vCPU sizes (x86, then
@@ -198,4 +199,5 @@ az role assignment create --assignee-object-id "$principal" --assignee-principal
 
 echo
 echo "Started. Follow it with:  azure/status.sh"
-echo "Fetch results with:       azure/fetch.sh $( [ "$JOB" = train ] && echo models || echo data )/$NAME"
+case "$JOB" in train) out=models ;; loop) out=runs ;; *) out=data ;; esac
+echo "Fetch results with:       azure/fetch.sh $out/$NAME"
