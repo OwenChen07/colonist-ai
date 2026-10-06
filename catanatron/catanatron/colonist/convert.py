@@ -106,8 +106,10 @@ LOG_TRADED_WITH_BANK = 116
 #: changing hands (66, 68), which Catanatron works out itself, trade offers
 #: between players (118: an offer alone changes nothing; an accepted trade
 #: logs its own entry, which is not mapped yet and so stops the record), and
-#: a pre-game counter (130).
-LOG_IGNORED = {0, 2, 22, 24, 44, 47, 49, 58, 60, 64, 66, 68, 118, 130}
+#: a pre-game counter (130), and how many players the robber can steal
+#: from (139, logged with the robber move; the steal itself may follow in a
+#: later update, seen live).
+LOG_IGNORED = {0, 2, 22, 24, 44, 47, 49, 58, 60, 64, 66, 68, 118, 130, 139}
 PIECE = {0: "road", 2: "settlement", 3: "city"}
 BUILDING = {1: "settlement", 2: "city"}
 BUILD_ACTION = {

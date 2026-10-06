@@ -219,6 +219,8 @@ def test_incomplete_conversion_fails_the_replay_check(frames):
         {"type": 58, "playerColor": 1, "pieceEnum": 5},
         # "Bot is selecting cards to discard for ...": the discard follows as 55
         {"type": 64, "playerColor": 1},
+        # how many players the robber can steal from, logged with the move
+        {"type": 139, "playerCount": 1},
     ],
 )
 def test_timer_playing_for_a_player_is_skipped(frames, notice):
