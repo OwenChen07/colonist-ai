@@ -28,8 +28,8 @@ colonist.io tab                         this computer
 3. Open colonist.io and start a game. The extension has to be on from the start of the
    game: the first message carries the whole board.
 
-The panel in the top-right corner says whether the bridge is connected and what it is
-doing. The bridge's terminal prints each move it suggests.
+The panel in the top-right corner says whether the bridge is connected, which net it
+loaded (file, training epoch and simulations per move), and what it is doing. The bridge's terminal prints each move it suggests.
 
 Every game the bridge follows is saved to `captures/bridge-<time>.json` (the
 recorder's format; `--save DIR` to change, `--save ''` to turn off) when the bot

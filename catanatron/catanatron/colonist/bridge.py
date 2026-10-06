@@ -491,14 +491,17 @@ def _dumps(reply):
     )
 
 
-async def serve_forever(make_bridge, host=HOST, port=PORT):
+async def serve_forever(make_bridge, host=HOST, port=PORT, info=None):
     """Serve until stopped. Each connection (one per colonist tab) gets its own
-    Bridge from make_bridge(), so two tabs never mix their games."""
+    Bridge from make_bridge(), so two tabs never mix their games. `info` (which
+    net, how much search) is sent first on every connection, for the panel."""
     from websockets.asyncio.server import serve
 
     async def handler(socket):
         bridge = make_bridge()
         print(f"extension connected from {socket.remote_address}", flush=True)
+        if info:
+            await socket.send(_dumps(info))
         for reply in bridge.reset():
             await socket.send(_dumps(reply))
         async for raw in socket:
@@ -533,7 +536,33 @@ async def serve_forever(make_bridge, host=HOST, port=PORT):
 
     async with serve(handler, host, port, max_size=2**24):
         print(f"bridge listening on ws://{host}:{port}", flush=True)
+        if info:
+            print(f"  {describe_info(info)}", flush=True)
         await asyncio.Future()
+
+
+def net_info(path, simulations, play):
+    """What the extension's panel shows about the bot: which net file (and the
+    training epoch, when the file records it), how much search, which mode."""
+    info = {
+        "kind": "info",
+        "net": path,
+        "simulations": simulations,
+        "play": play,
+    }
+    try:
+        with np.load(path) as z:
+            if "meta_epoch" in z:
+                info["epoch"] = int(z["meta_epoch"])
+    except (OSError, ValueError):
+        pass
+    return info
+
+
+def describe_info(info):
+    epoch = f", epoch {info['epoch']}" if "epoch" in info else ""
+    mode = "playing" if info.get("play") else "advising"
+    return f"net {info['net']}{epoch}, {info['simulations']} simulations, {mode}"
 
 
 def main(argv=None):
@@ -568,6 +597,7 @@ def main(argv=None):
                     save_dir=args.save or None,
                 ),
                 port=args.port,
+                info=net_info(args.net, args.simulations, args.play),
             )
         )
     except KeyboardInterrupt:

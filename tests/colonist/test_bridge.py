@@ -493,3 +493,44 @@ def test_a_game_joined_midway_is_not_played():
         r["text"] for r in replies if r["kind"] == "status" and r["state"] == "stopped"
     ]
     assert stops and "already in progress" in stops[0]
+
+
+def test_info_about_the_net_comes_first(tmp_path):
+    """The extension's panel shows which net is playing: the bridge sends it
+    first on every connection."""
+    import numpy as np
+    from websockets.asyncio.client import connect
+
+    from catanatron.colonist.bridge import describe_info, net_info
+
+    path = tmp_path / "net.npz"
+    random_net(hidden=(8,)).save(str(path))
+    with np.load(path) as z:
+        np.savez(path, **{**{k: z[k] for k in z.files}, "meta_epoch": np.asarray(7)})
+    info = net_info(str(path), 800, True)
+    assert info == {
+        "kind": "info",
+        "net": str(path),
+        "simulations": 800,
+        "play": True,
+        "epoch": 7,
+    }
+    assert describe_info(info) == f"net {path}, epoch 7, 800 simulations, playing"
+    assert "epoch" not in net_info(str(tmp_path / "missing.npz"), 50, False)
+
+    async def run():
+        server = asyncio.create_task(
+            serve_forever(
+                lambda: Bridge(random_net(hidden=(8,)), 2), port=18766, info=info
+            )
+        )
+        await asyncio.sleep(0.3)
+        async with connect("ws://127.0.0.1:18766") as ws:
+            first = json.loads(await ws.recv())
+            second = json.loads(await ws.recv())
+        server.cancel()
+        return first, second
+
+    first, second = asyncio.run(run())
+    assert first == info
+    assert second["kind"] == "status" and second["state"] == "waiting"

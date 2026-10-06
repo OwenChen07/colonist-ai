@@ -46,7 +46,7 @@
 
   // ----- panel -----
   let panel = null;
-  const view = { link: 'connecting to the bridge…', state: '', text: '', move: null, playing: false };
+  const view = { link: 'connecting to the bridge…', net: '', state: '', text: '', move: null, playing: false };
 
   function mount() {
     if (window.top !== window || panel || !document.body) return;
@@ -69,6 +69,7 @@
     if (!panel) return;
     let html = `<b>Colonist AI</b> <span style="color:#666">(${view.playing ? 'playing' : 'advisor'})</span><br>`;
     html += `<span style="color:#666">${esc(view.link)}</span>`;
+    if (view.net) html += `<br><span style="color:#666">net: ${esc(view.net)}</span>`;
     if (view.text) html += `<br>${esc(view.state)}: ${esc(view.text)}`;
     const m = view.move;
     if (m) {
@@ -85,8 +86,13 @@
 
   function show(msg) {
     if (msg.kind === 'bridge-connected') view.link = 'connected to the bridge';
-    else if (msg.kind === 'bridge-disconnected') {
+    else if (msg.kind === 'info') {
+      // Which net the bridge loaded, so it's clear what is playing.
+      const epoch = msg.epoch != null ? `, epoch ${msg.epoch}` : '';
+      view.net = `${msg.net}${epoch} · ${msg.simulations} sims`;
+    } else if (msg.kind === 'bridge-disconnected') {
       view.link = 'bridge not running: start it with python -m catanatron.colonist.bridge <net.npz>';
+      view.net = '';
       view.move = null;
     } else if (msg.kind === 'status') {
       view.state = msg.state;
