@@ -24,8 +24,9 @@ colonist.io through a Chrome extension (`bot/`) and a local Python "bridge".
   store colonist's reconnect token. Test fixtures must hold no names or chat.
 - The AI **never trades with the other player** (declines every offer). Bank/port
   trades are normal moves.
-- Live play: unranked/casual only, from the bot account `CatBot77` that the owner is
-  logged into in Chrome. Never type passwords or log in/out. **Don't abandon games**
+- Live play: the owner approved **ranked** 1v1 (8 Oct 2026), from the bot account
+  `CatBot77` (signed in by the owner in Chrome, and in the cloud browser profile on
+  the VM). Never type passwords or log in/out. **Don't abandon games**
   (closing/reloading a tab mid-game costs account karma; it dropped once to 3/4).
   The owner said not to bother with the "I'm an AI bot" chat notice.
 - macOS shell is zsh: quote globs in commands that go to remote machines
@@ -153,6 +154,40 @@ the code, simulated data, and model to it; no payload reached that VM.
 The VM loop can be stopped and restarted with new flags at any time; it resumes.
 
 ## 6. Running infrastructure (check before changing anything)
+
+**24/7 setup (since 8 Oct 2026), on `colonist-selfplay-1`:** `~/colonist-ai` is now a
+git checkout of `main-9mnmbh`. It pulls and pushes with a read-write deploy key,
+`~/.ssh/github_deploy`. Three systemd services start at boot, defined in `scripts/vm/`:
+- `colonist-ranked`: `ranked_runner --games 0 --promotions runs/sp1 --simulations 800`.
+  - It plays the promoted net and switches nets between games.
+  - Each verified game goes in `data/ranked/games.jsonl`, with the net's hash and
+    round. Earlier games were backfilled from the runner logs.
+  - Captures carry a `bot` field with the same information. Shards in
+    `data/ranked/{bot_value,human_openings}` carry `net`.
+- `colonist-train`: `scripts/vm/train.sh`, runs/sp1 from round 11, with playout cap
+  randomization: 25% of moves get 160 simulations, the rest 24.
+  - Self-play is also spread over the workers in `scripts/vm/workers.env`
+    (`user@host:processes`), currently `colonist-selfplay-worker-4` (4 cores). An
+    Azure VM can be added there, too.
+  - Every round's net is scored on the live games (`calibrate.py`). A promoted net
+    also plays a gauntlet against rounds 2 and 5.
+- `colonist-spectator`: the public feed, as before.
+- Watchdog: `scripts/vm/watchdog.sh` runs from cron each hour.
+  - It does a cheap health check, and only on a problem starts Claude Code with
+    `watchdog.md` and a fixed tool allowlist.
+  - Its notes go to `data/watchdog/{health.log,journal.md}`. A
+    `data/ranked/NEEDS_OWNER.md` means it stopped and needs the owner.
+- Status:
+  ```bash
+  systemctl status colonist-ranked colonist-train colonist-spectator
+  tail data/ranked/bridge.log runs/sp1.log data/watchdog/health.log
+  ```
+- Update code: `git pull`, then `sudo systemctl restart colonist-train`. Restart
+  `colonist-ranked` only between games.
+- The old upload-based folders (`~/colonist-ai-old`, `~/colonist-ai-ranked`) are kept
+  for now and can be deleted.
+
+The notes below are from before the 24/7 setup.
 
 **Google Cloud VM (running rounds 2–10):**
 - Project `colonist-ai-selfplay` (billing: the $300 / 90-day free trial, "My Billing

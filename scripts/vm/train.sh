@@ -7,7 +7,7 @@ cd "$(dirname "$0")/../.."
 exec .venv/bin/python -m catanatron.colonist.loop runs/sp1 \
     --rounds 1000 --games 5000 \
     --simulations 160 --full-rate 0.25 --fast-simulations 24 \
-    --reference AB:2,F \
+    --reference AB:2,F --extra-data data/ab2 \
     --gauntlet runs/sp1/nets/round_002.npz,runs/sp1/nets/round_005.npz \
     --live-data data/ranked/bot_value \
     --workers "${COLONIST_LOCAL_WORKERS:-7}"
