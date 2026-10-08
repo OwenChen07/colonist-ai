@@ -1,0 +1,27 @@
+[Unit]
+Description=Colonist AI: ranked 1v1 games, following promoted nets
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+User=owen
+WorkingDirectory=/home/owen/colonist-ai
+Environment=PYTHONUNBUFFERED=1
+# Plays the training run's promoted net and switches between games when a new
+# one is promoted. A failure outside a game exits and restarts here after 5
+# minutes; a failure during a game leaves the browser open (status
+# needs_attention) for the hourly watchdog.
+ExecStart=/home/owen/colonist-ai/.venv/bin/python -m catanatron.colonist.ranked_runner \
+    --net /home/owen/colonist-ai/models/ranked/model.npz \
+    --promotions /home/owen/colonist-ai/runs/sp1 \
+    --games 0 --simulations 800
+StandardOutput=append:/home/owen/colonist-ai/data/ranked/ranked-run.log
+StandardError=append:/home/owen/colonist-ai/data/ranked/ranked-run.log
+Restart=always
+RestartSec=300
+KillMode=control-group
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

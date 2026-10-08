@@ -45,3 +45,26 @@ def test_invalid_promoted_checkpoint_keeps_current_model(tmp_path):
         install_promoted_model(bad, destination)
     with np.load(destination) as net:
         assert net["weights"].tolist() == [5]
+
+
+def test_each_verified_game_is_listed_with_its_net(tmp_path):
+    from types import SimpleNamespace
+
+    from catanatron.colonist.ranked_runner import record_game, round_label
+
+    net = tmp_path / "model.npz"
+    net.write_bytes(b"weights")
+    conversion = SimpleNamespace(
+        ended="win",
+        record={
+            "winner": "RED",
+            "players": {"RED": {"you": True}, "BLUE": {"you": False}},
+        },
+    )
+    label = round_label(tmp_path / "runs" / "sp1", 8)
+    assert label == "sp1 round 8"
+    record_game(tmp_path, "captures/bridge-1.json", conversion, net, label, 8, 800)
+    (row,) = [json.loads(line) for line in open(tmp_path / "games.jsonl")]
+    assert row["capture"] == "bridge-1.json" and row["round"] == 8
+    assert row["bot_color"] == "RED" and row["winner"] == "RED"
+    assert row["label"] == label and len(row["net_sha256"]) == 16

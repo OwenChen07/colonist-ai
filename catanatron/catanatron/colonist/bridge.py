@@ -43,6 +43,7 @@ To the extension:
 import argparse
 import asyncio
 import base64
+import hashlib
 import json
 import os
 import random
@@ -101,8 +102,12 @@ class Bridge:
         encode=None,
         save_dir=None,
         spectator_state=None,
+        bot=None,
     ):
         self.net = net
+        # Which net and search played (net_info), saved with each capture so
+        # every live game's data says which version produced it.
+        self.bot = bot
         self.simulations = simulations
         self.rng = random.Random(seed)
         self.play = play
@@ -672,6 +677,9 @@ class Bridge:
             stamp = time.strftime("%Y%m%d-%H%M%S")
             self.saved_path = os.path.join(self.save_dir, f"bridge-{stamp}.json")
         doc = {"format": FORMAT, "source": "bridge", "messages": self.frames}
+        bot = getattr(self, "bot", None)
+        if bot:
+            doc["bot"] = {k: v for k, v in bot.items() if k != "kind"}
         temporary = None
         try:
             with tempfile.NamedTemporaryFile(
@@ -811,15 +819,24 @@ async def serve_forever(make_bridge, host=HOST, port=PORT, info=None):
         await asyncio.Future()
 
 
-def net_info(path, simulations, play):
+def net_info(path, simulations, play, label=None):
     """What the extension's panel shows about the bot: which net file (and the
-    training epoch, when the file records it), how much search, which mode."""
+    training epoch, when the file records it), how much search, which mode.
+    Also a hash of the file and an optional label (e.g. the training round),
+    which saved captures keep."""
     info = {
         "kind": "info",
         "net": path,
         "simulations": simulations,
         "play": play,
     }
+    if label:
+        info["label"] = label
+    try:
+        with open(path, "rb") as f:
+            info["sha256"] = hashlib.file_digest(f, "sha256").hexdigest()[:16]
+    except OSError:
+        pass
     try:
         with np.load(path) as z:
             if "meta_epoch" in z:
@@ -831,6 +848,8 @@ def net_info(path, simulations, play):
 
 def describe_info(info):
     epoch = f", epoch {info['epoch']}" if "epoch" in info else ""
+    if info.get("label"):
+        epoch += f" ({info['label']})"
     mode = "playing" if info.get("play") else "advising"
     return f"net {info['net']}{epoch}, {info['simulations']} simulations, {mode}"
 
@@ -852,6 +871,7 @@ def main(argv=None):
         metavar="DIR",
         help="save each game followed here (default captures/); '' to turn off",
     )
+    parser.add_argument("--label", help="names the net in captures, e.g. 'sp1 round 8'")
     parser.add_argument(
         "--spectator-state",
         help="write a redacted live-board snapshot to this local JSON path",
@@ -868,6 +888,7 @@ def main(argv=None):
     from catanatron.colonist.net import Net
 
     net = Net.load(args.net)
+    info = net_info(args.net, args.simulations, args.play, args.label)
     try:
         asyncio.run(
             serve_forever(
@@ -878,9 +899,10 @@ def main(argv=None):
                     move_timeout=args.move_timeout,
                     save_dir=args.save or None,
                     spectator_state=args.spectator_state,
+                    bot=info,
                 ),
                 port=args.port,
-                info=net_info(args.net, args.simulations, args.play),
+                info=info,
             )
         )
     except KeyboardInterrupt:

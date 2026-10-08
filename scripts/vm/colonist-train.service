@@ -1,0 +1,24 @@
+[Unit]
+Description=Colonist AI: self-play training loop (runs/sp1)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+User=owen
+WorkingDirectory=/home/owen/colonist-ai
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/home/owen/colonist-ai/scripts/vm/workers.env
+# Lower priority than the ranked bot, whose moves have a time limit.
+Nice=10
+ExecStartPre=/home/owen/colonist-ai/scripts/vm/sync_workers.sh
+ExecStart=/home/owen/colonist-ai/scripts/vm/train.sh
+StandardOutput=append:/home/owen/colonist-ai/runs/sp1.log
+StandardError=append:/home/owen/colonist-ai/runs/sp1.log
+Restart=always
+RestartSec=120
+KillMode=control-group
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

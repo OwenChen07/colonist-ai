@@ -79,6 +79,14 @@ def _seed(record):
     )
 
 
+def capture_net(path):
+    """The hash of the net that played, which the bridge saves with each
+    capture; "" for a capture from before that or recorded by a person."""
+    with open(path) as stream:
+        bot = json.load(stream).get("bot") or {}
+    return bot.get("sha256", "")
+
+
 def export_capture(path, out_dir, keep=40, mode="human"):
     """Export one clean, finished game; return (path, sampled rows, total rows).
 
@@ -87,6 +95,7 @@ def export_capture(path, out_dir, keep=40, mode="human"):
     """
     conversion = convert(load_capture(path))
     record = conversion.record
+    net = capture_net(path)
     if conversion.unsupported or record.get("incomplete"):
         raise ValueError("capture could not be fully converted")
     you = [color for color, player in record["players"].items() if player["you"]]
@@ -141,6 +150,7 @@ def export_capture(path, out_dir, keep=40, mode="human"):
         ),
         z=np.full(len(rows), 1 if winner == color else -1, dtype=np.int8),
         turn=np.asarray([r[3] for r in rows], dtype=np.int16),
+        net=np.asarray([net]),
     )
     os.replace(tmp, out)
     return out, len(rows), len(observer.rows)

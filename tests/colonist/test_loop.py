@@ -121,3 +121,38 @@ def test_selfplay_opponents_are_fixed_by_seed():
     assert all(net in p.values() for p in plans)  # the main net always plays
     assert plans == [seat_plan(s, net, ["W"], 0.5) for s in range(200)]
     assert all("W" not in seat_plan(s, net, ["W"], 0.0).values() for s in range(50))
+
+
+def test_playout_cap_gauntlet_and_live_calibration(tiny_args, monkeypatch, tmp_path):
+    pytest.importorskip("torch")
+    from catanatron.colonist import loop
+    from catanatron.colonist.human_data import export_capture
+
+    from .test_convert import FULL_GAME
+
+    live = tmp_path / "live"
+    export_capture(FULL_GAME, str(live), mode="value")
+    run, args, init = tiny_args
+    monkeypatch.setattr(evaluate, "sprt", lambda *a, **k: _fake_result("promote", 0.7))
+    played = []
+    monkeypatch.setattr(
+        evaluate,
+        "match",
+        lambda *a, **k: played.append(a[1]) or _fake_result(None, 0.6),
+    )
+    extra = ["--full-rate", "0.5", "--fast-simulations", "1"]
+    extra += ["--gauntlet", f"{init},R", "--live-data", str(live)]
+    assert loop.main(args + extra + ["--init", init, "--rounds", "1"]) == 0
+    record = json.loads((run / "state.json").read_text())["history"][0]
+    assert played == ["W", f"Z:{init}:2", "R"]
+    assert record["gauntlet"] == {init: 0.6, "R": 0.6}
+    assert record["live"]["games"] == 1 and record["live"]["positions"] > 0
+    assert list((run / "round_001" / "data").glob("shard_*.npz"))
+
+
+def test_full_rate_needs_fast_simulations(tiny_args):
+    from catanatron.colonist import loop
+
+    run, args, init = tiny_args
+    with pytest.raises(SystemExit):
+        loop.main(args + ["--init", init, "--full-rate", "0.5"])

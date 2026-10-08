@@ -1,19 +1,23 @@
-"""Run one self-play round across the coordinator and a private SSH worker.
+"""Run one self-play round across the coordinator and private SSH workers.
 
-Set COLONIST_WORKER_HOST to enable this from colonist.loop. Each host gets a
-disjoint, shard-aligned seed range. The worker writes to its own disk; the
-coordinator copies complete shards back before allowing training to start.
+Set COLONIST_WORKER_HOSTS to enable this from colonist.loop, as a comma-
+separated list of `user@host:processes` (COLONIST_WORKER_HOST, one host, still
+works). Each host gets a disjoint, shard-aligned seed range in proportion to
+its processes. Workers write to their own disks; the coordinator copies their
+complete shards back, and plays any range a worker failed to finish, before
+training may start. A worker can be any machine reachable over SSH with the
+repository at COLONIST_WORKER_ROOT (the same path on every worker) and its
+virtualenv, e.g. a GCP or an Azure VM.
 """
 
+import argparse
 import os
 import shlex
 import subprocess
-import argparse
 from pathlib import Path
 
 from catanatron.colonist import selfplay
 from catanatron.colonist.datagen import shard_path
-
 
 SHARD_SIZE = 64
 
@@ -23,7 +27,17 @@ def _command(argv):
 
 
 def _ssh(host, key, argv):
-    return ["ssh", "-i", key, "-o", "BatchMode=yes", host, _command(argv)]
+    return [
+        "ssh",
+        "-i",
+        key,
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ServerAliveInterval=60",
+        host,
+        _command(argv),
+    ]
 
 
 def _rsync(key, source, destination):
@@ -49,6 +63,44 @@ def _complete(out_dir, seed, games):
     )
 
 
+def worker_hosts(environ=os.environ):
+    """[(host, processes)] from the environment."""
+    spec = environ.get("COLONIST_WORKER_HOSTS")
+    if not spec and environ.get("COLONIST_WORKER_HOST"):
+        spec = (
+            f"{environ['COLONIST_WORKER_HOST']}:"
+            f"{environ.get('COLONIST_REMOTE_WORKERS', '2')}"
+        )
+    hosts = []
+    for item in (spec or "").split(","):
+        item = item.strip()
+        if not item:
+            continue
+        host, _, processes = item.rpartition(":")
+        if not host or not processes.isdigit() or int(processes) < 1:
+            raise ValueError(f"worker {item!r} is not user@host:processes")
+        hosts.append((host, int(processes)))
+    return hosts
+
+
+def split(games, seed, local_processes, hosts):
+    """Shard-aligned (seed, games) ranges: the coordinator's first, then one
+    per host, in proportion to processes. Every range but the last is whole
+    shards, so no seed is played twice."""
+    shards = (games + SHARD_SIZE - 1) // SHARD_SIZE
+    weights = [local_processes] + [p for _, p in hosts]
+    total = sum(weights)
+    counts = [shards * w // total for w in weights]
+    for i in range(shards - sum(counts)):  # the remainder, coordinator first
+        counts[i % len(counts)] += 1
+    ranges, first = [], seed
+    for count in counts:
+        size = min(count * SHARD_SIZE, seed + games - first)
+        ranges.append((first, max(0, size)))
+        first += max(0, size)
+    return ranges
+
+
 def run(
     net_path,
     out_dir,
@@ -60,113 +112,130 @@ def run(
     opponent_rate=0.0,
     log=print,
     setup_noise_scale=1.0,
+    full_rate=1.0,
+    fast_simulations=None,
 ):
     """Generate all shards locally and remotely, then verify the whole round."""
-    host = os.environ["COLONIST_WORKER_HOST"]
+    hosts = worker_hosts()
     key = os.path.expanduser(
         os.environ.get("COLONIST_WORKER_SSH_KEY", "~/.ssh/colonist_worker_ed25519")
     )
     root = Path(os.environ.get("COLONIST_WORKER_ROOT", "/home/owen/colonist-ai"))
-    remote_workers = int(os.environ.get("COLONIST_REMOTE_WORKERS", "2"))
-    if setup_noise_scale != 1.0:
-        raise ValueError("distributed self-play requires the default setup noise scale")
-    if games <= SHARD_SIZE or remote_workers < 1:
-        raise ValueError(
-            "distributed self-play needs multiple shards and a remote worker"
-        )
-
-    # Keep roughly two thirds on the 8-vCPU coordinator and one third on the
-    # 4-vCPU worker. The boundary is a whole shard so no seed is run twice.
-    local_games = max(SHARD_SIZE, ((games * 2 // 3) // SHARD_SIZE) * SHARD_SIZE)
-    remote_seed = seed + local_games
-    remote_games = games - local_games
+    if not hosts:
+        raise ValueError("distributed self-play needs COLONIST_WORKER_HOSTS")
+    local_processes = workers or os.cpu_count() or 1
+    ranges = split(games, seed, local_processes, hosts)
+    (local_seed, local_games), remote_ranges = ranges[0], ranges[1:]
     round_name = Path(out_dir).parent.name
     run_name = Path(out_dir).parent.parent.name
     remote = root / "distributed" / run_name / round_name
-    remote_data = remote / "data"
-    remote_nets = remote / "nets"
+    remote_data, remote_nets = remote / "data", remote / "nets"
+    options = dict(
+        simulations=simulations,
+        workers=workers,
+        opponents=opponents,
+        opponent_rate=opponent_rate,
+        log=log,
+        setup_noise_scale=setup_noise_scale,
+        full_rate=full_rate,
+        fast_simulations=fast_simulations,
+    )
+    os.makedirs(out_dir, exist_ok=True)
+
+    processes = []
+    for (host, count), (first, size) in zip(hosts, remote_ranges):
+        if not size:
+            continue
+        try:
+            argv = _prepare(host, key, root, remote_data, remote_nets, net_path)
+            argv += _remote_opponents(host, key, remote_nets, opponents)
+            argv += [
+                "--games",
+                size,
+                "--seed",
+                first,
+                "--simulations",
+                simulations,
+                "--workers",
+                count,
+                "--opponent-rate",
+                opponent_rate,
+                "--setup-noise-scale",
+                setup_noise_scale,
+                "--full-rate",
+                full_rate,
+            ]
+            if fast_simulations:
+                argv += ["--fast-simulations", fast_simulations]
+        except subprocess.CalledProcessError:
+            log(f"could not prepare {host}; its range runs here")
+            continue
+        stream = open(Path(out_dir).parent / f"remote-{_safe(host)}.log", "a", 1)
+        process = subprocess.Popen(
+            _ssh(host, key, argv), stdout=stream, stderr=subprocess.STDOUT
+        )
+        processes.append((host, process, stream))
+        log(f"self-play: {size} games (seeds {first}+) on {host}")
+    log(f"self-play: {local_games} games here")
+
+    try:
+        if local_games:
+            selfplay.run(
+                net_path, out_dir, games=local_games, seed=local_seed, **options
+            )
+    except BaseException:
+        for _, process, _ in processes:
+            process.terminate()
+            process.wait()
+        raise
+    for host, process, stream in processes:
+        code = process.wait()
+        stream.close()
+        if code:
+            log(f"{host} exited with status {code}; finishing its range here")
+        try:
+            _rsync(key, f"{host}:{remote_data}/", f"{out_dir}/")
+        except subprocess.CalledProcessError:
+            log(f"copying shards from {host} failed; finishing its range here")
+    for first, size in remote_ranges:
+        if size and not _complete(out_dir, first, size):
+            selfplay.run(net_path, out_dir, games=size, seed=first, **options)
+    if not _complete(out_dir, seed, games):
+        raise RuntimeError("self-play round has missing shards; training cannot start")
+    log(f"self-play complete across {1 + len(processes)} machines: {games} games")
+
+
+def _safe(host):
+    return "".join(c if c.isalnum() or c in "-." else "_" for c in host)
+
+
+def _prepare(host, key, root, remote_data, remote_nets, net_path):
+    """Makes the worker's folders and copies the net; returns the start of
+    its self-play command."""
     subprocess.run(
         _ssh(host, key, ["mkdir", "-p", remote_data, remote_nets]), check=True
     )
-
     remote_net = remote_nets / "best.npz"
     _rsync(key, net_path, f"{host}:{remote_net}")
-    remote_opponents = []
-    for index, opponent in enumerate(opponents):
-        if os.path.isfile(opponent):
-            target = remote_nets / f"opponent_{index}.npz"
-            _rsync(key, opponent, f"{host}:{target}")
-            remote_opponents.append(str(target))
-        else:
-            remote_opponents.append(opponent)
-
-    remote_argv = [
+    return [
         root / ".venv/bin/python",
         "-m",
         "catanatron.colonist.selfplay",
         remote_net,
         remote_data,
-        "--games",
-        remote_games,
-        "--seed",
-        remote_seed,
-        "--simulations",
-        simulations,
-        "--workers",
-        remote_workers,
-        "--opponents",
-        ",".join(remote_opponents),
-        "--opponent-rate",
-        opponent_rate,
     ]
-    log(f"self-play split: {local_games} games here, {remote_games} on {host}")
-    os.makedirs(out_dir, exist_ok=True)
-    remote_log = Path(out_dir).parent / "remote-selfplay.log"
-    with open(remote_log, "a", buffering=1) as stream:
-        process = subprocess.Popen(
-            _ssh(host, key, remote_argv), stdout=stream, stderr=subprocess.STDOUT
-        )
-        try:
-            selfplay.run(
-                net_path,
-                out_dir,
-                games=local_games,
-                seed=seed,
-                simulations=simulations,
-                workers=workers,
-                opponents=opponents,
-                opponent_rate=opponent_rate,
-                log=log,
-            )
-        except BaseException:
-            process.terminate()
-            process.wait()
-            raise
-        remote_code = process.wait()
 
-    try:
-        _rsync(key, f"{host}:{remote_data}/", f"{out_dir}/")
-    except subprocess.CalledProcessError:
-        log("remote shard transfer failed; completing its range on the coordinator")
-    if remote_code:
-        log(
-            f"remote worker exited with status {remote_code}; completing missing shards locally"
-        )
-    if not _complete(out_dir, remote_seed, remote_games):
-        selfplay.run(
-            net_path,
-            out_dir,
-            games=remote_games,
-            seed=remote_seed,
-            simulations=simulations,
-            workers=workers,
-            opponents=opponents,
-            opponent_rate=opponent_rate,
-            log=log,
-        )
-    if not _complete(out_dir, seed, games):
-        raise RuntimeError("self-play round has missing shards; training cannot start")
-    log(f"self-play complete across both VMs: {games} games")
+
+def _remote_opponents(host, key, remote_nets, opponents):
+    names = []
+    for index, opponent in enumerate(opponents):
+        if os.path.isfile(opponent):
+            target = remote_nets / f"opponent_{index}.npz"
+            _rsync(key, opponent, f"{host}:{target}")
+            names.append(str(target))
+        else:
+            names.append(opponent)
+    return ["--opponents", ",".join(names)]
 
 
 def main(argv=None):

@@ -296,3 +296,33 @@ def test_train_init_loads_weights(tmp_path):
         assert np.array_equal(w1, w2) and np.array_equal(b1, b2)
     with pytest.raises(ValueError):
         load_weights(build_model([16, 16]), path)
+
+
+def test_playout_cap_randomization(tmp_path):
+    """Quick searches are value targets only; placements always get the full
+    search."""
+    from catanatron.colonist.datagen import load
+    from catanatron.colonist.selfplay import run_shard
+
+    net_path = str(tmp_path / "net.npz")
+    random_net(hidden=(16,)).save(net_path)
+    sp = tmp_path / "sp"
+    args = {"simulations": 8, "full_rate": 0.25, "fast_simulations": 2}
+    path, _, rows, _, _, _ = run_shard((str(sp), net_path, 0, 2, args))
+    shard = np.load(path)
+    full = shard["full"]
+    assert len(full) == rows and 0 < full.sum() < rows
+    setup = shard["turn"] == 0
+    assert full[setup].all()
+    d = load([path])
+    assert ((d["soft"] >= 0) == full).all()
+    assert np.array_equal(d["v"][~full], d["z"][~full].astype(np.float16))
+
+
+def test_full_rate_needs_fast_simulations(tmp_path):
+    from catanatron.colonist.selfplay import run
+
+    with pytest.raises(ValueError, match="fast_simulations"):
+        run("unused.npz", str(tmp_path), games=0, full_rate=0.5, log=lambda _: None)
+    with pytest.raises(ValueError, match="full_rate"):
+        run("unused.npz", str(tmp_path), games=0, full_rate=0, log=lambda _: None)

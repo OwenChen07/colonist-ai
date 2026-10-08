@@ -57,3 +57,17 @@ def test_bot_side_capture_can_label_opponent_setup(tmp_path):
     assert 2 <= used == total <= 4
     d = load([path])
     assert np.all(d["action"] >= 0)
+
+
+def test_live_calibration_of_a_net(tmp_path):
+    from catanatron.colonist.calibrate import calibrate, describe, load_value_shards
+    from catanatron.colonist.net import random_net
+
+    path, used, _ = export_capture(FULL_GAME, str(tmp_path), mode="value")
+    assert str(np.load(path)["net"][0]) == ""  # captured before nets were recorded
+    parts = load_value_shards([str(tmp_path)])
+    result = calibrate(random_net(hidden=(8,)), parts)
+    assert result["positions"] == used and result["games"] == 1
+    assert 0 <= result["accuracy"] <= 1 and result["mse"] >= 0
+    assert "opening" in result and "live value MSE" in describe(result)
+    assert load_value_shards([str(tmp_path)], net_sha256="ab" * 8) == []

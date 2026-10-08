@@ -423,6 +423,22 @@ def test_capture_rewrite_keeps_previous_json_readable_until_complete(
     assert not list(tmp_path.glob(".bridge-*.json"))
 
 
+def test_capture_records_which_net_played(tmp_path):
+    bridge = Bridge.__new__(Bridge)
+    bridge.save_dir = str(tmp_path)
+    bridge.live = object()
+    bridge.frames = [{"seq": 0, "t": 1, "dir": "open", "socket": 0, "text": ""}]
+    bridge.saved_path = None
+    bridge.bot = {"kind": "info", "net": "model.npz", "sha256": "ab" * 8}
+    bridge.bot["label"] = "sp1 round 8"
+    doc = json.load(open(bridge.save()))
+    assert doc["bot"] == {
+        "net": "model.npz",
+        "sha256": "ab" * 8,
+        "label": "sp1 round 8",
+    }
+
+
 def test_timeout_names_what_colonist_sent_instead():
     import base64
 
@@ -716,6 +732,7 @@ def test_info_about_the_net_comes_first(tmp_path):
     with np.load(path) as z:
         np.savez(path, **{**{k: z[k] for k in z.files}, "meta_epoch": np.asarray(7)})
     info = net_info(str(path), 800, True)
+    assert len(info.pop("sha256")) == 16
     assert info == {
         "kind": "info",
         "net": str(path),
@@ -723,6 +740,9 @@ def test_info_about_the_net_comes_first(tmp_path):
         "play": True,
         "epoch": 7,
     }
+    labeled = net_info(str(path), 800, True, label="sp1 round 8")
+    assert labeled["label"] == "sp1 round 8"
+    assert "(sp1 round 8)" in describe_info(labeled)
     assert describe_info(info) == f"net {path}, epoch 7, 800 simulations, playing"
     assert "epoch" not in net_info(str(tmp_path / "missing.npz"), 50, False)
 

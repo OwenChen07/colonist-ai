@@ -16,7 +16,14 @@ Only the main net's moves are recorded from those games.
 Every searched position is recorded, with the search's improved policy over
 the moves (`pi`) and its value (`v`) as training targets, and the game result
 (`z`) once the game ends. Shards are written and resumed as in datagen.py, in
-the same format plus `pi` (float16, over the 313 moves) and `v`.
+the same format plus `pi` (float16, over the 313 moves), `v` and `full`.
+
+Playout cap randomization (KataGo, --full-rate below 1): only a random
+--full-rate share of moves get the full search, and only those are policy
+targets (`full`); the rest get a quick search of --fast-simulations without
+exploration noise, which plays the game on cheaply, so a round has more games
+and more value targets for the same compute. Initial placements always get the
+full search.
 """
 
 import argparse
@@ -73,6 +80,7 @@ class _Game:
         self.search = None
         self.search_net = None
         self.steps = None
+        self.full = True
         self.searches = 0
 
     def done(self):
@@ -96,7 +104,8 @@ class _Game:
                     continue
                 random.seed(self.rng.random())  # for bots that use the global stream
                 self.search_net = agent
-                self.search = Search(agent, rng=self.rng, **self.search_args)
+                self.full, search_args = self.next_search()
+                self.search = Search(agent, rng=self.rng, **search_args)
                 self.steps = self.search.steps(self.game)
                 return agent, next(self.steps)
             try:
@@ -113,6 +122,20 @@ class _Game:
                 self.steps = None
                 self.searches += 1
 
+    def next_search(self):
+        """(full?, Search arguments) for the next search: playout cap
+        randomization, when the search arguments set a full_rate below 1."""
+        args = dict(self.search_args)
+        full_rate = args.pop("full_rate", 1.0)
+        fast = args.pop("fast_simulations", None)
+        if full_rate >= 1 or self.game.state.is_initial_build_phase:
+            return True, args
+        if self.rng.random() < full_rate:
+            return True, args
+        args["simulations"] = fast
+        args["noise"] = False
+        return False, args
+
     def record(self, root):
         pi, v = self.search.root_targets(root)
         legal = E.legal_indices(root.actions)
@@ -122,7 +145,15 @@ class _Game:
         full_pi = np.zeros(E.NUM_ACTIONS, np.float32)
         full_pi[legal] = pi
         self.rows.append(
-            (dynamic, mask, full_pi, v, root.color, self.game.state.num_turns)
+            (
+                dynamic,
+                mask,
+                full_pi,
+                v,
+                root.color,
+                self.game.state.num_turns,
+                self.full,
+            )
         )
 
 
@@ -190,14 +221,14 @@ def run_shard(task):
     games, calls = play_games(
         net, range(first, first + count), search_args, opponents, opponent_rate
     )
-    statics, seeds, cols = [], [], {k: [] for k in "dmpvzt"}
+    statics, seeds, cols = [], [], {k: [] for k in "dmpvztf"}
     gidx = []
     for i, g in enumerate(games):
         statics.append(E.encode_static(g.game.state.board.map))
         seeds.append(g.seed)
         winner = g.game.winning_color()
-        for d, m, p, v, color, turn in g.rows:
-            for k, x in zip("dmpvt", (d, m, p, v, turn)):
+        for d, m, p, v, color, turn, full in g.rows:
+            for k, x in zip("dmpvtf", (d, m, p, v, turn, full)):
                 cols[k].append(x)
             cols["z"].append(0 if winner is None else (1 if color == winner else -1))
             gidx.append(i)
@@ -214,6 +245,7 @@ def run_shard(task):
         v=np.asarray(cols["v"], np.float16),
         z=np.asarray(cols["z"], np.int8),
         turn=np.asarray(cols["t"], np.int16),
+        full=np.asarray(cols["f"], bool),
     )
     os.replace(tmp, path)
     searches = sum(g.searches for g in games)
@@ -232,10 +264,16 @@ def run(
     opponent_rate=0.0,
     log=print,
     setup_noise_scale=1.0,
+    full_rate=1.0,
+    fast_simulations=None,
 ):
     """Plays the shards of out_dir that aren't on disk yet."""
     if not math.isfinite(setup_noise_scale) or setup_noise_scale <= 0:
         raise ValueError("setup_noise_scale must be positive and finite")
+    if not 0 < full_rate <= 1:
+        raise ValueError("full_rate must be in (0, 1]")
+    if full_rate < 1 and not (fast_simulations and fast_simulations > 0):
+        raise ValueError("playout cap randomization needs fast_simulations")
     os.makedirs(out_dir, exist_ok=True)
     config_path = os.path.join(out_dir, "setup-exploration.json")
     if os.path.exists(config_path):
@@ -264,6 +302,9 @@ def run(
         "simulations": simulations,
         "setup_noise_scale": setup_noise_scale,
     }
+    if full_rate < 1:
+        search_args["full_rate"] = full_rate
+        search_args["fast_simulations"] = fast_simulations
     tasks = []
     for first in range(seed, seed + games, shard_size):
         count = min(shard_size, seed + games - first)
@@ -280,6 +321,11 @@ def run(
                 )
             )
     log(f"{len(tasks)} shards to play")
+    if full_rate < 1:
+        log(
+            f"playout cap randomization: {full_rate:.0%} of moves get {simulations} "
+            f"simulations, the rest {fast_simulations}"
+        )
     if not tasks:
         return
     start, played = time.time(), 0
@@ -317,6 +363,18 @@ def main(argv=None):
         default=64,
         help="games per shard, all played at once in one worker",
     )
+    parser.add_argument(
+        "--full-rate",
+        type=float,
+        default=1.0,
+        help="share of moves with the full search (playout cap randomization)",
+    )
+    parser.add_argument(
+        "--fast-simulations",
+        type=int,
+        default=None,
+        help="simulations for the other moves, with --full-rate below 1",
+    )
     parser.add_argument("--workers", type=int, default=None)
     parser.add_argument(
         "--opponents",
@@ -344,6 +402,8 @@ def main(argv=None):
         args.opponent_rate,
         log=lambda m: print(m, flush=True),
         setup_noise_scale=args.setup_noise_scale,
+        full_rate=args.full_rate,
+        fast_simulations=args.fast_simulations,
     )
     return 0
 

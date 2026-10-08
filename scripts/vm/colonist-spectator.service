@@ -1,0 +1,18 @@
+[Unit]
+Description=Colonist AI: redacted live feed for the public spectator site
+After=network-online.target colonist-ranked.service
+
+[Service]
+User=owen
+WorkingDirectory=/home/owen/colonist-ai
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/owen/colonist-ai/.venv/bin/python -m catanatron.colonist.spectator_publish \
+    --data data/ranked --key-file data/ranked/.spectator-ingest-key \
+    --site https://colonist-ai-spectator.vercel.app
+StandardOutput=append:/home/owen/colonist-ai/data/ranked/spectator-publisher.log
+StandardError=append:/home/owen/colonist-ai/data/ranked/spectator-publisher.log
+Restart=always
+RestartSec=60
+
+[Install]
+WantedBy=multi-user.target

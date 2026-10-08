@@ -15,6 +15,10 @@ Then run while the laptop is off:
     python -m catanatron.colonist.ranked_runner --net NET --games 1 \
         --profile PROFILE
 
+With --games 0 it queues games until stopped. Every verified game is listed in
+DATA/games.jsonl with the net that played it (its hash, and the training round
+when following --promotions), and the capture itself records the same.
+
 Requires the automation extra and `python -m playwright install --with-deps
 chromium`. Never copy a personal browser profile or credentials into this host.
 """
@@ -22,6 +26,7 @@ chromium`. Never copy a personal browser profile or credentials into this host.
 import argparse
 import asyncio
 import hashlib
+import itertools
 import json
 import os
 import re
@@ -86,7 +91,9 @@ def install_promoted_model(source, destination):
     return True
 
 
-async def _bridge(net, simulations, captures, log_path, spectator_state=None):
+async def _bridge(
+    net, simulations, captures, log_path, spectator_state=None, label=None
+):
     try:
         _, writer = await asyncio.open_connection("127.0.0.1", PORT)
     except OSError:
@@ -109,6 +116,8 @@ async def _bridge(net, simulations, captures, log_path, spectator_state=None):
     ]
     if spectator_state:
         command.extend(("--spectator-state", str(spectator_state)))
+    if label:
+        command.extend(("--label", label))
     process = await asyncio.create_subprocess_exec(
         *command,
         stdout=log,
@@ -168,6 +177,33 @@ async def queue_ranked_1v1(page):
     if await start.count() != 1 or not await start.is_enabled():
         raise RuntimeError("ranked 1v1 start control is unavailable")
     await start.click()
+
+
+def round_label(run_dir, round_number):
+    return f"{Path(run_dir).name} round {round_number}"
+
+
+def record_game(data, path, conversion, net, label, round_number, simulations):
+    """Appends one verified game to DATA/games.jsonl: which net played it and
+    how it ended. Names and chat stay in the capture."""
+    from catanatron.colonist.bridge import net_info
+
+    record = conversion.record
+    you = [c for c, p in record.get("players", {}).items() if p.get("you")]
+    row = {
+        "capture": Path(path).name,
+        "net_sha256": net_info(str(net), simulations, True).get("sha256"),
+        "label": label,
+        "round": round_number,
+        "simulations": simulations,
+        "bot_color": you[0] if len(you) == 1 else None,
+        "winner": record.get("winner"),
+        "ended": conversion.ended,
+        "at": int(time.time()),
+    }
+    with open(Path(data) / "games.jsonl", "a") as stream:
+        stream.write(json.dumps(row) + "\n")
+    return row
 
 
 def _finished_ranked_capture(path):
@@ -234,6 +270,7 @@ async def _run(args):
     games_completed = 0
     deadline = time.monotonic() + args.hours * 3600 if args.hours else None
     promotion_round = None
+    label = Path(args.net).name if args.net else None
     async with async_playwright() as playwright:
         if not args.login_only and not args.inspect:
             if not args.net:
@@ -241,6 +278,7 @@ async def _run(args):
             if args.promotions:
                 promotion_round, source = promoted_checkpoint(args.promotions)
                 install_promoted_model(source, args.net)
+                label = round_label(args.promotions, promotion_round)
                 print(f"using promoted training round {promotion_round}", flush=True)
             if not Path(args.net).exists():
                 raise RuntimeError("--net must point to a local trained network")
@@ -250,6 +288,19 @@ async def _run(args):
                 captures,
                 data / "bridge.log",
                 data / "spectator-state.json",
+                label,
+            )
+            (data / "runner-status.json").write_text(
+                json.dumps(
+                    {
+                        "state": "starting",
+                        "pid": os.getpid(),
+                        "label": label,
+                        "games_completed": 0,
+                        "at": int(time.time()),
+                    },
+                    indent=2,
+                )
             )
         context = await playwright.chromium.launch_persistent_context(
             str(profile),
@@ -330,7 +381,8 @@ async def _run(args):
                 print(json.dumps({"ranked_1v1_buttons": labels}), flush=True)
                 completed = True
                 return
-            for game in range(args.games):
+            games = itertools.count() if args.games == 0 else range(args.games)
+            for game in games:
                 if deadline is not None and time.monotonic() >= deadline:
                     print(
                         "overnight time limit reached; no new game queued", flush=True
@@ -340,7 +392,8 @@ async def _run(args):
                 log_offset = (data / "bridge.log").stat().st_size
                 await queue_ranked_1v1(page)
                 active_game = True
-                print(f"queued ranked 1v1 game {game + 1}/{args.games}", flush=True)
+                total = args.games or "unlimited"
+                print(f"queued ranked 1v1 game {game + 1}/{total}", flush=True)
                 path = await _wait_for_capture(
                     captures, before, process, data / "bridge.log", log_offset
                 )
@@ -355,11 +408,22 @@ async def _run(args):
                     )
                     print(f"{mode}: {count} positions -> {out}", flush=True)
                 print(f"verified ranked capture: {path}", flush=True)
+                record_game(
+                    data,
+                    path,
+                    conversion,
+                    args.net,
+                    label,
+                    promotion_round,
+                    args.simulations,
+                )
                 games_completed += 1
                 (data / "runner-status.json").write_text(
                     json.dumps(
                         {
                             "state": "running",
+                            "pid": os.getpid(),
+                            "label": label,
                             "games_completed": games_completed,
                             "last_result": conversion.ended,
                             "last_winner": conversion.record.get("winner"),
@@ -369,7 +433,7 @@ async def _run(args):
                         indent=2,
                     )
                 )
-                if game + 1 < args.games:
+                if args.games == 0 or game + 1 < args.games:
                     await page.goto(URL)
                     if args.promotions:
                         new_round, source = promoted_checkpoint(args.promotions)
@@ -379,12 +443,14 @@ async def _run(args):
                             log.close()
                             process = log = None
                             install_promoted_model(source, args.net)
+                            label = round_label(args.promotions, new_round)
                             process, log = await _bridge(
                                 args.net,
                                 args.simulations,
                                 captures,
                                 data / "bridge.log",
                                 data / "spectator-state.json",
+                                label,
                             )
                             promotion_round = new_round
                             print(
@@ -446,7 +512,9 @@ def main(argv=None):
     parser.add_argument("--captures", default="captures/ranked")
     parser.add_argument("--data", default="data/ranked")
     parser.add_argument("--simulations", type=int, default=800)
-    parser.add_argument("--games", type=int, default=1)
+    parser.add_argument(
+        "--games", type=int, default=1, help="games to play; 0 for no limit"
+    )
     parser.add_argument(
         "--hours", type=float, help="stop queueing new games after this many hours"
     )
@@ -462,8 +530,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if sum((args.login_only, args.smoke, args.inspect)) > 1:
         parser.error("--login-only, --smoke, and --inspect cannot be combined")
-    if args.games < 1 or args.simulations < 1:
-        parser.error("--games and --simulations must be positive")
+    if args.games < 0 or args.simulations < 1:
+        parser.error("--games must be 0 or more and --simulations positive")
     if args.hours is not None and args.hours <= 0:
         parser.error("--hours must be positive")
     try:

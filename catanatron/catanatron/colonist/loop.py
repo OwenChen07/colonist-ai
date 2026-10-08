@@ -15,7 +15,11 @@ Each round:
      against 54% (so 52% is the bar), at most --max-games games. The new net
      replaces the best only if the test says so.
   4. When the best net changed, it plays --benchmark (default AlphaBeta) on
-     a fixed set of boards, to track progress toward the 65% gate.
+     a fixed set of boards, to track progress toward the 65% gate, and each
+     of --gauntlet (e.g. earlier rounds' nets), so a gain against one bot
+     isn't mistaken for a gain overall. Every round's new net is also scored
+     on --live-data, real games' value shards (calibrate.py), which shows
+     whether what it learns in self-play carries over to people.
 
 Everything lives in the run directory, and the loop can be stopped at any
 time and rerun with the same directory to continue where it stopped:
@@ -99,7 +103,9 @@ def play(run, n, args):
     from catanatron.colonist import selfplay
 
     runner = selfplay.run
-    if os.environ.get("COLONIST_WORKER_HOST"):
+    if os.environ.get("COLONIST_WORKER_HOSTS") or os.environ.get(
+        "COLONIST_WORKER_HOST"
+    ):
         from catanatron.colonist import distributed
 
         runner = distributed.run
@@ -122,6 +128,8 @@ def play(run, n, args):
         opponents=opponents,
         opponent_rate=args.opponent_rate if opponents else 0.0,
         setup_noise_scale=args.setup_noise_scale,
+        full_rate=args.full_rate,
+        fast_simulations=args.fast_simulations,
         log=lambda m: say("  " + m),
     )
 
@@ -201,9 +209,42 @@ def match(run, n, args):
     run.state["history"].append(record)
 
 
+def live_calibration(run, n, args):
+    """The round's new net's value against real games (cheap: no games)."""
+    if not args.live_data:
+        return
+    from catanatron.colonist.calibrate import calibrate, describe, load_value_shards
+    from catanatron.colonist.net import Net
+
+    result = calibrate(Net.load(run.net(n)), load_value_shards(args.live_data))
+    run.state["history"][-1]["live"] = result
+    say(f"round {n}: {describe(result)}")
+
+
+def gauntlet(run, n, args):
+    from catanatron.colonist.evaluate import match as play_match
+
+    results = {}
+    for spec in args.gauntlet:
+        opponent = (
+            f"Z:{spec}:{args.match_simulations}" if spec.endswith(".npz") else spec
+        )
+        result = play_match(
+            f"Z:{run.best}:{args.match_simulations}",
+            opponent,
+            games=args.gauntlet_games,
+            seed=args.seed + 800_000_000,
+            workers=args.workers,
+        )
+        say(f"  gauntlet: {result.summary()}")
+        results[spec] = round(result.score, 4)
+    run.state["history"][-1]["gauntlet"] = results
+
+
 def benchmark(run, n, args):
     record = run.state["history"][-1]
     record.setdefault("benchmark", "")
+    live_calibration(run, n, args)
     # Only when the best net changed (or the first round): otherwise the same
     # net would replay the same boards.
     if not args.benchmark or n % args.benchmark_every:
@@ -235,6 +276,8 @@ def benchmark(run, n, args):
     with open(path, "w") as stream:
         json.dump(diagnostic_summary, stream, indent=2)
     say(f"  diagnostics: {path}")
+    if args.gauntlet:
+        gauntlet(run, n, args)
 
 
 def main(argv=None):
@@ -254,6 +297,14 @@ def main(argv=None):
         default=1.0,
         help="self-play Gumbel noise scale for initial settlements (default 1)",
     )
+    parser.add_argument(
+        "--full-rate",
+        type=float,
+        default=1.0,
+        help="share of self-play moves with the full search (playout cap "
+        "randomization; the rest get --fast-simulations and no policy target)",
+    )
+    parser.add_argument("--fast-simulations", type=int, default=None)
     parser.add_argument("--opponent-rate", type=float, default=0.2)
     parser.add_argument(
         "--reference",
@@ -273,13 +324,30 @@ def main(argv=None):
     parser.add_argument("--benchmark", default="AB:2")
     parser.add_argument("--benchmark-every", type=int, default=1)
     parser.add_argument("--benchmark-games", type=int, default=400)
+    parser.add_argument(
+        "--gauntlet",
+        default="",
+        help="comma-separated nets (.npz) or bot specs the new best also plays",
+    )
+    parser.add_argument("--gauntlet-games", type=int, default=200)
+    parser.add_argument(
+        "--live-data",
+        default="",
+        help="comma-separated folders of live value shards, to score each net on",
+    )
     parser.add_argument("--seed", type=int, default=3_000_000_000)
     parser.add_argument("--workers", type=int, default=None)
     args = parser.parse_args(argv)
     if not math.isfinite(args.setup_noise_scale) or args.setup_noise_scale <= 0:
         parser.error("--setup-noise-scale must be positive and finite")
+    if not 0 < args.full_rate <= 1:
+        parser.error("--full-rate must be in (0, 1]")
+    if args.full_rate < 1 and not args.fast_simulations:
+        parser.error("--full-rate below 1 needs --fast-simulations")
     args.reference = [r for r in args.reference.split(",") if r]
     args.extra_data = [d for d in args.extra_data.split(",") if d]
+    args.gauntlet = [g for g in args.gauntlet.split(",") if g]
+    args.live_data = [d for d in args.live_data.split(",") if d]
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     for var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
         os.environ.setdefault(var, "1")

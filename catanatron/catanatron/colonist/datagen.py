@@ -138,7 +138,11 @@ def load(paths):
     Bot shards (this module) and self-play shards (selfplay.py) can be mixed.
     Self-play rows have a search policy: they are listed in `pi`, and `soft`
     gives each row's index into `pi` (-1 for a row without one). `v`, the
-    search's value, is the game result for rows without a search."""
+    search's value, is the game result for rows without a search.
+
+    Rows from a quick search (`full` false, playout cap randomization) are
+    value targets only: no policy target, and the game result as their `v`,
+    since a quick search's value is too rough to mix in."""
     parts = [dict(np.load(p)) for p in sorted(paths)]
     offset, soft_offset = 0, 0
     for part in parts:
@@ -150,6 +154,10 @@ def load(paths):
         if "pi" in part:
             part["soft"] = np.arange(soft_offset, soft_offset + n, dtype=np.int64)
             soft_offset += n
+            if "full" in part:
+                quick = ~part["full"].astype(bool)
+                part["soft"][quick] = -1
+                part["v"] = np.where(quick, part["z"], part["v"]).astype(np.float16)
         else:
             part["soft"] = np.full(n, -1, np.int64)
     out = {}

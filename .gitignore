@@ -151,3 +151,4 @@ recorder/node_modules/
 /real_replays/
 /protocol.json
 *.log~
+/scripts/vm/workers.env
