@@ -39,6 +39,7 @@ from catanatron.models.enums import (
     DEVELOPMENT_CARDS,
     RESOURCES,
     VICTORY_POINT,
+    ActionPrompt,
     ActionRecord,
     ActionType,
 )
@@ -188,6 +189,7 @@ class Search:
         c_scale=1.0,
         rng=None,
         noise=True,
+        setup_noise_scale=1.0,
     ):
         self.net = net
         self.simulations = simulations
@@ -198,6 +200,9 @@ class Search:
         # Gumbel noise makes the root's choice a sample: right for self-play,
         # which should explore. Without it the search plays its best move.
         self.noise = noise
+        if not math.isfinite(setup_noise_scale) or setup_noise_scale <= 0:
+            raise ValueError("setup_noise_scale must be positive and finite")
+        self.setup_noise_scale = setup_noise_scale
         self.evaluations = 0
 
     # ----- building nodes
@@ -338,6 +343,17 @@ class Search:
         except StopIteration as done:
             return done.value
 
+    def root_gumbel(self, n, prompt):
+        """Scale setup settlement sampling without changing later moves."""
+        if not self.noise:
+            return np.zeros(n)
+        values = np.array(
+            [-math.log(-math.log(self.rng.random() or 1e-300)) for _ in range(n)]
+        )
+        if prompt == ActionPrompt.BUILD_INITIAL_SETTLEMENT:
+            values *= self.setup_noise_scale
+        return values
+
     def steps(self, game):
         """The search as a generator, so many searches can share network
         calls: it yields lists of new Decisions to evaluate (with
@@ -350,12 +366,7 @@ class Search:
             raise ValueError("search needs a position with a choice to make")
         yield [root]
         n = len(root.actions)
-        if self.noise:
-            gumbel = np.array(
-                [-math.log(-math.log(self.rng.random() or 1e-300)) for _ in range(n)]
-            )
-        else:
-            gumbel = np.zeros(n)
+        gumbel = self.root_gumbel(n, root.game.state.current_prompt)
         m = min(self.considered, n)
         candidates = list(np.argsort(-(gumbel + root.logits))[:m])
         # Sequential halving: equal visits per round to each candidate, then

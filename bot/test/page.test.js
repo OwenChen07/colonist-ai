@@ -56,13 +56,17 @@ const frame = Uint8Array.from([0x82, 0xa2, 0x69, 0x64, 0xa3, 0x31, 0x33, 0x30]);
   // back like any outgoing message.
   posted.length = 0;
   ws.readyState = FakeWebSocket.OPEN;
-  fromPage({ [TAG]: 'send', socket: 1, b64: Buffer.from([1, 2, 3]).toString('base64') });
+  fromPage({ [TAG]: 'send', socket: 1, b64: Buffer.from([1, 2, 3]).toString('base64'), sendId: 'move-a' });
   await new Promise((r) => setTimeout(r, 20));
   assert.deepStrictEqual(Array.from(ws.sent[1]), [1, 2, 3]);
   const echoed = posted.filter((p) => p[TAG] === 'to-relay').map((p) => p.msg);
-  assert.deepStrictEqual(echoed.map((m) => [m.dir, m.socket, m.b64]), [['out', 1, 'AQID']]);
+  assert(echoed.some((m) => m.kind === 'frame' && m.dir === 'out' && m.socket === 1 && m.b64 === 'AQID'));
+  assert(echoed.some((m) => m.kind === 'send-confirmed' && m.sendId === 'move-a'));
+  fromPage({ [TAG]: 'send', socket: 1, b64: 'AQID', sendId: 'move-a' });
+  assert.strictEqual(ws.sent.length, 2, 'retrying one command must not duplicate its move');
   fromPage({ [TAG]: 'send', socket: 7, b64: 'AQID' });  // unknown socket: nothing sent
   assert.strictEqual(ws.sent.length, 2);
+  assert(posted.some((p) => p.msg && p.msg.kind === 'send-failed' && p.msg.socket === 7));
   // ----- sequence numbers -----
   // A game message: header 3,1, channel "G1", then {action, payload, sequence}.
   const gameMsg = (action, seq) => {

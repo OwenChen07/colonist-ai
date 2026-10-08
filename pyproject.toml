@@ -21,6 +21,7 @@ dependencies = ["networkx", "click", "rich"]
 [project.optional-dependencies]
 gym = ["gymnasium<=0.29.1", "numpy", "pandas", "fastparquet", "pygame"]
 colonist = ["msgpack", "numpy", "websockets"]
+automation = ["playwright>=1.58"]
 train = ["torch"]
 web = [
     "gunicorn",

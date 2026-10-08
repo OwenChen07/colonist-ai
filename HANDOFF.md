@@ -17,7 +17,7 @@ colonist.io through a Chrome extension (`bot/`) and a local Python "bridge".
 ## 2. Rules for working in this repo (owner's requirements)
 
 - Before every commit: `.venv/bin/python -m black .` (the pinned black, not the one on
-  PATH) and the full `.venv/bin/python -m pytest -q` must pass (currently 497 tests).
+  PATH) and the full `.venv/bin/python -m pytest -q` must pass (currently 505 tests).
 - Commit messages end with: `Co-Authored-By: Claude <noreply@anthropic.com>` (use your
   own attribution line if the owner prefers; ask).
 - **Never commit `captures/` or `records/`** (real usernames and chat). Never print or
@@ -98,16 +98,57 @@ all 15 before a settlement. Analysis of that game (`captures/bridge-20261006-162
 - Another observed mistake (40k net, win vs Easy bot): ended turn holding exactly a
   city (search split 42% end turn / 42% + 17% city at two spots).
 
-**Proposed next steps (not started; owner hadn't chosen yet):**
-1. Measurement script: over a few hundred simulated games (vs AlphaBeta and self),
-   count openings missing a resource (no tile and no port), roads/wood trades while one
-   resource short of a settlement, ending turn with a city/settlement available, and
-   win rate in those games. Also run it on live captures. Then add these as per-round
-   diagnostics in `loop.py`'s benchmark.
-2. Opening exploration in self-play: more randomness for setup moves in self-play only
-   (e.g. larger Gumbel noise / temperature at setup), so it learns the value of openings
-   it avoids. Standard AlphaZero remedy.
-3. Only if needed: 200 self-play sims; a settlement-first reference bot as an opponent;
+**Measurement (implemented locally 6 Oct; not yet uploaded to the VM):**
+`python -m catanatron.colonist.diagnostics --a Z:runs/sp1/best.npz:100 --b AB:2
+--games 200 --workers 4` measures paired simulated games; set `--b` equal to `--a`
+for self-play. `--captures 'captures/*.json'` converts and verifies live captures,
+deduplicates repeated saves of one game, and reports the recording account separately.
+`--json PATH` saves the aggregate report (no usernames or chat). It counts opening
+resource gaps, road and wood-trade decisions while exactly one settlement card is
+missing and a site is open, four ore for wood while sheep is missing, and turns ended
+with a legal city or settlement. Each event includes the win rate in affected games.
+`loop.py` now saves `round_NNN/benchmark-diagnostics.json` when its benchmark runs;
+the running VM still has the older code and will not emit this file until updated.
+
+First local 200-game sample at 100 simulations: the net beat AB:2 in 155 games
+(77.5% ± 5.6%); it opened without sheep production in 103/200 games, vs 1/200
+for AB:2. Its win rate was 71.8% in those 103 games, versus 83.5% in the other
+97 (association, not a controlled effect). Across 77 live capture files, 16
+distinct traces replayed cleanly (9 reached a winner); 56 files were duplicate
+saves and 5 could not be verified. The recording account opened without sheep
+production in 11 of those 16 and made 5 four-ore-for-wood trades while holding
+no sheep and having an open settlement site.
+In a separate 200-game net-vs-itself paired sample, the two seats together
+opened without sheep production 164/400 times (41%), built 1,558 roads while
+one settlement card short, and ended a turn with a legal city 20 times.
+Restricting live files to bridge captures gives 13 distinct verified traces,
+8 with a winner; the bot account missed sheep production in 11/13.
+
+**Setup exploration (implemented locally 6 Oct; not yet uploaded to the VM):**
+`selfplay.py` and `loop.py` accept `--setup-noise-scale` (default 1). A value such
+as 2 scales Gumbel noise only for initial settlement choices in self-play;
+initial roads, later moves, evaluation, and live play retain their defaults.
+Each data folder stores `setup-exploration.json` and refuses to resume shards
+at a different scale. Use a new run directory for a controlled trial. On 100
+boards at 10 simulations for setup only, scale 2 changed 129/200 seat openings
+and reduced sheep-free openings from 82/200 to 73/200. This checks that the
+flag affects choices; it says nothing yet about trained playing strength.
+
+**One-round local trial started 6 Oct:** `runs/setup_40k_noise2` starts from
+`models/ab2_40k/net.npz`, with 5,000 self-play games, 100 simulations,
+`--setup-noise-scale 2`, two workers, opponents `AB:2,F`, and `data/ab2` added
+to training. The exact settings are in `runs/setup_40k_noise2/run-config.json`.
+The first two shards (128 games) completed at about 0.52 games/s with 43%
+system memory free. It runs under `caffeinate -i` in a Codex terminal session.
+If interrupted, resume with the same flags and run directory, omitting `--init`.
+The original cloud trainer was left running. A separate 4-core VM was created
+for this trial but deleted after automatic approval review rejected copying
+the code, simulated data, and model to it; no payload reached that VM.
+
+**Proposed next steps:**
+1. Train a trial from the same checkpoint with setup scale 2, then compare it
+   against the unchanged checkpoint and AlphaBeta on paired boards.
+2. Only if needed: 200 self-play sims; a settlement-first reference bot as an opponent;
    last resort, a hand rule (opening must reach all 5 resources or a port).
 The VM loop can be stopped and restarted with new flags at any time; it resumes.
 

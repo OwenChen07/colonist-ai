@@ -1,0 +1,12 @@
+{
+  "name": "colonist-ai-spectator",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "check": "node --check public/app.js && node --check api/live.js && node --check api/ingest.js"
+  },
+  "dependencies": {
+    "@vercel/blob": "^2.6.1"
+  }
+}

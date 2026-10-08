@@ -18,6 +18,7 @@
   const TAG = 'colonist-ai-bot';
   const backlog = [];
   const sockets = {};  // id -> [socket, its original send]
+  const sentCommands = new Set();  // retries with one ID never send twice
   let nextId = 0;
 
   function toBase64(buf) {
@@ -133,10 +134,15 @@
   // colonist's client would send) and names the game's socket. It goes out
   // through that socket's original send, so it is copied back to the bridge
   // like any message the page sends.
-  function sendMove(id, b64) {
+  function sendMove(id, b64, sendId) {
+    if (sendId && sentCommands.has(sendId)) {
+      window.postMessage({ [TAG]: 'to-relay', msg: { kind: 'send-confirmed', sendId } }, '*');
+      return true;
+    }
     const entry = sockets[id];
     if (!entry || entry[0].readyState !== NativeWebSocket.OPEN) {
       console.warn('[colonist-ai bot] game socket not open; move not sent');
+      window.postMessage({ [TAG]: 'to-relay', msg: { kind: 'send-failed', socket: id, sendId, reason: 'game socket not open' } }, '*');
       return false;
     }
     const raw = atob(b64);
@@ -146,8 +152,17 @@
     // colonist's client did in the recorded game (2).
     if (lastSequence === null) lastSequence = 1;
     const out = renumber(bytes.buffer, false);
+    try {
+      entry[1].call(entry[0], new Uint8Array(out));
+    } catch (e) {
+      window.postMessage({ [TAG]: 'to-relay', msg: { kind: 'send-failed', socket: id, sendId, reason: 'game socket send failed' } }, '*');
+      return false;
+    }
     forward('out', out, id);
-    entry[1].call(entry[0], new Uint8Array(out));
+    if (sendId) {
+      sentCommands.add(sendId);
+      window.postMessage({ [TAG]: 'to-relay', msg: { kind: 'send-confirmed', sendId } }, '*');
+    }
     return true;
   }
 
@@ -162,7 +177,7 @@
       }
       window.postMessage({ [TAG]: 'to-relay', msg: { kind: 'replay-done' } }, '*');
     } else if (e.data[TAG] === 'send') {
-      sendMove(e.data.socket, e.data.b64);
+      sendMove(e.data.socket, e.data.b64, e.data.sendId);
     } else if (e.data[TAG] === 'new-game') {
       lastSequence = null;  // the client counts game messages afresh per game
     }

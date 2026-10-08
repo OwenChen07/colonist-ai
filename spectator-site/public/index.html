@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#101b24" />
+    <meta name="description" content="Watch Colonist AI's ranked games and follow verified results by model version." />
+    <title>Colonist AI — live table</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <header class="site-header">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+          <div><strong>COLONIST <em>AI</em></strong><small>Ranked 1v1 observatory</small></div>
+        </div>
+        <div class="header-right">
+          <span class="feed-status" id="feedStatus"><span class="status-dot"></span> Connecting</span>
+          <span class="header-clock" id="headerClock">—</span>
+        </div>
+      </header>
+
+      <main>
+        <section class="intro">
+          <div class="eyebrow"><span class="tiny-diamond"></span> THE LIVE TABLE <span class="eyebrow-rule"></span> RANKED / HUMAN OPPONENTS</div>
+          <div class="intro-row">
+            <div>
+              <h1>Watch the bot<br /><i>make its move.</i></h1>
+              <p class="intro-copy">A live, public view of the board and a verified record of how each model performs against people.</p>
+            </div>
+            <div class="intro-meta">
+              <span class="meta-label">NOW PLAYING</span>
+              <strong id="nowVersion">Awaiting game</strong>
+              <span id="nowDetail">The table will appear when the cloud bot starts a match.</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="overview" aria-label="Overview statistics">
+          <div class="overview-item"><span>VERIFIED GAMES</span><strong id="totalGames">—</strong><small>ranked games against humans</small></div>
+          <div class="overview-item"><span>OVERALL WIN RATE</span><strong id="overallRate">—</strong><small id="overallRecord">from verified results</small></div>
+          <div class="overview-item"><span>LATEST MODEL</span><strong id="latestModel">—</strong><small>promoted training round</small></div>
+          <div class="overview-item update-item"><span>LAST SIGNAL</span><strong id="lastSignal">—</strong><small>board updates periodically</small></div>
+        </section>
+
+        <div class="main-grid">
+          <section class="board-card" aria-label="Spectator board">
+            <div class="card-heading">
+              <div><span class="section-index">01 / LIVE BOARD</span><h2 id="boardTitle">The table</h2></div>
+              <span class="round-pill" id="boardPill">WAITING</span>
+            </div>
+            <div class="board-wrap" id="boardWrap">
+              <svg id="board" viewBox="-5.8 -5.2 11.6 10.4" role="img" aria-label="Catan board with roads, buildings and robber"></svg>
+              <div class="board-empty" id="boardEmpty"><span class="empty-hex">⬡</span><strong>Waiting for the next position</strong><small>Verified game state will be drawn here.</small></div>
+              <div class="board-corner-label">BOARD VIEW <span>·</span> HIDDEN CARDS OMITTED</div>
+            </div>
+            <div class="timeline">
+              <div class="timeline-top"><div><span class="timeline-icon">↶</span><strong>Move rewind</strong><small id="timelineDetail">Replay the current game</small></div><button class="live-button" id="returnLive" disabled><span class="status-dot"></span> Return to latest</button></div>
+              <input type="range" id="timelineSlider" min="0" max="0" value="0" disabled aria-label="Replay position" />
+              <div class="timeline-labels"><span id="timelineStart">OPENING</span><span id="timelinePosition">WAITING</span><span>LATEST</span></div>
+            </div>
+          </section>
+
+          <aside class="side-column">
+            <section class="score-card">
+              <div class="card-heading compact"><div><span class="section-index">02 / MATCH</span><h2>At the table</h2></div></div>
+              <div id="playerCards" class="player-cards"><p class="empty-copy">Player scores appear when a game is live.</p></div>
+              <div class="turn-bar"><span>CURRENT TURN</span><strong id="currentTurn">—</strong></div>
+              <div class="turn-bar"><span>MOVE</span><strong id="moveNumber">—</strong></div>
+            </section>
+            <section class="moves-card">
+              <div class="card-heading compact"><div><span class="section-index">03 / ACTIVITY</span><h2>Recent moves</h2></div></div>
+              <ol id="moveList" class="move-list"><li class="empty-copy">Moves will appear here as the match progresses.</li></ol>
+            </section>
+          </aside>
+        </div>
+
+        <section class="performance" aria-label="Performance by model version">
+          <div class="section-heading"><div><span class="section-index">04 / MODEL RECORD</span><h2>Results, by version.</h2><p>Only finished games with a verified capture count toward these numbers.</p></div><span class="section-aside">RANKED 1V1 <span>↗</span></span></div>
+          <div id="versionStats" class="version-stats"><div class="stats-empty">Version results will appear after verified matches are synced.</div></div>
+        </section>
+
+        <section class="history" aria-label="Recent game results">
+          <div class="section-heading"><div><span class="section-index">05 / MATCH ARCHIVE</span><h2>Recent results</h2></div></div>
+          <div id="gameHistory" class="history-list"><div class="stats-empty">Recent results will appear here.</div></div>
+        </section>
+      </main>
+
+      <footer><span>COLONIST AI <span class="footer-separator">/</span> LIVE TABLE</span><span>Board positions are reconstructed from checked game state. No hidden cards, chat or account data are published.</span></footer>
+    </div>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

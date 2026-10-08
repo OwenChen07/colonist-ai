@@ -30,7 +30,7 @@
 
   function onBridge(msg) {
     if (msg.kind === 'send') {
-      window.postMessage({ [TAG]: 'send', socket: msg.socket, b64: msg.b64 }, '*');
+      window.postMessage({ [TAG]: 'send', socket: msg.socket, b64: msg.b64, sendId: msg.sendId }, '*');
       return;
     }
     if (msg.kind === 'new-game') {

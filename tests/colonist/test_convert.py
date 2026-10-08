@@ -99,6 +99,95 @@ def test_unknown_log_entry_stops_the_record(frames):
     assert replay(conv.record).applied == len(conv.record["log"])
 
 
+def test_bank_shortage_notice_does_not_stop_conversion(frames):
+    notice = {
+        "type": 146,
+        "cardNumber": 3,
+        "count": 4,
+        "bankCount": 3,
+        "distributedCount": 0,
+        "playerColors": [1, 5],
+    }
+    conv = convert(with_extra_log_entry(frames, notice))
+    assert not conv.unsupported
+    assert replay(conv.record).ok
+
+
+def test_piece_notice_before_matching_setup_road_is_informational(frames):
+    frames = copy.deepcopy(frames)
+    diff = next(
+        f
+        for f in frames
+        if f.type == 91
+        and any(
+            e.get("text", {}).get("type") == 4
+            and e.get("text", {}).get("pieceEnum") == 0
+            for e in f.data["data"]["payload"]["diff"].get("gameLogState", {}).values()
+        )
+    )
+    logs = diff.data["data"]["payload"]["diff"]["gameLogState"]
+    road = next(
+        e["text"] for e in logs.values() if e.get("text", {}).get("pieceEnum") == 0
+    )
+    logs[str(min(map(int, logs)) - 1)] = {
+        "text": {"type": 72, "pieceEnum": 0, "playerColor": road["playerColor"]}
+    }
+    conv = convert(frames)
+    assert not conv.unsupported
+    assert replay(conv.record).ok
+
+
+def test_piece_notice_before_matching_setup_settlement_is_informational(frames):
+    frames = copy.deepcopy(frames)
+    diff = next(
+        f
+        for f in frames
+        if f.type == 91
+        and any(
+            e.get("text", {}).get("type") == 4
+            and e.get("text", {}).get("pieceEnum") == 2
+            for e in f.data["data"]["payload"]["diff"].get("gameLogState", {}).values()
+        )
+    )
+    logs = diff.data["data"]["payload"]["diff"]["gameLogState"]
+    settlement = next(
+        e["text"] for e in logs.values() if e.get("text", {}).get("pieceEnum") == 2
+    )
+    logs[str(min(map(int, logs)) - 1)] = {
+        "text": {"type": 87, "pieceEnum": 2, "playerColor": settlement["playerColor"]}
+    }
+    conv = convert(frames)
+    assert not conv.unsupported
+    assert replay(conv.record).ok
+
+
+def test_partially_distributed_bank_shortage_for_one_player_is_informational(frames):
+    notice = {
+        "type": 146,
+        "cardEnum": 4,
+        "count": 2,
+        "bankCount": 1,
+        "distributedCount": 1,
+        "playerColors": [1],
+    }
+    conv = convert(with_extra_log_entry(frames, notice))
+    assert not conv.unsupported
+    assert replay(conv.record).ok
+
+
+def test_invalid_partial_bank_distribution_stops(frames):
+    notice = {
+        "type": 146,
+        "count": 2,
+        "bankCount": 1,
+        "distributedCount": 1,
+        "playerColors": [1, 5],
+    }
+    conv = convert(with_extra_log_entry(frames, notice))
+    assert conv.ended == "unsupported"
+    assert "bank shortage with distribution" in conv.unsupported[0]
+
+
 def test_capture_without_game_start_is_rejected(frames):
     with pytest.raises(ConvertError):
         convert([f for f in frames if f.type != 4])

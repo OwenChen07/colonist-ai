@@ -5,8 +5,10 @@ from catanatron.state import (
 from catanatron.state_functions import (
     buy_dev_card,
     get_largest_army,
+    maintain_longest_road,
     play_dev_card,
     player_deck_replenish,
+    player_key,
 )
 from catanatron.models.player import SimplePlayer, Color
 from catanatron.models.enums import KNIGHT, ORE, SHEEP, WHEAT
@@ -66,6 +68,20 @@ def test_longest_road_tie():
     assert board.road_color is Color.BLUE
     assert board.road_length == 6
     assert board.road_lengths == {Color.RED: 5, Color.BLUE: 6}
+
+
+def test_longest_road_points_are_revoked_when_cut_below_five():
+    state = State([SimplePlayer(Color.RED), SimplePlayer(Color.BLUE)])
+    key = player_key(state, Color.RED)
+    state.player_state[f"{key}_HAS_ROAD"] = True
+    state.player_state[f"{key}_VICTORY_POINTS"] += 2
+    state.player_state[f"{key}_ACTUAL_VICTORY_POINTS"] += 2
+
+    maintain_longest_road(state, Color.RED, None, {Color.RED: 4, Color.BLUE: 4})
+
+    assert state.player_state[f"{key}_HAS_ROAD"] is False
+    assert state.player_state[f"{key}_VICTORY_POINTS"] == 0
+    assert state.player_state[f"{key}_ACTUAL_VICTORY_POINTS"] == 0
 
 
 # test: complicated circle around

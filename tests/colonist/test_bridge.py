@@ -1,8 +1,12 @@
 """Phase 4: following a colonist game live, and the bridge to the extension."""
 
 import asyncio
+import base64
+import copy
 import json
 import os
+import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -392,6 +396,33 @@ def test_saves_each_game_as_a_capture_without_the_reconnect_token(tmp_path):
     assert bridge.channel == "AB"
 
 
+def test_capture_rewrite_keeps_previous_json_readable_until_complete(
+    tmp_path, monkeypatch
+):
+    bridge = Bridge.__new__(Bridge)
+    bridge.save_dir = str(tmp_path)
+    bridge.live = object()
+    bridge.frames = [{"seq": 0, "t": 1, "dir": "open", "socket": 0, "text": ""}]
+    bridge.saved_path = None
+    path = bridge.save()
+    original = json.load(open(path))
+
+    real_dump = json.dump
+
+    def interrupted_dump(doc, stream):
+        stream.write('{"format":')
+        assert json.load(open(path)) == original
+        stream.seek(0)
+        stream.truncate()
+        real_dump(doc, stream)
+
+    monkeypatch.setattr(json, "dump", interrupted_dump)
+    bridge.frames.append({"seq": 1, "t": 2, "dir": "close", "socket": 0})
+    assert bridge.save() == path
+    assert len(json.load(open(path))["messages"]) == 2
+    assert not list(tmp_path.glob(".bridge-*.json"))
+
+
 def test_timeout_names_what_colonist_sent_instead():
     import base64
 
@@ -407,6 +438,183 @@ def test_timeout_names_what_colonist_sent_instead():
     ping = base64.b64encode(msgpack.packb({"data": {"type": 999}})).decode()
     replies = bridge.handle({"kind": "frame", "dir": "in", "b64": ping})
     assert "message types: 999" in replies[-1]["text"]
+
+
+def test_reconnect_retries_unconfirmed_end_turn_on_new_socket_once():
+    import base64
+
+    import msgpack
+
+    from catanatron.colonist.capture import decode
+
+    bridge = Bridge(random_net(hidden=(8,)), 2, play=True, encode=_fake_encode)
+    bridge.choose = _player_of_record("capture_full_game")
+    bridge.reset()
+    start = None
+    for message in _messages("capture_full_game"):
+        frame = decode({**message, "seq": 0, "socket": 1})
+        if frame.type == C.GAME_STATE and isinstance(
+            frame.data["data"].get("payload"), dict
+        ):
+            start = frame.data["data"]["payload"]
+        bridge.handle({**message, "socket": 1})
+        if bridge.expect and bridge.expect[1][0]["type"] == "END_TURN":
+            break
+    assert start is not None and bridge.expect is not None
+
+    snapshot = copy.deepcopy(start)
+    cur = snapshot["gameState"]["currentState"]
+    cur["completedTurns"] = bridge.live.conv.completed
+    cur["currentTurnPlayerColor"] = bridge.live.conv.current
+    snapshot["gameState"]["gameLogState"] = {}
+    b64 = base64.b64encode(
+        msgpack.packb({"id": "1", "data": {"type": 4, "payload": snapshot}})
+    ).decode()
+    reconnect = {"kind": "frame", "dir": "in", "socket": 2, "b64": b64}
+    assert not [
+        r for r in bridge.handle({**reconnect, "replay": True}) if r["kind"] == "send"
+    ]
+    replies = bridge.handle(reconnect)
+    assert [r["socket"] for r in replies if r["kind"] == "send"] == [2]
+    assert bridge.expect is not None and bridge.retry_count == 1
+    replies = bridge.handle({**reconnect, "socket": 3})
+    assert not [r for r in replies if r["kind"] == "send"]
+    assert any(r["kind"] == "status" and r["state"] == "stopped" for r in replies)
+
+
+def test_same_game_snapshot_stops_if_player_becomes_spectator():
+    import base64
+
+    import msgpack
+
+    from catanatron.colonist.capture import decode
+
+    bridge = Bridge(random_net(hidden=(8,)), 2)
+    bridge.reset()
+    start = next(
+        message
+        for message in _messages("capture_full_game")
+        if decode({**message, "seq": 0, "socket": 1}).type == C.GAME_STATE
+    )
+    bridge.handle({**start, "socket": 1})
+    snapshot = copy.deepcopy(
+        decode({**start, "seq": 0, "socket": 1}).data["data"]["payload"]
+    )
+    snapshot["playerColor"] = 0
+    b64 = base64.b64encode(
+        msgpack.packb({"id": "1", "data": {"type": 4, "payload": snapshot}})
+    ).decode()
+    replies = bridge.handle({"kind": "frame", "dir": "in", "socket": 2, "b64": b64})
+    assert any(
+        r.get("state") == "stopped" and "spectator" in r["text"] for r in replies
+    )
+
+
+def test_robber_placement_waits_for_delayed_steal_log():
+    bridge = Bridge(None, play=True, move_timeout=15)
+    bridge.live = SimpleNamespace(
+        conv=SimpleNamespace(you=1, pending_robber=(1, [0, 0, 0])),
+        tile_of_cube={(0, 0, 0): 6},
+        error=None,
+    )
+    plan = [{"type": "MOVE_ROBBER", "tile": 6, "label": "robber to tile 6"}]
+    bridge.expect = (0, plan, time.time() - 16)
+    assert bridge.check_timeout() == []
+    assert bridge.live.error is None
+    bridge.expect = (0, plan, time.time() - 76)
+    assert bridge.check_timeout()[-1]["state"] == "stopped"
+
+
+def test_acknowledged_road_without_board_effect_retries_only_once():
+    bridge = Bridge(None, play=True, move_timeout=15)
+    bridge.live = SimpleNamespace(
+        bot_to_move=True,
+        position_key=42,
+        error=None,
+    )
+    bridge.socket = 1
+    bridge.expect = (
+        42,
+        [{"type": "BUILD_ROAD", "edge": 12, "label": "road on edge 12"}],
+        time.time() - 8,
+    )
+    bridge.sent_raws = [b"road request"]
+
+    replies = bridge.check_timeout()
+    assert [r["kind"] for r in replies] == ["status", "send"]
+    assert bridge.no_effect_retry
+    bridge.handle({"kind": "send-confirmed", "sendId": replies[1]["sendId"]})
+    assert bridge.check_timeout() == []
+
+    bridge.expect = (42, bridge.expect[1], time.time() - 16)
+    assert bridge.check_timeout()[-1]["state"] == "stopped"
+
+
+def test_page_reports_unsent_move_immediately():
+    bridge = Bridge(random_net(hidden=(8,)), 2, play=True, encode=_fake_encode)
+    bridge.choose = _player_of_record("capture_full_game")
+    bridge.reset()
+    for message in _messages("capture_full_game"):
+        replies = bridge.handle({**message, "socket": 1})
+        if bridge.expect:
+            break
+    assert bridge.expect is not None
+    send_id = next(r["sendId"] for r in replies if r["kind"] == "send")
+    replies = bridge.handle(
+        {
+            "kind": "send-failed",
+            "socket": 1,
+            "sendId": send_id,
+            "reason": "game socket not open",
+        }
+    )
+    assert bridge.expect is None
+    assert replies[-1]["state"] == "stopped"
+    assert "game socket not open" in replies[-1]["text"]
+
+
+def test_unacknowledged_browser_send_retries_once_with_same_id():
+    bridge = Bridge(random_net(hidden=(8,)), 2, play=True, encode=_fake_encode)
+    bridge.choose = _player_of_record("capture_full_game")
+    bridge.reset()
+    for message in _messages("capture_full_game"):
+        replies = bridge.handle({**message, "socket": 1})
+        if bridge.expect:
+            break
+    sent = next(r for r in replies if r["kind"] == "send")
+    bridge.pending_sends[sent["sendId"]][1] -= 3
+    retries = bridge.check_timeout()
+    assert retries == [sent]
+    assert bridge.pending_sends[sent["sendId"]][2] == 1
+    bridge.handle({"kind": "send-confirmed", "sendId": sent["sendId"]})
+    assert not bridge.pending_sends
+    assert not bridge.check_timeout()
+
+
+def test_outgoing_frame_confirms_send_when_old_page_has_no_ack():
+    from catanatron.colonist.capture import pack_client
+
+    bridge = Bridge(random_net(hidden=(8,)), 2, play=True, encode=_fake_encode)
+    bridge.choose = _player_of_record("capture_full_game")
+    bridge.reset()
+    for message in _messages("capture_full_game"):
+        replies = bridge.handle({**message, "socket": 1})
+        if bridge.expect:
+            break
+    bridge.send_replies(
+        [pack_client((3, 1), "game", {"action": 3, "payload": 14, "sequence": 0})]
+    )
+    actual = pack_client((3, 1), "game", {"action": 3, "payload": 14, "sequence": 85})
+    bridge.handle(
+        {
+            "kind": "frame",
+            "dir": "out",
+            "socket": 1,
+            "b64": base64.b64encode(actual).decode(),
+        }
+    )
+    assert not bridge.pending_sends
+    assert not bridge.check_timeout()
 
 
 def _join(bridge):

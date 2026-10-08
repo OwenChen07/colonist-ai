@@ -114,7 +114,7 @@ def decision_of(action: Action, playable_actions) -> Action:
     return action
 
 
-def replay(record, name="record") -> ReplayReport:
+def replay(record, name="record", observer=None) -> ReplayReport:
     log = resolve_hidden_draws(record)
     report = ReplayReport(name=name, entries=len(log))
     if record.get("incomplete"):
@@ -124,6 +124,8 @@ def replay(record, name="record") -> ReplayReport:
         checks.setdefault(check["at"], []).append(check)
 
     game = game_for_record(record)
+    if observer is not None:
+        observer.before(game)
     dice = game.state.dice
     _run_checks(game, checks.get(0, []), report)
     for i, (payload, result) in enumerate(log):
@@ -137,6 +139,8 @@ def replay(record, name="record") -> ReplayReport:
             break
         mode_before = dice.mode if dice is not None else None
         try:
+            if observer is not None:
+                observer.step(game, decision)
             game.execute(
                 decision,
                 validate_action=False,
@@ -153,6 +157,8 @@ def replay(record, name="record") -> ReplayReport:
     if dice is not None:
         report.dice_mode = dice.mode
     winner = game.winning_color()
+    if observer is not None:
+        observer.after(game)
     report.winner = winner.value if winner else None
     if report.ok and record.get("winner") and record["winner"] != report.winner:
         report.errors.append(

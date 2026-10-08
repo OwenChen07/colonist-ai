@@ -47,7 +47,9 @@ import json
 import os
 import random
 import sys
+import tempfile
 import time
+import uuid
 
 import msgpack
 
@@ -55,7 +57,7 @@ import numpy as np
 
 from catanatron.colonist import convert as C
 from catanatron.colonist import encode as E
-from catanatron.colonist.capture import FORMAT, decode
+from catanatron.colonist.capture import FORMAT, decode, unpack_client
 from catanatron.colonist.live import LiveGame
 from catanatron.models.enums import ActionType
 from catanatron.serialization import action_from_json
@@ -98,6 +100,7 @@ class Bridge:
         move_timeout=15.0,
         encode=None,
         save_dir=None,
+        spectator_state=None,
     ):
         self.net = net
         self.simulations = simulations
@@ -119,9 +122,19 @@ class Bridge:
         )
         self.seq = 0
         self.save_dir = save_dir
+        self.snapshot_writer = None
+        if spectator_state:
+            from catanatron.colonist.spectator import SnapshotWriter
+
+            self.snapshot_writer = SnapshotWriter(spectator_state)
         self.frames = []  # this game's messages, for save()
         self.saved_path = None
         self.since_sent = []  # message types colonist sent since the last move
+        self.last_log_id = -1  # highest Colonist game-log id seen in a diff
+        self.retry_count = 0  # a pending end turn may be retried once on reconnect
+        self.no_effect_retry = False  # retry one acknowledged road with no board effect
+        self.sent_raws = []
+        self.pending_sends = {}  # sendId -> (reply, last sent, retries)
         self.offers = {}  # open trade offers between players: id -> offer
         self.declined = set()  # offer ids the bot has declined
 
@@ -129,6 +142,11 @@ class Bridge:
         self.live, self.answered, self.expect = None, None, None
         self.offers, self.declined = {}, set()
         self.channel = self.game_id = None
+        self.last_log_id = -1
+        self.retry_count = 0
+        self.no_effect_retry = False
+        self.sent_raws = []
+        self.pending_sends = {}
         return [self.status("waiting", "waiting for a game to start")]
 
     @staticmethod
@@ -140,7 +158,21 @@ class Bridge:
         failure stops the bot for this game (with the error in the status)
         instead of dropping the connection."""
         try:
-            return self._handle(message)
+            replies = self._handle(message)
+            if (
+                self.snapshot_writer
+                and self.live
+                and (not message.get("replay") or message.get("kind") == "replay-done")
+            ):
+                try:
+                    self.snapshot_writer.update(
+                        self.live,
+                        force=self.live.over or bool(self.live.error),
+                    )
+                except Exception as error:
+                    # Spectator publishing must never stop or change ranked play.
+                    print(f"spectator snapshot failed: {error!r}", file=sys.stderr)
+            return replies
         except Exception as e:
             import traceback
 
@@ -149,6 +181,7 @@ class Bridge:
             if self.live is not None:
                 self.live.error = where
             self.expect = None
+            self.pending_sends.clear()
             return [self.status("stopped", where)]
 
     def _handle(self, message):
@@ -156,9 +189,27 @@ class Bridge:
         if kind == "reset":
             return self.reset()
         if kind == "replay-done":
-            if not self.live or self.live.error:
+            if not self.live:
                 return []
+            if self.live.error:
+                # Save the full replay backlog, including frames that arrived
+                # after the fault, so recovery can tell whether the game ended.
+                return [self.status("stopped", self.live.error)]
             return self.decline_offers() + self.think()
+        if kind == "send-confirmed":
+            self.pending_sends.pop(message.get("sendId"), None)
+            return []
+        if (
+            kind == "send-failed"
+            and self.expect is not None
+            and message.get("sendId") in self.pending_sends
+        ):
+            self.live.error = (
+                f"could not send move: {message.get('reason', 'unknown error')}"
+            )
+            self.expect = None
+            self.pending_sends.clear()
+            return [self.status("stopped", self.live.error)]
         if kind != "frame":
             return []
         self.seq += 1
@@ -171,6 +222,35 @@ class Bridge:
                 "socket": message.get("socket", 0),
             }
         )
+        if frame.dir == "out" and not message.get("replay"):
+            # The page can still be running an older extension script that
+            # echoes the sent frame but does not send send-confirmed.  The
+            # echo is direct evidence that the browser sent these bytes; do
+            # not retry a move merely because its separate ack was lost.
+            sent = frame.data if isinstance(frame.data, dict) else None
+            if sent and sent.get("header") == [3, 1]:
+                body = sent.get("body") or {}
+                for send_id, (reply, _, _) in list(self.pending_sends.items()):
+                    if frame.socket != reply["socket"]:
+                        continue
+                    planned = unpack_client(base64.b64decode(reply["b64"]))
+                    observed = (
+                        sent.get("channel"),
+                        body.get("action"),
+                        body.get("payload"),
+                    )
+                    expected = (
+                        (
+                            planned["channel"],
+                            planned["body"].get("action"),
+                            planned["body"].get("payload"),
+                        )
+                        if planned
+                        else None
+                    )
+                    if observed == expected:
+                        self.pending_sends.pop(send_id, None)
+                        break
         if frame.dir != "in":
             return []
         replaying = bool(message.get("replay"))
@@ -185,9 +265,23 @@ class Bridge:
                 return []  # same message type, another layout: not a game start
             game_id = (payload.get("gameSettings") or {}).get("id")
             if self.live is not None and not self.live.over and game_id == self.game_id:
-                # colonist resends the whole game during play; the game is
-                # already followed update by update, and rebuilding from a
-                # mid-game snapshot would lose the moves before it.
+                if payload.get("playerColor") != self.live.conv.you:
+                    self.live.error = (
+                        "cloud browser lost player control and is now a spectator"
+                    )
+                    return [self.status("stopped", self.live.error)]
+                # A reconnect may skip diffs while the socket is down. Recover
+                # the missing log entries and board changes from the full
+                # snapshot, while retaining the history we already followed.
+                if message.get("socket") != self.socket and not (
+                    replaying and self.expect
+                ):
+                    self.socket = message.get("socket")
+                    if not replaying and self.expect is not None:
+                        return self.retry_after_reconnect(payload)
+                self.reconcile_snapshot(payload)
+                if self.live.error:
+                    return [self.status("stopped", self.live.error)]
                 return self.check_timeout()
             self.game_id = game_id
             if self.live is not None:
@@ -196,6 +290,14 @@ class Bridge:
                 self.frames, self.saved_path = self.frames[-1:], None
             self.live = LiveGame(payload, frame.t)
             self.answered, self.expect = None, None
+            self.pending_sends.clear()
+            self.last_log_id = max(
+                (int(k) for k in payload["gameState"].get("gameLogState", {})),
+                default=-1,
+            )
+            self.retry_count = 0
+            self.no_effect_retry = False
+            self.sent_raws = []
             self.offers, self.declined = {}, set()
             self.socket = message.get("socket")
             if not self.live.error and in_progress(payload):
@@ -222,6 +324,13 @@ class Bridge:
         self.track_offers(frame)
         declines = [] if replaying else self.decline_offers()
         before = self.live.position_key
+        if frame.type == C.DIFF:
+            logs = (
+                (frame.data["data"].get("payload") or {})
+                .get("diff", {})
+                .get("gameLogState", {})
+            )
+            self.last_log_id = max([self.last_log_id, *(int(k) for k in logs)])
         if not self.live.apply(frame):
             return declines + self.check_timeout()
         if self.live.error:
@@ -236,6 +345,107 @@ class Bridge:
         if stop:
             return declines + stop
         return declines + ([] if replaying else self.think())
+
+    def reconcile_snapshot(self, payload):
+        """Apply the part of a same-game snapshot missed during a reconnect."""
+        state = payload["gameState"]
+        logs = state.get("gameLogState") or {}
+        new_logs = {k: v for k, v in logs.items() if int(k) > self.last_log_id}
+        if not new_logs:
+            return  # an old or duplicate snapshot must not roll back the game
+        board = state.get("mapState") or {}
+        old = self.live.conv
+        corners = {
+            k: v
+            for k, v in (board.get("tileCornerStates") or {}).items()
+            if v.get("owner") != old.corners.get(k, {}).get("owner")
+            or v.get("buildingType") != old.corners.get(k, {}).get("buildingType")
+        }
+        edges = {
+            k: v
+            for k, v in (board.get("tileEdgeStates") or {}).items()
+            if v.get("owner") != old.edges.get(k, {}).get("owner")
+            or v.get("type") != old.edges.get(k, {}).get("type")
+        }
+        if not (new_logs or corners or edges):
+            return
+        diff = {
+            "gameLogState": new_logs,
+            "mapState": {"tileCornerStates": corners, "tileEdgeStates": edges},
+            "currentState": state.get("currentState") or {},
+        }
+        # Full player snapshots include hidden card placeholders (resource 0)
+        # that are not safe to turn into hand checks. Later diffs check cards.
+        if (
+            state.get("mechanicRobberState", {}).get("locationTileIndex")
+            != old.robber_tile
+        ):
+            diff["mechanicRobberState"] = state["mechanicRobberState"]
+        try:
+            old.apply(diff)
+            self.live._rebuild()
+        except Exception as error:
+            self.live.error = f"could not reconcile game snapshot: {error}"
+            return
+        self.last_log_id = max([self.last_log_id, *(int(k) for k in new_logs)])
+
+    def retry_after_reconnect(self, payload):
+        """Resend a lost end turn only when the new full snapshot is unchanged."""
+        _, plan, _ = self.expect
+        cur = payload["gameState"].get("currentState", {})
+        logs = payload["gameState"].get("gameLogState", {})
+        new_logs = [
+            e.get("text", {}).get("type")
+            for k, e in logs.items()
+            if int(k) > self.last_log_id
+        ]
+        unchanged = (
+            cur.get("completedTurns") == self.live.conv.completed
+            and cur.get("currentTurnPlayerColor") == self.live.conv.current
+            and all(kind in C.LOG_IGNORED for kind in new_logs)
+        )
+        if plan[0]["type"] != "END_TURN" or not unchanged or self.retry_count:
+            self.live.error = "reconnected while a move was unconfirmed; stopped safely"
+            self.expect = None
+            self.pending_sends.clear()
+            return [self.status("stopped", self.live.error)]
+        self.retry_count += 1
+        self.last_log_id = max([self.last_log_id, *(int(k) for k in logs)])
+        from catanatron.colonist.client import NotKnownYet
+
+        try:
+            context = {
+                "channel": self.channel,
+                "creator": self.live.conv.you,
+                "phase": game_phase(self.live.game),
+            }
+            raws = self.encode(plan, context)
+        except NotKnownYet as error:
+            self.live.error = f"could not retry end turn: {error}"
+            self.expect = None
+            self.pending_sends.clear()
+            return [self.status("stopped", self.live.error)]
+        self.expect = (self.live.position_key, plan, time.time())
+        self.since_sent = []
+        return [
+            self.status("following", "reconnected; retrying unconfirmed end turn"),
+            *self.send_replies(raws),
+        ]
+
+    def send_replies(self, raws):
+        """Give each browser send a stable ID for safe acknowledgment and retry."""
+        self.pending_sends.clear()
+        replies = []
+        for raw in raws:
+            reply = {
+                "kind": "send",
+                "socket": self.socket,
+                "b64": base64.b64encode(raw).decode(),
+                "sendId": uuid.uuid4().hex,
+            }
+            self.pending_sends[reply["sendId"]] = [reply, time.time(), 0]
+            replies.append(reply)
+        return replies
 
     def track_offers(self, frame):
         """Keep the open trade offers between players up to date."""
@@ -291,6 +501,8 @@ class Bridge:
         _, plan, _ = self.expect
         expected = plan[0]
         self.expect = None
+        self.pending_sends.clear()
+        self.sent_raws = []
         mine = [
             action_from_json(entry[0])
             for entry in self.live.record["log"][before:]
@@ -326,13 +538,62 @@ class Bridge:
         return []
 
     def check_timeout(self):
-        if self.expect and time.time() - self.expect[2] > self.move_timeout:
+        if self.expect:
+            now = time.time()
+            retries = []
+            for send_id, pending in self.pending_sends.items():
+                reply, sent_at, attempts = pending
+                if now - sent_at < 2:
+                    continue
+                if attempts == 0:
+                    pending[1:] = [now, 1]
+                    retries.append(reply)
+                else:
+                    self.live.error = "browser did not acknowledge a move after retry"
+                    self.expect = None
+                    self.pending_sends.clear()
+                    return [self.status("stopped", self.live.error)]
+            if retries:
+                return retries
+        if (
+            self.expect
+            and self.expect[1][0]["type"] == "BUILD_ROAD"
+            and not self.no_effect_retry
+            and not self.pending_sends
+            and self.sent_raws
+            and self.live.bot_to_move
+            and self.live.position_key == self.expect[0]
+            and time.time() - self.expect[2] >= 7
+        ):
+            # The browser confirmed the send, but the server sometimes ignores
+            # the road. Repeating the same edge is safe: if the first request
+            # takes effect late, that edge is already occupied.
+            self.no_effect_retry = True
+            return [
+                self.status("following", "retrying an unconfirmed road once"),
+                *self.send_replies(self.sent_raws),
+            ]
+        timeout = self.move_timeout
+        if self.expect and self.expect[1][0]["type"] == "MOVE_ROBBER":
+            pending = self.live.conv.pending_robber
+            if pending is not None:
+                color, coordinate = pending
+                expected_tile = self.expect[1][0].get("tile")
+                if (
+                    color == self.live.conv.you
+                    and self.live.tile_of_cube.get(tuple(coordinate)) == expected_tile
+                ):
+                    # Colonist has placed the robber, but waits for the steal
+                    # result (or the next log entry when nobody was robbed).
+                    timeout += 60
+        if self.expect and time.time() - self.expect[2] > timeout:
             label = self.expect[1][0]["label"]
             self.expect = None
+            self.pending_sends.clear()
             seen = ", ".join(str(t) for t in self.since_sent) or "nothing"
             self.live.error = (
                 f"sent {label}, but colonist didn't show it within "
-                f"{self.move_timeout:.0f} s (colonist sent message types: {seen})"
+                f"{timeout:.0f} s (colonist sent message types: {seen})"
             )
             return [self.status("stopped", self.live.error)]
         return []
@@ -342,6 +603,9 @@ class Bridge:
         if not live.bot_to_move or live.position_key == self.answered:
             return []
         self.answered = live.position_key
+        self.retry_count = 0
+        self.no_effect_retry = False
+        self.sent_raws = []
         start = time.time()
         game = live.game
         move, options, value = self.choose(game)
@@ -360,14 +624,8 @@ class Bridge:
                     "creator": live.conv.you,
                     "phase": game_phase(game),
                 }
-                for raw in self.encode(plan, context):
-                    replies.append(
-                        {
-                            "kind": "send",
-                            "socket": self.socket,
-                            "b64": base64.b64encode(raw).decode(),
-                        }
-                    )
+                self.sent_raws = self.encode(plan, context)
+                replies.extend(self.send_replies(self.sent_raws))
                 played = True
                 self.expect = (live.position_key, plan, time.time())
                 self.since_sent = []
@@ -414,12 +672,24 @@ class Bridge:
             stamp = time.strftime("%Y%m%d-%H%M%S")
             self.saved_path = os.path.join(self.save_dir, f"bridge-{stamp}.json")
         doc = {"format": FORMAT, "source": "bridge", "messages": self.frames}
+        temporary = None
         try:
-            with open(self.saved_path, "w") as f:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                dir=self.save_dir,
+                prefix=".bridge-",
+                suffix=".json",
+                delete=False,
+            ) as f:
+                temporary = f.name
                 json.dump(doc, f)
+            os.replace(temporary, self.saved_path)
         except OSError as e:
             print(f"  could not save the game: {e}", flush=True)
             return None
+        finally:
+            if temporary is not None and os.path.exists(temporary):
+                os.unlink(temporary)
         return self.saved_path
 
     def choose(self, game):
@@ -582,7 +852,19 @@ def main(argv=None):
         metavar="DIR",
         help="save each game followed here (default captures/); '' to turn off",
     )
+    parser.add_argument(
+        "--spectator-state",
+        help="write a redacted live-board snapshot to this local JSON path",
+    )
     args = parser.parse_args(argv)
+    if (
+        not args.spectator_state
+        and args.save
+        and os.path.basename(os.path.normpath(args.save)) == "ranked"
+    ):
+        # Also covers an already-running ranked runner when it starts a fresh
+        # bridge for a newly promoted model.
+        args.spectator_state = os.path.join("data", "ranked", "spectator-state.json")
     from catanatron.colonist.net import Net
 
     net = Net.load(args.net)
@@ -595,6 +877,7 @@ def main(argv=None):
                     play=args.play,
                     move_timeout=args.move_timeout,
                     save_dir=args.save or None,
+                    spectator_state=args.spectator_state,
                 ),
                 port=args.port,
                 info=net_info(args.net, args.simulations, args.play),

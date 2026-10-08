@@ -137,9 +137,18 @@ class Board:
                             for component in self.connected_components[edge_color]
                         ]
                     )
-                    self.road_color, self.road_length = max(
-                        self.road_lengths.items(), key=lambda e: e[1]
-                    )
+                    self.road_length = max(self.road_lengths.values())
+                    leaders = [
+                        candidate
+                        for candidate, length in self.road_lengths.items()
+                        if length == self.road_length
+                    ]
+                    if self.road_length < 5:
+                        self.road_color = None
+                    elif previous_road_color in leaders:
+                        self.road_color = previous_road_color
+                    else:
+                        self.road_color = leaders[0] if len(leaders) == 1 else None
                 elif len(edges) == 1:
                     # Endpoint blocked: remove node_id from opponent's component
                     b_index = self._get_connected_component_index(node_id, edge_color)

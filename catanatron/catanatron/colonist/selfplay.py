@@ -20,6 +20,8 @@ the same format plus `pi` (float16, over the 313 moves) and `v`.
 """
 
 import argparse
+import json
+import math
 import multiprocessing
 import os
 import random
@@ -229,11 +231,39 @@ def run(
     opponents=(),
     opponent_rate=0.0,
     log=print,
+    setup_noise_scale=1.0,
 ):
     """Plays the shards of out_dir that aren't on disk yet."""
+    if not math.isfinite(setup_noise_scale) or setup_noise_scale <= 0:
+        raise ValueError("setup_noise_scale must be positive and finite")
+    os.makedirs(out_dir, exist_ok=True)
+    config_path = os.path.join(out_dir, "setup-exploration.json")
+    if os.path.exists(config_path):
+        with open(config_path) as stream:
+            recorded_scale = json.load(stream)["setup_noise_scale"]
+        if recorded_scale != setup_noise_scale:
+            raise ValueError(
+                f"{out_dir} used setup_noise_scale={recorded_scale}; "
+                f"cannot resume with {setup_noise_scale}"
+            )
+    else:
+        existing_shards = any(
+            name.startswith("shard_") and name.endswith(".npz")
+            for name in os.listdir(out_dir)
+        )
+        if existing_shards and setup_noise_scale != 1.0:
+            raise ValueError(
+                f"{out_dir} has shards without setup metadata; "
+                "they used the default setup_noise_scale=1"
+            )
+        with open(config_path, "w") as stream:
+            json.dump({"setup_noise_scale": setup_noise_scale}, stream)
     for var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
         os.environ.setdefault(var, "1")
-    search_args = {"simulations": simulations}
+    search_args = {
+        "simulations": simulations,
+        "setup_noise_scale": setup_noise_scale,
+    }
     tasks = []
     for first in range(seed, seed + games, shard_size):
         count = min(shard_size, seed + games - first)
@@ -276,6 +306,12 @@ def main(argv=None):
     parser.add_argument("--seed", type=int, default=2_000_000, help="first game seed")
     parser.add_argument("--simulations", type=int, default=50)
     parser.add_argument(
+        "--setup-noise-scale",
+        type=float,
+        default=1.0,
+        help="scale Gumbel exploration for initial settlements only (default 1)",
+    )
+    parser.add_argument(
         "--shard-size",
         type=int,
         default=64,
@@ -307,6 +343,7 @@ def main(argv=None):
         opponents,
         args.opponent_rate,
         log=lambda m: print(m, flush=True),
+        setup_noise_scale=args.setup_noise_scale,
     )
     return 0
 

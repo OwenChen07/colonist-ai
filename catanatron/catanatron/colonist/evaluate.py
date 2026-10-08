@@ -45,6 +45,7 @@ class GameResult:
     a_moves: int = field(default=0, compare=False)
     b_seconds: float = field(default=0.0, compare=False)
     b_moves: int = field(default=0, compare=False)
+    diagnostics: Optional[dict] = None
 
 
 @dataclass
@@ -116,7 +117,7 @@ class MatchResult:
 def play_game(task):
     """Runs in a worker. A plays RED, B plays BLUE; `a_first` puts A in the
     first seat. Everything random comes from the seed."""
-    spec_a, spec_b, seed, a_first, rules = task
+    spec_a, spec_b, seed, a_first, rules, *options = task
     from catanatron.colonist.rules import new_game
     import catanatron.players  # noqa: F401  (registers the bots)
     from catanatron.registry import REGISTRY
@@ -133,9 +134,21 @@ def play_game(task):
     # and an identical-bots check would always say exactly 50%.
     game.random.seed(stream)
     clock_a, clock_b = _clock(a), _clock(b)
-    winner = game.play()
+    diagnostic = None
+    if options and options[0]:
+        from catanatron.colonist.diagnostics import Diagnostics
+
+        diagnostic = Diagnostics()
+    winner = game.play(accumulators=[diagnostic] if diagnostic else [])
     score = 0.5 if winner is None else float(winner == COLORS[0])
-    return GameResult(seed, a_first, score, game.state.num_turns, *clock_a, *clock_b)
+    counts = (
+        {color.value: row for color, row in diagnostic.counts.items()}
+        if diagnostic
+        else None
+    )
+    return GameResult(
+        seed, a_first, score, game.state.num_turns, *clock_a, *clock_b, counts
+    )
 
 
 def _clock(player):
@@ -180,10 +193,10 @@ def _seat(game, players):
 
 
 # ----- matches -----
-def tasks_for(spec_a, spec_b, seeds, rules):
+def tasks_for(spec_a, spec_b, seeds, rules, diagnostics=False):
     for seed in seeds:
-        yield (spec_a, spec_b, seed, True, rules)
-        yield (spec_a, spec_b, seed, False, rules)
+        yield (spec_a, spec_b, seed, True, rules, diagnostics)
+        yield (spec_a, spec_b, seed, False, rules, diagnostics)
 
 
 def match(
@@ -194,12 +207,15 @@ def match(
     workers=None,
     rules=None,
     progress: Optional[Callable[[MatchResult], None]] = None,
+    diagnostics=False,
 ) -> MatchResult:
     """`games` games (rounded up to whole pairs) on boards seed, seed+1, ..."""
     pairs = (games + 1) // 2
     result = MatchResult(_name(spec_a), _name(spec_b))
     start = time.time()
-    tasks = tasks_for(spec_a, spec_b, range(seed, seed + pairs), rules or {})
+    tasks = tasks_for(
+        spec_a, spec_b, range(seed, seed + pairs), rules or {}, diagnostics
+    )
     for game in _run(tasks, workers):
         result.games.append(game)
         if progress and result.n % 100 == 0:

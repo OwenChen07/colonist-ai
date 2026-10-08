@@ -75,7 +75,7 @@ def test_yield_resources_two_players_and_city():
     assert freqdeck_count(payout[Color.BLUE], tile.resource) >= 2  # type: ignore
 
 
-def test_empty_payout_if_not_enough_resources():
+def test_sole_claimant_gets_remaining_resource():
     board = Board()
     resource_freqdeck = starting_resource_bank()
 
@@ -89,6 +89,23 @@ def test_empty_payout_if_not_enough_resources():
 
     payout, depleted = yield_resources(board, resource_freqdeck, tile.number)
     assert depleted == [tile.resource]
-    assert (
-        Color.RED not in payout or freqdeck_count(payout[Color.RED], tile.resource) == 0  # type: ignore
-    )
+    assert freqdeck_count(payout[Color.RED], tile.resource) == 1  # type: ignore
+
+
+def test_multiple_claimants_get_none_when_bank_is_short():
+    board = Board()
+    tile = board.map.land_tiles[(0, 0, 0)]
+    red_node, blue_node = 4, 0
+    if tile.resource is None:
+        tile = board.map.land_tiles[(1, -1, 0)]
+        red_node, blue_node = 8, 6
+    board.build_settlement(Color.RED, red_node, initial_build_phase=True)
+    board.build_settlement(Color.BLUE, blue_node, initial_build_phase=True)
+    bank = starting_resource_bank()
+    freqdeck_draw(bank, 18, tile.resource)  # type: ignore
+
+    payout, depleted = yield_resources(board, bank, tile.number)
+
+    assert tile.resource in depleted
+    assert freqdeck_count(payout[Color.RED], tile.resource) == 0  # type: ignore
+    assert freqdeck_count(payout[Color.BLUE], tile.resource) == 0  # type: ignore

@@ -34,6 +34,7 @@ sign that self-play has stalled).
 import argparse
 import csv
 import json
+import math
 import os
 import shutil
 import signal
@@ -97,12 +98,21 @@ def say(msg):
 def play(run, n, args):
     from catanatron.colonist import selfplay
 
+    runner = selfplay.run
+    if os.environ.get("COLONIST_WORKER_HOST"):
+        from catanatron.colonist import distributed
+
+        runner = distributed.run
+
     # Opponents: up to 3 recent earlier nets, plus the reference bots.
     best_round = run.state["best_round"]
     older = [run.net(k) for k in range(max(0, best_round - 3), best_round)]
     opponents = [p for p in older if os.path.exists(p)] + args.reference
-    say(f"round {n}: self-play, {args.games} games, opponents {opponents or 'none'}")
-    selfplay.run(
+    say(
+        f"round {n}: self-play, {args.games} games, opponents {opponents or 'none'}, "
+        f"setup noise scale {args.setup_noise_scale:g}"
+    )
+    runner(
         run.best,
         run.dir(n, "data"),
         games=args.games,
@@ -111,6 +121,7 @@ def play(run, n, args):
         workers=args.workers,
         opponents=opponents,
         opponent_rate=args.opponent_rate if opponents else 0.0,
+        setup_noise_scale=args.setup_noise_scale,
         log=lambda m: say("  " + m),
     )
 
@@ -139,6 +150,14 @@ def train(run, n, args):
     shutil.copyfile(run.dir(n, "train", "net.npz"), run.net(n))
 
 
+def _round_setup_scale(run, n):
+    path = run.dir(n, "data", "setup-exploration.json")
+    if not os.path.exists(path):
+        return 1.0  # data from before setup exploration was configurable
+    with open(path) as stream:
+        return json.load(stream)["setup_noise_scale"]
+
+
 def match(run, n, args):
     from catanatron.colonist.evaluate import sprt
 
@@ -164,6 +183,7 @@ def match(run, n, args):
         "score": round(result.score, 4),
         "decision": result.decision or "undecided",
         "promoted": promoted,
+        "setup_noise_scale": _round_setup_scale(run, n),
     }
     if promoted:
         shutil.copyfile(run.net(n), run.best)
@@ -199,9 +219,22 @@ def benchmark(run, n, args):
         games=args.benchmark_games,
         seed=args.seed + 900_000_000,  # the same boards every time, to compare rounds
         workers=args.workers,
+        diagnostics=True,
     )
     say(f"  {result.summary()}")
     record["benchmark"] = f"{result.score:.4f}"
+    from catanatron.colonist.diagnostics import summary
+
+    rows = [
+        {"color": "RED", "score": game.score, **game.diagnostics["RED"]}
+        for game in result.games
+    ]
+    diagnostic_summary = summary(rows)
+    record["diagnostics"] = diagnostic_summary
+    path = run.dir(n, "benchmark-diagnostics.json")
+    with open(path, "w") as stream:
+        json.dump(diagnostic_summary, stream, indent=2)
+    say(f"  diagnostics: {path}")
 
 
 def main(argv=None):
@@ -214,6 +247,12 @@ def main(argv=None):
     )
     parser.add_argument(
         "--simulations", type=int, default=50, help="per move in self-play"
+    )
+    parser.add_argument(
+        "--setup-noise-scale",
+        type=float,
+        default=1.0,
+        help="self-play Gumbel noise scale for initial settlements (default 1)",
     )
     parser.add_argument("--opponent-rate", type=float, default=0.2)
     parser.add_argument(
@@ -237,6 +276,8 @@ def main(argv=None):
     parser.add_argument("--seed", type=int, default=3_000_000_000)
     parser.add_argument("--workers", type=int, default=None)
     args = parser.parse_args(argv)
+    if not math.isfinite(args.setup_noise_scale) or args.setup_noise_scale <= 0:
+        parser.error("--setup-noise-scale must be positive and finite")
     args.reference = [r for r in args.reference.split(",") if r]
     args.extra_data = [d for d in args.extra_data.split(",") if d]
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))

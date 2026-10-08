@@ -96,20 +96,23 @@ STEALS = (LOG_YOU_STOLE, LOG_STOLE_FROM_YOU, LOG_ROBBER_NOTHING_TO_STEAL)
 LOG_MONOPOLY = 86  # the resource taken
 LOG_RESIGNED = 112
 LOG_TRADED_WITH_BANK = 116
-#: Safe to skip: a player joining (0), game start banners (2), disconnects
-#: (22), the 10-second rule being turned off (24), separators (44),
+LOG_BANK_SHORTAGE = 146  # informational: a roll could not pay all players
+LOG_PIECE_NOTICE = {72, 87}  # before matching setup road / settlement placement
+#: Safe to skip: a player joining (0), game start banners (2), connection
+#: status notices (22, 23; the playerStates diff carries isConnected), the
+#: 10-second rule being turned off (24), separators (44),
 #: income (47, checked through hand counts instead), tiles blocked by the
 #: robber (49), colonist's timer starting to move the robber for a player
 #: (58; the move itself follows as 11), "move the robber" prompts (60),
 #: colonist's timer choosing a player's discards (64; the discard follows as 55),
 #: longest road / largest army
-#: changing hands (66, 68), which Catanatron works out itself, trade offers
+#: changing hands or being lost (66, 67, 68), which Catanatron works out itself, trade offers
 #: between players (118: an offer alone changes nothing; an accepted trade
 #: logs its own entry, which is not mapped yet and so stops the record), and
 #: a pre-game counter (130), and how many players the robber can steal
 #: from (139, logged with the robber move; the steal itself may follow in a
 #: later update, seen live).
-LOG_IGNORED = {0, 2, 22, 24, 44, 47, 49, 58, 60, 64, 66, 68, 118, 130, 139}
+LOG_IGNORED = {0, 2, 22, 23, 24, 44, 47, 49, 58, 60, 64, 66, 67, 68, 118, 130, 139}
 PIECE = {0: "road", 2: "settlement", 3: "city"}
 BUILDING = {1: "settlement", 2: "city"}
 BUILD_ACTION = {
@@ -342,7 +345,7 @@ class _Converter:
             diff.get("gameLogState", {}).items(), key=lambda kv: int(kv[0])
         )
         texts = [e.get("text", {}) for _, e in entries]
-        for text in texts:
+        for position, text in enumerate(texts):
             kind = text.get("type")
             color = text.get("playerColor")
             if (
@@ -351,7 +354,18 @@ class _Converter:
                 and kind not in LOG_IGNORED
             ):
                 self._resolve_unfinished_play()
-            if kind in (LOG_PLACED_SETUP, LOG_BUILT):
+            if kind in LOG_PIECE_NOTICE:
+                # Setup roads and settlements can carry a notice immediately
+                # before the ordinary placement log. The placement below
+                # accounts for the board change; require that matching log.
+                if not any(
+                    later.get("type") == LOG_PLACED_SETUP
+                    and later.get("playerColor") == color
+                    and later.get("pieceEnum") == text.get("pieceEnum")
+                    for later in texts[position + 1 :]
+                ):
+                    raise _Unsupported(f"piece notice without setup placement: {text}")
+            elif kind in (LOG_PLACED_SETUP, LOG_BUILT):
                 piece = PIECE.get(text.get("pieceEnum"))
                 match = next(
                     (p for p in placed if p[0] == color and p[1] == piece), None
@@ -409,12 +423,24 @@ class _Converter:
                 self._bank_trade(
                     color, text["givenCardEnums"], text["receivedCardEnums"]
                 )
+            elif kind == LOG_BANK_SHORTAGE:
+                # The roll applies bank shortages. A sole claimant receives
+                # the remaining cards; multiple claimants receive none.
+                distributed = text.get("distributedCount")
+                expected = (
+                    min(text.get("count", 0), text.get("bankCount", 0))
+                    if len(text.get("playerColors", [])) == 1
+                    else 0
+                )
+                if distributed != expected:
+                    raise _Unsupported(f"bank shortage with distribution: {text}")
             elif kind == LOG_WON:
                 if self.conv.ended != "resignation":
                     self.record["winner"] = self.seat[color]
                     self.conv.ended = "win"
             elif kind == LOG_RESIGNED:
                 self.conv.ended = "resignation"
+                self.record["resigned"] = self.seat[color]
             elif kind in LOG_IGNORED:
                 continue
             else:

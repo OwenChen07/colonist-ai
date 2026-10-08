@@ -7,12 +7,18 @@ from types import SimpleNamespace
 import pytest
 
 from catanatron.colonist import evaluate
+from catanatron.colonist.diagnostics import empty_counts
 from catanatron.colonist.net import random_net
 
 
 def _fake_result(decision, score):
     return SimpleNamespace(
-        decision=decision, n=2, score=score, margin=0.0, summary=lambda: "fake match"
+        decision=decision,
+        n=2,
+        score=score,
+        margin=0.0,
+        summary=lambda: "fake match",
+        games=[SimpleNamespace(score=score, diagnostics={"RED": empty_counts()})] * 2,
     )
 
 
@@ -29,6 +35,8 @@ def tiny_args(tmp_path):
             "2",
             "--simulations",
             "2",
+            "--setup-noise-scale",
+            "1.8",
             "--epochs",
             "1",
             "--match-simulations",
@@ -83,6 +91,8 @@ def test_promotion_resume_and_opponents(tiny_args, monkeypatch):
         run / "nets" / "round_001.npz"
     ).read_bytes()
     assert len(benchmarks) == 1  # the best changed
+    assert state["history"][0]["setup_noise_scale"] == 1.8
+    assert (run / "round_001" / "benchmark-diagnostics.json").exists()
 
     # Round 2 resumes from the saved state, and plays round 0's net as an opponent.
     assert loop.main(args + ["--rounds", "2"]) == 0
