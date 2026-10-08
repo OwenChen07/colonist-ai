@@ -167,8 +167,19 @@ git checkout of `main-9mnmbh`. It pulls and pushes with a read-write deploy key,
 - `colonist-train`: `scripts/vm/train.sh`, runs/sp1 from round 11, with playout cap
   randomization: 25% of moves get 160 simulations, the rest 24.
   - Self-play is also spread over the workers in `scripts/vm/workers.env`
-    (`user@host:processes`), currently `colonist-selfplay-worker-4` (4 cores). An
-    Azure VM can be added there, too.
+    (`user@host:processes`). The loop reads that file again every round and copies
+    its code to every worker first.
+  - Workers since round 12:
+    - GCP `colonist-selfplay-worker-4` (4 cores).
+    - Azure `colonist-az-worker-1` (`Standard_D4as_v4`, 9.160.33.122).
+    - Azure `colonist-az-worker-2` (`Standard_D2s_v4`, 9.160.34.57).
+  - The Azure VMs are in resource group `colonist-ai-workers`, belgiumcentral,
+    paid from the Azure for Students credit. Their firewall allows SSH only from the
+    coordinator's static IP 34.60.203.129 (`colonist-coordinator-ip`) and the
+    owner's Mac.
+  - Students quota is 6 vCPUs per region. The other allowed regions only offer
+    burstable B-series sizes.
+  - Measured self-play speed per Azure vCPU is about the same as per GCP T2A core.
   - Every round's net is scored on the live games (`calibrate.py`). A promoted net
     also plays a gauntlet against rounds 2 and 5.
 - `colonist-spectator`: the public feed, as before.
