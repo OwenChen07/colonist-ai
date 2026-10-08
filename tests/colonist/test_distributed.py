@@ -26,3 +26,13 @@ def test_split_covers_every_seed_once_in_whole_shards(games):
 def test_split_is_proportional_to_processes():
     (_, here), (_, a), (_, b) = split(64 * 16, 0, 8, [("a", 4), ("b", 4)])
     assert (here, a, b) == (64 * 8, 64 * 4, 64 * 4)
+
+
+def test_workers_file_is_read_each_time(tmp_path):
+    path = tmp_path / "workers.env"
+    env = {"COLONIST_WORKERS_FILE": str(path), "COLONIST_WORKER_HOSTS": "a@x:2"}
+    assert worker_hosts(env) == [("a@x", 2)]  # no file yet: the environment
+    path.write_text("# workers\nCOLONIST_WORKER_HOSTS=a@x:2,b@y:4\nOTHER=1\n")
+    assert worker_hosts(env) == [("a@x", 2), ("b@y", 4)]
+    path.write_text("COLONIST_WORKER_HOSTS=\n")
+    assert worker_hosts(env) == []

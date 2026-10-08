@@ -9,6 +9,8 @@ User=owen
 WorkingDirectory=/home/owen/colonist-ai
 Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=-/home/owen/colonist-ai/scripts/vm/workers.env
+# Read again at the start of every round: workers can change mid-run.
+Environment=COLONIST_WORKERS_FILE=/home/owen/colonist-ai/scripts/vm/workers.env
 # Lower priority than the ranked bot, whose moves have a time limit.
 Nice=10
 ExecStartPre=/home/owen/colonist-ai/scripts/vm/sync_workers.sh

@@ -2,7 +2,10 @@
 
 Set COLONIST_WORKER_HOSTS to enable this from colonist.loop, as a comma-
 separated list of `user@host:processes` (COLONIST_WORKER_HOST, one host, still
-works). Each host gets a disjoint, shard-aligned seed range in proportion to
+works), or point COLONIST_WORKERS_FILE at a file with a COLONIST_WORKER_HOSTS=
+line, which is read again every round, so workers can be added or removed
+while the loop runs. Each round also copies this checkout's code to every
+worker first. Each host gets a disjoint, shard-aligned seed range in proportion to
 its processes. Workers write to their own disks; the coordinator copies their
 complete shards back, and plays any range a worker failed to finish, before
 training may start. A worker can be any machine reachable over SSH with the
@@ -64,8 +67,16 @@ def _complete(out_dir, seed, games):
 
 
 def worker_hosts(environ=os.environ):
-    """[(host, processes)] from the environment."""
+    """[(host, processes)] from COLONIST_WORKERS_FILE, if set, or else the
+    environment."""
     spec = environ.get("COLONIST_WORKER_HOSTS")
+    path = environ.get("COLONIST_WORKERS_FILE")
+    if path and os.path.isfile(path):
+        with open(path) as stream:
+            for line in stream:
+                name, _, value = line.strip().partition("=")
+                if name == "COLONIST_WORKER_HOSTS":
+                    spec = value
     if not spec and environ.get("COLONIST_WORKER_HOST"):
         spec = (
             f"{environ['COLONIST_WORKER_HOST']}:"
@@ -214,6 +225,24 @@ def _prepare(host, key, root, remote_data, remote_nets, net_path):
     its self-play command."""
     subprocess.run(
         _ssh(host, key, ["mkdir", "-p", remote_data, remote_nets]), check=True
+    )
+    # The same rules and search everywhere: this checkout's code, into the
+    # worker's editable install.
+    source = Path(__file__).resolve().parents[2]  # the catanatron/ folder
+    subprocess.run(
+        [
+            "rsync",
+            "-a",
+            "--exclude",
+            "*.egg-info",
+            "--exclude",
+            "__pycache__",
+            "-e",
+            f"ssh -i {shlex.quote(key)} -o BatchMode=yes",
+            str(source),
+            f"{host}:{root}/",
+        ],
+        check=True,
     )
     remote_net = remote_nets / "best.npz"
     _rsync(key, net_path, f"{host}:{remote_net}")

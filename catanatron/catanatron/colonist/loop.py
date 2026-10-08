@@ -102,12 +102,10 @@ def say(msg):
 def play(run, n, args):
     from catanatron.colonist import selfplay
 
-    runner = selfplay.run
-    if os.environ.get("COLONIST_WORKER_HOSTS") or os.environ.get(
-        "COLONIST_WORKER_HOST"
-    ):
-        from catanatron.colonist import distributed
+    from catanatron.colonist import distributed
 
+    runner = selfplay.run
+    if distributed.worker_hosts():  # read again every round
         runner = distributed.run
 
     # Opponents: up to 3 recent earlier nets, plus the reference bots.
