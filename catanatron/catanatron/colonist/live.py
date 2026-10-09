@@ -34,6 +34,21 @@ class OutOfSync(Exception):
     """The simulator and colonist disagree; the bot must stop."""
 
 
+def waiting_for_earlier_discard(game, action):
+    """After a 7, Catanatron asks seats to discard in seat order, but colonist
+    lets both discard at once and may report the later seat first (e.g. the
+    bot's own discard). Until the earlier seat's cards are logged (the
+    converter then puts them first), the position is the earlier seat still
+    discarding, not an error."""
+    state = game.state
+    return (
+        action.action_type == ActionType.DISCARD_RESOURCE
+        and state.is_discarding
+        and state.current_color() != action.color
+        and state.discard_counts[state.color_to_index[action.color]] > 0
+    )
+
+
 class LiveGame:
     def __init__(self, start_payload, t=0):
         self.conv = C._Converter(start_payload, SimpleNamespace(t=t))
@@ -86,6 +101,8 @@ class LiveGame:
             action = action_from_json(payload)
             decision = decision_of(action, game.playable_actions)
             if decision not in game.playable_actions:
+                if waiting_for_earlier_discard(game, action):
+                    break
                 raise OutOfSync(
                     f"log entry {i} ({payload}) isn't legal in the simulator"
                 )
