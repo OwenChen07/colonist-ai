@@ -310,6 +310,8 @@ def test_incomplete_conversion_fails_the_replay_check(frames):
         {"type": 64, "playerColor": 1},
         # how many players the robber can steal from, logged with the move
         {"type": 139, "playerCount": 1},
+        # a player disconnecting (with isConnected false in the same update)
+        {"type": 140, "playerColor": 1},
     ],
 )
 def test_timer_playing_for_a_player_is_skipped(frames, notice):
