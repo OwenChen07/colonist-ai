@@ -8,6 +8,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 exec .venv/bin/python -m catanatron.colonist.loop runs/sp1 \
     --rounds 1000 --games 5000 --window 8 --train-sample 4000000 --gate loose \
+    --distribute-eval \
     --simulations 160 --full-rate 0.25 --fast-simulations 24 \
     --reference AB:2,F --extra-data data/ab2 \
     --gauntlet runs/sp1/nets/round_002.npz,runs/sp1/nets/round_005.npz \
