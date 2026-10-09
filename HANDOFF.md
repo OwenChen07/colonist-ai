@@ -166,6 +166,14 @@ git checkout of `main-9mnmbh`. It pulls and pushes with a read-write deploy key,
     `data/ranked/{bot_value,human_openings}` carry `net`.
 - `colonist-train`: `scripts/vm/train.sh`, runs/sp1 from round 11, with playout cap
   randomization: 25% of moves get 160 simulations, the rest 24.
+  - Since round 15:
+    - The loose promotion gate (`--gate loose`): a net is promoted unless it's
+      clearly worse, if its guardrails hold.
+    - Training on the last 8 rounds, drawing 4M positions per epoch
+      (`--window 8 --train-sample 4000000`). The compact loader in `train.py`
+      peaks at about 9.75 GB.
+    - Matches and benchmarks are spread over the workers as well
+      (`--distribute-eval`).
   - Self-play is also spread over the workers in `scripts/vm/workers.env`
     (`user@host:processes`). The loop reads that file again every round and copies
     its code to every worker first.
