@@ -21,6 +21,14 @@ fi
 for unit in colonist-ranked colonist-train; do
   systemctl is-active --quiet "$unit" || problems+=("$unit is not active ($(systemctl is-active "$unit"))")
 done
+# A crash loop (e.g. running out of memory) can look active between restarts:
+# compare each service's restart counter with the last check's.
+for unit in colonist-ranked colonist-train colonist-spectator; do
+  now=$(systemctl show -p NRestarts --value "$unit" 2>/dev/null || echo 0)
+  before=$(cat "data/watchdog/.restarts-$unit" 2>/dev/null || echo "$now")
+  echo "$now" > "data/watchdog/.restarts-$unit"
+  [ $(( now - before )) -ge 3 ] && problems+=("$unit restarted $(( now - before )) times since the last check ($(systemctl show -p Result --value "$unit"))")
+done
 state=$(python3 -c 'import json;print(json.load(open("data/ranked/runner-status.json")).get("state",""))' 2>/dev/null || echo missing)
 [ "$state" = needs_attention ] && problems+=("ranked runner status is needs_attention")
 [ "$(age data/ranked/bridge.log)" -gt 2700 ] && problems+=("bridge.log has not changed for $(( $(age data/ranked/bridge.log) / 60 )) minutes")
