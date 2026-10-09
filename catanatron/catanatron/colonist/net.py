@@ -31,7 +31,13 @@ class Net:
 
     @staticmethod
     def load(path):
+        """A net.npz: this fully connected net, or a graph.GraphNet when the
+        file says arch "graph" (both have forward, forward_rows, evaluate)."""
         z = np.load(path, allow_pickle=False)
+        if "arch" in z.files and str(z["arch"]) == "graph":
+            from catanatron.colonist.graph import GraphNet
+
+            return GraphNet.load(z)
         n = int(z["num_layers"])
         layers = [
             (z[f"w{i}"].astype(np.float32), z[f"b{i}"].astype(np.float32))

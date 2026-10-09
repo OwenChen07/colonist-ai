@@ -52,9 +52,27 @@ def build_model(hidden):
     return Model()
 
 
+def is_graph_file(path):
+    with np.load(path, allow_pickle=False) as z:
+        return "arch" in z.files and str(z["arch"]) == "graph"
+
+
 def export(model, path, meta=None):
     """Write the weights in the layout catanatron.colonist.net reads."""
     from catanatron.colonist.net import Net
+
+    if hasattr(model, "config"):  # graph.torch_model
+        from catanatron.colonist.graph import GraphNet
+
+        params = {
+            k: (
+                model.w[k].detach().cpu().numpy(),
+                model.b[k].detach().cpu().numpy(),
+            )
+            for k in model.w
+        }
+        GraphNet(params, *model.config, meta).save(path)
+        return
 
     layers = []
     for lin in [*model.body, model.policy, model.value]:
@@ -71,6 +89,14 @@ def load_weights(model, path):
     from catanatron.colonist.net import Net
 
     net = Net.load(path)
+    if hasattr(model, "config"):  # graph.torch_model
+        if (net.hidden_size, net.glob, net.layers) != model.config:
+            raise ValueError(f"{path} has another graph size")
+        with torch.no_grad():
+            for k, (w, b) in net.params.items():
+                model.w[k].copy_(torch.from_numpy(w.copy()))
+                model.b[k].copy_(torch.from_numpy(b.copy()))
+        return
     layers = [*net.hidden, net.policy, net.value]
     targets = [*model.body, model.policy, model.value]
     if len(layers) != len(targets):
@@ -296,6 +322,15 @@ def losses(model, x, legal, action, pi, value, value_weight):
     return total, policy_loss, value_loss, correct, n_target
 
 
+def model_device(model):
+    return next(model.parameters()).device
+
+
+def _to(batch, device):
+    """A batch from data kept on another device (e.g. in memory, for the GPU)."""
+    return tuple(None if t is None else t.to(device) for t in batch)
+
+
 def evaluate(model, data, batch_size, value_weight):
     import torch
 
@@ -306,7 +341,8 @@ def evaluate(model, data, batch_size, value_weight):
             idx = torch.arange(
                 start, min(start + batch_size, data.n), device=data.value.device
             )
-            _, pl, vl, correct, nt = losses(model, *data.batch(idx), value_weight)
+            batch = _to(data.batch(idx), model_device(model))
+            _, pl, vl, correct, nt = losses(model, *batch, value_weight)
             sums += [
                 pl.item() * nt.item(),
                 vl.item() * len(idx),
@@ -355,6 +391,24 @@ def main(argv=None):
         help="train without the 12 board symmetries",
     )
     parser.add_argument("--device", default=None)
+    parser.add_argument(
+        "--data-device",
+        default=None,
+        help="where the positions stay (default: --device); 'cpu' keeps them in "
+        "memory and moves each batch, when the GPU can't hold them all",
+    )
+    parser.add_argument(
+        "--arch",
+        choices=("mlp", "graph"),
+        default="mlp",
+        help="fully connected (net.py) or board-aware graph net (graph.py); "
+        "--init's file decides when given",
+    )
+    parser.add_argument(
+        "--graph",
+        default="32,64,3",
+        help="graph net size: per-piece features, global features, rounds",
+    )
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args(argv)
 
@@ -371,8 +425,9 @@ def main(argv=None):
     static, train_split, val_split, games = load_split(
         paths, args.val_fraction, args.value_mix
     )
-    train = Data(static, train_split, device)
-    val = Data(static, val_split, device)
+    data_device = pick_device(args.data_device) if args.data_device else device
+    train = Data(static, train_split, data_device)
+    val = Data(static, val_split, data_device)
     del train_split, val_split
     print(
         f"{games} games, {train.n} training and {val.n} validation positions, "
@@ -382,13 +437,25 @@ def main(argv=None):
     baseline = float((val.value**2).mean()) if val.n else float("nan")
     print(f"validation value loss of always guessing 0: {baseline:.3f}", flush=True)
 
-    if args.hidden:
-        hidden = [int(h) for h in args.hidden.split(",")]
-    elif args.init:
-        hidden = hidden_of(args.init)
+    graph = args.arch == "graph" or (args.init and is_graph_file(args.init))
+    if graph:
+        from catanatron.colonist import graph as G
+        from catanatron.colonist.net import Net
+
+        if args.init:
+            g = Net.load(args.init)
+            hidden = [g.hidden_size, g.glob, g.layers]
+        else:
+            hidden = [int(h) for h in args.graph.split(",")]
+        model = G.torch_model(*hidden)
     else:
-        hidden = [512, 512, 512]
-    model = build_model(hidden)
+        if args.hidden:
+            hidden = [int(h) for h in args.hidden.split(",")]
+        elif args.init:
+            hidden = hidden_of(args.init)
+        else:
+            hidden = [512, 512, 512]
+        model = build_model(hidden)
     if args.init:
         load_weights(model, args.init)
     model = model.to(device)
@@ -441,11 +508,11 @@ def main(argv=None):
     for epoch in range(first_epoch, args.epochs):
         start = time.time()
         gen.manual_seed(args.seed * 1000 + epoch)  # resumable shuffles
-        order = torch.randperm(train.n, generator=gen)[:per_epoch].to(device)
+        order = torch.randperm(train.n, generator=gen)[:per_epoch].to(data_device)
         sums = np.zeros(3)
         for s in range(steps_per_epoch):
             idx = order[s * args.batch : (s + 1) * args.batch]
-            batch = train.batch(idx)
+            batch = _to(train.batch(idx), device)
             if augment:
                 batch = augment(*batch)
             total, pl, vl, _, _ = losses(model, *batch, args.value_weight)
