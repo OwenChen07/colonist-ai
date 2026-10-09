@@ -281,6 +281,8 @@ class _Converter:
         self.completed = state["currentState"].get("completedTurns", 0)
         self.current = state["currentState"].get("currentTurnPlayerColor")
         self.discards = []  # waiting for the robber, then emitted in seat order
+        # Where the current 7's discards start in the log, until the next move.
+        self.discard_phase = None
         self.pending_play = None  # a monopoly or year of plenty awaiting its cards
         self.your_cards = []  # the recording player's resource cards (colonist ids)
 
@@ -289,17 +291,44 @@ class _Converter:
         self._resolve_unfinished_play()
         self._resolve_robber()
         self._flush_discards()
+        self.discard_phase = None
         self.log.append([[self.seat[color], action_type, value], result])
 
     def _flush_discards(self):
+        """Emit the waiting discards. Catanatron asks seats to discard in seat
+        order, but colonist may report a later seat's discards in an earlier
+        update (when its timer discards for each player separately, seen live):
+        a seat's discards then go before the later seat's ones already in the
+        log. Its own checks since the 7 were taken before it discarded, so they
+        move to where its discards start; the others' move along with the log."""
         if not self.discards:
             return
         discards, self.discards = self.discards, []
-        # Catanatron asks seats to discard in seat order.
-        for color, card in sorted(discards, key=lambda d: self.play_order.index(d[0])):
-            self.log.append(
-                [[self.seat[color], ActionType.DISCARD_RESOURCE.value, card], card]
+        if self.discard_phase is None:
+            self.discard_phase = len(self.log)
+        seats = self.record["seats"]
+        for color in sorted({c for c, _ in discards}, key=self.play_order.index):
+            seat = self.seat[color]
+            entries = [
+                [[seat, ActionType.DISCARD_RESOURCE.value, card], card]
+                for c, card in discards
+                if c == color
+            ]
+            at = next(
+                (
+                    i
+                    for i in range(self.discard_phase, len(self.log))
+                    if seats.index(self.log[i][0][0]) > seats.index(seat)
+                ),
+                len(self.log),
             )
+            if at < len(self.log):
+                for check in self.record["checks"]:
+                    if check["at"] > at:
+                        check["at"] = (
+                            at if check["color"] == seat else check["at"] + len(entries)
+                        )
+            self.log[at:at] = entries
 
     def _resolve_robber(self, steal=None):
         """Emit the waiting robber move: with the card stolen in `steal`, or,

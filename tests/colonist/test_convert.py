@@ -427,3 +427,33 @@ def test_a_win_on_points_is_not_a_forfeit(frames):
         data={"data": {"type": GAME_OVER, "payload": {"endGameState": end}}},
     )
     assert "forfeit" not in convert(frames + [game_over]).record
+
+
+def test_an_earlier_seats_late_discards_go_first():
+    """colonist's timer can discard for each player in separate updates, the
+    later seat first (seen live when the bot's bridge had stopped). Catanatron
+    asks the first seat first, so its discards go before, and the checks move
+    with them."""
+    from catanatron.colonist.convert import _Converter
+
+    c = _Converter.__new__(_Converter)
+    c.play_order = [2, 1]  # colonist colors: 2 sits first (RED), 1 second (BLUE)
+    c.seat = {2: "RED", 1: "BLUE"}
+    c.record = {"seats": ["RED", "BLUE"], "checks": []}
+    c.log = [[["BLUE", "ROLL", [6, 1]], [6, 1]]]
+    c.discard_phase = None
+    c.discards = [(1, "ORE"), (1, "WOOD")]
+    c._flush_discards()  # BLUE's discards arrive first
+    c.record["checks"] += [
+        {"at": 3, "color": "BLUE", "resources": 11},  # after its discards
+        {"at": 3, "color": "RED", "resources": 12},  # RED hasn't discarded yet
+    ]
+    c.discards = [(2, "SHEEP")]
+    c._flush_discards()
+    assert [e[0][:2] for e in c.log[1:]] == [["RED", "DISCARD_RESOURCE"]] + [
+        ["BLUE", "DISCARD_RESOURCE"]
+    ] * 2
+    assert c.record["checks"] == [
+        {"at": 4, "color": "BLUE", "resources": 11},
+        {"at": 1, "color": "RED", "resources": 12},
+    ]
