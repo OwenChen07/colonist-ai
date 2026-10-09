@@ -155,6 +155,19 @@ The VM loop can be stopped and restarted with new flags at any time; it resumes.
 
 ## 6. Running infrastructure (check before changing anything)
 
+**Since 9 Oct 2026, 6:25 pm Toronto: the graph net.**
+- Training runs `runs/g1` (`scripts/vm/train.sh`, log `runs/train.log`), from
+  `models/graph1`: the board-aware graph net in `graph.py`, trained from scratch on
+  sp1's rounds 9-14.
+- Results before the switch:
+  - 57.4% against sp1 round 15 (500 games) and 60.3% against round 16 (300 games).
+  - AlphaBeta benchmark 91.0%; live value MSE 0.568, against round 15's 0.580.
+- The ranked bot follows `runs/g1`'s promotions.
+- `runs/sp1` (the fully connected net, best round 17) is stopped and kept as it
+  was; `scripts/vm/train-sp1.sh` restarts it.
+- Live play at 800 simulations takes about 1-6 s per move while self-play shares
+  the coordinator.
+
 **24/7 setup (since 8 Oct 2026), on `colonist-selfplay-1`:** `~/colonist-ai` is now a
 git checkout of `main-9mnmbh`. It pulls and pushes with a read-write deploy key,
 `~/.ssh/github_deploy`. Three systemd services start at boot, defined in `scripts/vm/`:
