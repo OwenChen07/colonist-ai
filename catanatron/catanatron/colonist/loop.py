@@ -171,6 +171,15 @@ def _round_setup_scale(run, n):
         return json.load(stream)["setup_noise_scale"]
 
 
+def _eval_hosts(args):
+    """The self-play workers, read again now, when --distribute-eval is on."""
+    if not getattr(args, "distribute_eval", False):
+        return None
+    from catanatron.colonist import distributed
+
+    return distributed.worker_hosts() or None
+
+
 def match(run, n, args):
     from catanatron.colonist.evaluate import sprt
 
@@ -192,6 +201,7 @@ def match(run, n, args):
         p1=0.50 if loose else 0.54,
         max_games=args.max_games,
         batch_pairs=args.batch_pairs,
+        hosts=_eval_hosts(args),
         progress=lambda r: say(f"  {r.n} games: {r.score:.1%} ± {r.margin:.1%}"),
     )
     passed = result.decision != "keep" if loose else result.decision == "promote"
@@ -254,6 +264,7 @@ def gauntlet(run, n, args):
             games=args.gauntlet_games,
             seed=args.seed + 800_000_000,
             workers=args.workers,
+            hosts=_eval_hosts(args),
         )
         say(f"  gauntlet: {result.summary()}")
         results[spec] = round(result.score, 4)
@@ -338,6 +349,7 @@ def _benchmark(run, n, args, record, net):
         games=args.benchmark_games,
         seed=args.seed + 900_000_000,  # the same boards every time, to compare rounds
         workers=args.workers,
+        hosts=_eval_hosts(args),
         diagnostics=True,
     )
     say(f"  {result.summary()}")
@@ -402,6 +414,11 @@ def main(argv=None):
     parser.add_argument("--device", default=None)
     parser.add_argument("--match-simulations", type=int, default=100)
     parser.add_argument("--max-games", type=int, default=2000)
+    parser.add_argument(
+        "--distribute-eval",
+        action="store_true",
+        help="play promotion matches and benchmarks on the self-play workers too",
+    )
     parser.add_argument(
         "--gate",
         choices=("strict", "loose"),

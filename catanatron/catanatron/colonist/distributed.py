@@ -226,24 +226,8 @@ def _prepare(host, key, root, remote_data, remote_nets, net_path):
     subprocess.run(
         _ssh(host, key, ["mkdir", "-p", remote_data, remote_nets]), check=True
     )
-    # The same rules and search everywhere: this checkout's code, into the
-    # worker's editable install.
-    source = Path(__file__).resolve().parents[2]  # the catanatron/ folder
-    subprocess.run(
-        [
-            "rsync",
-            "-a",
-            "--exclude",
-            "*.egg-info",
-            "--exclude",
-            "__pycache__",
-            "-e",
-            f"ssh -i {shlex.quote(key)} -o BatchMode=yes",
-            str(source),
-            f"{host}:{root}/",
-        ],
-        check=True,
-    )
+    # The same rules and search everywhere.
+    _sync_code(host, key, root)
     remote_net = remote_nets / "best.npz"
     _rsync(key, net_path, f"{host}:{remote_net}")
     return [
@@ -292,3 +276,134 @@ def main(argv=None):
 
 if __name__ == "__main__":
     main()
+
+
+# ----- evaluation games (promotion matches, benchmarks) on the workers -----
+def _settings():
+    key = os.path.expanduser(
+        os.environ.get("COLONIST_WORKER_SSH_KEY", "~/.ssh/colonist_worker_ed25519")
+    )
+    root = Path(os.environ.get("COLONIST_WORKER_ROOT", "/home/owen/colonist-ai"))
+    return key, root
+
+
+def _sync_code(host, key, root):
+    """This checkout's code, into the worker's editable install."""
+    source = Path(__file__).resolve().parents[2]  # the catanatron/ folder
+    subprocess.run(
+        [
+            "rsync",
+            "-a",
+            "--exclude",
+            "*.egg-info",
+            "--exclude",
+            "__pycache__",
+            "-e",
+            f"ssh -i {shlex.quote(key)} -o BatchMode=yes",
+            str(source),
+            f"{host}:{root}/",
+        ],
+        check=True,
+    )
+
+
+def _remote_specs(host, key, root, tasks):
+    """Copies the nets the tasks name (Z:<net.npz>:<simulations>) to the
+    worker, and returns the tasks naming the worker's copies."""
+    import hashlib
+
+    folder = root / "eval-nets"
+    subprocess.run(_ssh(host, key, ["mkdir", "-p", folder]), check=True)
+    copies = {}
+
+    def remote(spec):
+        if not (isinstance(spec, str) and spec.startswith("Z:")):
+            return spec
+        _, path, *rest = spec.split(":")
+        if path not in copies:
+            with open(path, "rb") as f:
+                digest = hashlib.file_digest(f, "sha256").hexdigest()[:12]
+            target = folder / f"{digest}-{Path(path).name}"
+            _rsync(key, path, f"{host}:{target}")
+            copies[path] = str(target)
+        return ":".join(["Z", copies[path], *rest])
+
+    return [(remote(t[0]), remote(t[1]), *t[2:]) for t in tasks]
+
+
+def run_tasks(tasks, workers=None, hosts=None, log=print):
+    """Plays evaluate.py's game tasks here and on the worker hosts, in
+    proportion to their processes, and returns the results in task order. A
+    game is a pure function of its task, so where it is played changes
+    nothing. A worker's games that don't come back are played here."""
+    import json
+    import threading
+
+    from catanatron.colonist import evaluate
+
+    tasks = list(tasks)
+    hosts = worker_hosts() if hosts is None else hosts
+    key, root = _settings()
+    local = workers or os.cpu_count() or 1
+    weights = [local] + [p for _, p in hosts]
+    cuts = [
+        round(len(tasks) * sum(weights[:i]) / sum(weights))
+        for i in range(len(weights) + 1)
+    ]
+    chunks = list(zip(cuts, cuts[1:]))
+    remote = []
+    for (host, processes), (a, b) in zip(hosts, chunks[1:]):
+        if a == b:
+            continue
+        try:
+            _sync_code(host, key, root)
+            lines = "".join(
+                json.dumps(list(t)) + "\n"
+                for t in _remote_specs(host, key, root, tasks[a:b])
+            )
+        except (subprocess.CalledProcessError, OSError):
+            log(f"could not prepare {host}; its games run here")
+            continue
+        argv = [
+            root / ".venv/bin/python",
+            "-m",
+            "catanatron.colonist.evaluate",
+            "--tasks-stdin",
+            "--workers",
+            processes,
+        ]
+        process = subprocess.Popen(
+            _ssh(host, key, argv),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        out = {}
+        thread = threading.Thread(
+            target=lambda p=process, o=out, s=lines: o.update(
+                zip(("stdout", "stderr"), p.communicate(s))
+            )
+        )
+        thread.start()
+        remote.append((host, (a, b), process, thread, out))
+    results = [None] * len(tasks)
+    a, b = chunks[0]
+    for i, game in zip(range(a, b), evaluate._run(tasks[a:b], local)):
+        results[i] = game
+    for host, (a, b), process, thread, out in remote:
+        thread.join()
+        games = []
+        for line in (out.get("stdout") or "").splitlines():
+            try:
+                games.append(evaluate.GameResult(**json.loads(line)))
+            except (ValueError, TypeError):
+                break
+        if process.returncode or len(games) != b - a:
+            log(f"{host} returned {len(games)} of {b - a} games; playing the rest here")
+        for i, game in zip(range(a, b), games):
+            results[i] = game
+    missing = [i for i, game in enumerate(results) if game is None]
+    for i, game in zip(missing, evaluate._run([tasks[i] for i in missing], local)):
+        results[i] = game
+    return results

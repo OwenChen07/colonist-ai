@@ -208,15 +208,18 @@ def match(
     rules=None,
     progress: Optional[Callable[[MatchResult], None]] = None,
     diagnostics=False,
+    hosts=None,
 ) -> MatchResult:
-    """`games` games (rounded up to whole pairs) on boards seed, seed+1, ..."""
+    """`games` games (rounded up to whole pairs) on boards seed, seed+1, ...
+    With `hosts` ([(user@host, processes)]), some are played on those SSH
+    workers (distributed.run_tasks)."""
     pairs = (games + 1) // 2
     result = MatchResult(_name(spec_a), _name(spec_b))
     start = time.time()
     tasks = tasks_for(
         spec_a, spec_b, range(seed, seed + pairs), rules or {}, diagnostics
     )
-    for game in _run(tasks, workers):
+    for game in _run(tasks, workers, hosts):
         result.games.append(game)
         if progress and result.n % 100 == 0:
             result.seconds = time.time() - start
@@ -238,6 +241,7 @@ def sprt(
     max_games=2000,
     batch_pairs=50,
     progress=None,
+    hosts=None,
 ) -> MatchResult:
     """Promotion test: does A beat B at p1 or better, rather than p0?"""
     lower, upper = math.log(beta / (1 - alpha)), math.log((1 - beta) / alpha)
@@ -248,7 +252,7 @@ def sprt(
         seeds = range(next_seed, next_seed + n_pairs)
         next_seed += n_pairs
         result.games.extend(
-            _run(tasks_for(spec_a, spec_b, seeds, rules or {}), workers)
+            _run(tasks_for(spec_a, spec_b, seeds, rules or {}), workers, hosts)
         )
         llr = llr_bernoulli(result.games, p0, p1)
         result.seconds = time.time() - start
@@ -271,9 +275,14 @@ def llr_bernoulli(games: Sequence[GameResult], p0, p1):
     return wins * math.log(p1 / p0) + losses * math.log((1 - p1) / (1 - p0))
 
 
-def _run(tasks, workers):
+def _run(tasks, workers, hosts=None):
     """Play the tasks, yielding results in task order as they finish."""
     tasks = list(tasks)
+    if hosts:
+        from catanatron.colonist.distributed import run_tasks
+
+        yield from run_tasks(tasks, workers, hosts)
+        return
     if workers == 1:
         yield from map(play_game, tasks)
         return
@@ -292,8 +301,14 @@ def main(argv=None):
         description=__doc__.split("\n\n")[0],
         epilog="Bots: R random, W weighted random, F value function, AB:<depth> AlphaBeta.",
     )
-    parser.add_argument("a", help="bot A, e.g. AB:2")
-    parser.add_argument("b", help="bot B, e.g. F")
+    parser.add_argument("a", nargs="?", help="bot A, e.g. AB:2")
+    parser.add_argument("b", nargs="?", help="bot B, e.g. F")
+    parser.add_argument(
+        "--tasks-stdin",
+        action="store_true",
+        help="play game tasks given as JSON lines on stdin, one result per line "
+        "on stdout (how distributed.run_tasks uses a worker)",
+    )
     parser.add_argument("--games", type=int, default=1000)
     parser.add_argument("--seed", type=int, default=0, help="first board seed")
     parser.add_argument("--workers", type=int, default=None, help="default: all cores")
@@ -312,6 +327,16 @@ def main(argv=None):
     # gain nothing from more, and threads across workers fight for cores.
     for var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
         os.environ.setdefault(var, "1")
+    if args.tasks_stdin:
+        import dataclasses
+        import json
+
+        tasks = [tuple(json.loads(line)) for line in sys.stdin if line.strip()]
+        for game in _run(tasks, args.workers):
+            print(json.dumps(dataclasses.asdict(game)), flush=True)
+        return 0
+    if not (args.a and args.b):
+        parser.error("bots A and B are required")
     rules = {"dice": "random"} if args.plain_dice else {}
     show = lambda r: print(f"  {r.n} games: {r.score:.1%} ± {r.margin:.1%}", flush=True)
     if args.sprt:
