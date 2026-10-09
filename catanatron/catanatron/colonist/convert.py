@@ -69,6 +69,9 @@ SEAT_COLORS = ["RED", "BLUE", "ORANGE", "WHITE"]
 GAME_STATE = 4
 DIFF = 91
 GAME_OVER = 45
+#: The end-of-game summary counts points by kind: settlements, cities, victory
+#: point cards, largest army, longest road. The value of one of each:
+END_GAME_POINTS = {"0": 1, "1": 2, "2": 1, "3": 2, "4": 2}
 
 DEV_CARD = {
     11: KNIGHT,
@@ -564,15 +567,37 @@ class _Converter:
                 self.record["checks"].append(check)
 
     def finish(self, end_game_state):
-        """Hidden victory point cards, revealed in colonist's end-of-game summary."""
+        """Hidden victory point cards, revealed in colonist's end-of-game summary.
+
+        Also a forfeit: when a player leaves (or times out) colonist logs the
+        other as the winner without a resignation entry, short of the points
+        to win. That is recorded as a resignation by the one who left, so the
+        replay doesn't expect a winner on points."""
         if not end_game_state:
             return
-        hidden = {}
+        hidden, points = {}, {}
         for c, p in end_game_state.get("players", {}).items():
             color = int(c)
-            if color != self.you and color in self.seat:
-                hidden[self.seat[color]] = p.get("victoryPoints", {}).get("2", 0)
+            if color not in self.seat:
+                continue
+            vps = p.get("victoryPoints", {})
+            points[self.seat[color]] = sum(
+                END_GAME_POINTS.get(k, 1) * n for k, n in vps.items()
+            )
+            if color != self.you:
+                hidden[self.seat[color]] = vps.get("2", 0)
         self.record["hidden_vp_cards"] = hidden
+        winner = self.record.get("winner")
+        if (
+            self.conv.ended == "win"
+            and len(points) == 2
+            and winner in points
+            and points[winner] < self.record["rules"]["vps_to_win"]
+        ):
+            self.conv.ended = "resignation"
+            self.record["resigned"] = next(c for c in points if c != winner)
+            self.record["forfeit"] = True
+            del self.record["winner"]
 
 
 def convert(frames) -> Conversion:

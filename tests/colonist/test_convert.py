@@ -367,3 +367,61 @@ def test_unfinished_year_of_plenty_stops_the_record(frames):
         with_extra_log_entry(frames, {"type": 20, "playerColor": 1, "cardEnum": 15})
     )
     assert conv.unsupported and "never came" in conv.unsupported[0]
+
+
+def test_a_player_who_leaves_forfeits(frames):
+    """When the opponent leaves, colonist logs the other player as the winner,
+    short of 15 points, with no resignation entry: that is a forfeit."""
+    from dataclasses import replace
+
+    from catanatron.colonist.convert import DIFF, GAME_OVER
+
+    frames = copy.deepcopy(frames)
+    last = None
+    for f in frames:
+        if f.dir == "in" and f.type == DIFF:
+            logs = f.data["data"]["payload"].get("diff", {}).get("gameLogState") or {}
+            for key in [k for k, v in logs.items() if v["text"]["type"] == 112]:
+                del logs[key]  # no resignation entry
+            last = f
+    end = {
+        "players": {
+            "1": {"color": 1, "victoryPoints": {"0": 2, "1": 1}, "winningPlayer": True},
+            "2": {"color": 2, "victoryPoints": {"0": 2}, "winningPlayer": False},
+        }
+    }
+    game_over = replace(
+        last,
+        seq=last.seq + 1,
+        data={"data": {"type": GAME_OVER, "payload": {"endGameState": end}}},
+    )
+    conv = convert(frames + [game_over])
+    assert conv.ended == "resignation" and not conv.unsupported
+    record = conv.record
+    assert record["forfeit"] and "winner" not in record
+    assert record["resigned"] == "BLUE"  # the one who left; RED was logged the winner
+    assert replay(record).ok
+
+
+def test_a_win_on_points_is_not_a_forfeit(frames):
+    from dataclasses import replace
+
+    from catanatron.colonist.convert import GAME_OVER
+
+    conv = convert(frames)
+    assert "forfeit" not in conv.record
+    last = frames[-1]
+    # 5 settlements, 4 cities and longest road: 15 points (from the full game)
+    end = {
+        "players": {
+            "1": {"victoryPoints": {"0": 5, "1": 4, "4": 1}},
+            "2": {"victoryPoints": {}},
+        }
+    }
+    game_over = replace(
+        last,
+        seq=last.seq + 1,
+        dir="in",
+        data={"data": {"type": GAME_OVER, "payload": {"endGameState": end}}},
+    )
+    assert "forfeit" not in convert(frames + [game_over]).record
