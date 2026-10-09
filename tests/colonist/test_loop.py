@@ -217,3 +217,19 @@ def test_strict_gate_keeps_an_undecided_net(tiny_args, monkeypatch):
     assert loop.main(args + ["--init", init, "--rounds", "1"]) == 0
     state = json.loads((run / "state.json").read_text())
     assert not state["history"][0]["promoted"] and state["best_round"] == 0
+
+
+def test_train_sample_reaches_the_trainer(tiny_args, monkeypatch):
+    pytest.importorskip("torch")
+    from catanatron.colonist import loop
+    from catanatron.colonist import train as T
+
+    run, args, init = tiny_args
+    seen = []
+    real = T.main
+    monkeypatch.setattr(T, "main", lambda argv: seen.append(argv) or real(argv))
+    monkeypatch.setattr(evaluate, "sprt", lambda *a, **k: _fake_result("keep", 0.4))
+    monkeypatch.setattr(evaluate, "match", lambda *a, **k: _fake_result(None, 0.6))
+    extra = ["--train-sample", "50", "--init", init, "--rounds", "1"]
+    assert loop.main(args + extra) == 0
+    assert seen[0][seen[0].index("--sample") + 1] == "50"

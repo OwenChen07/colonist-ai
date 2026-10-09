@@ -156,6 +156,8 @@ def train(run, n, args):
     ]
     if args.device:
         argv += ["--device", args.device]
+    if args.train_sample:
+        argv += ["--sample", str(args.train_sample)]
     if T.main(argv) != 0:
         raise SystemExit("training failed")
     shutil.copyfile(run.dir(n, "train", "net.npz"), run.net(n))
@@ -390,6 +392,12 @@ def main(argv=None):
     )
     parser.add_argument("--extra-data", default="", help="comma-separated data folders")
     parser.add_argument("--epochs", type=int, default=3)
+    parser.add_argument(
+        "--train-sample",
+        type=int,
+        default=0,
+        help="positions drawn per epoch from the window (default: all of them)",
+    )
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--device", default=None)
     parser.add_argument("--match-simulations", type=int, default=100)
