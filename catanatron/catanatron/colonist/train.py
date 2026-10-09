@@ -166,12 +166,26 @@ def load_split(paths, val_fraction, value_mix=0.0):
         # One array at a time, freeing the pieces as they are joined, so the
         # peak is not two full copies.
         for k in ("game", "dynamic", "legal", "action", "value", "soft", "count", "pi"):
-            split[k] = np.concatenate([p.pop(k) for p in parts]) if parts else None
+            split[k] = _join([p for p in parts], k) if parts else None
         if parts:
             ends = np.cumsum(split.pop("count"))
             split["pi_start"] = ends - np.diff(ends, prepend=0)
         out.append(split if parts else None)
     return static, out[0], out[1], offset
+
+
+def _join(parts, key):
+    """np.concatenate of the parts' arrays under `key`, freeing each piece as
+    it is copied: the result's pages fill as the pieces' are released."""
+    first = parts[0][key]
+    out = np.empty((sum(len(p[key]) for p in parts), *first.shape[1:]), first.dtype)
+    at = 0
+    for p in parts:
+        piece = p.pop(key)
+        out[at : at + len(piece)] = piece
+        at += len(piece)
+        del piece
+    return out
 
 
 class Data:
