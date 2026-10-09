@@ -162,15 +162,11 @@ def load_split(paths, val_fraction, value_mix=0.0):
     out = []
     for val in (False, True):
         parts = splits[val]
-        split = {
-            k: np.concatenate([p[k] for p in parts]) if parts else None
-            for k in ("game", "dynamic", "legal", "action", "value", "soft", "count")
-        }
-        split["pi"] = (
-            np.concatenate([p["pi"] for p in parts])
-            if parts
-            else np.zeros(0, np.float16)
-        )
+        split = {}
+        # One array at a time, freeing the pieces as they are joined, so the
+        # peak is not two full copies.
+        for k in ("game", "dynamic", "legal", "action", "value", "soft", "count", "pi"):
+            split[k] = np.concatenate([p.pop(k) for p in parts]) if parts else None
         if parts:
             ends = np.cumsum(split.pop("count"))
             split["pi_start"] = ends - np.diff(ends, prepend=0)
