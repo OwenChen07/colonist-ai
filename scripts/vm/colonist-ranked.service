@@ -8,6 +8,7 @@ StartLimitIntervalSec=0
 User=owen
 WorkingDirectory=/home/owen/colonist-ai
 Environment=PYTHONUNBUFFERED=1
+Environment=OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
 # Plays the training run's promoted net and switches between games when a new
 # one is promoted. A failure outside a game exits and restarts here after 5
 # minutes; a failure during a game leaves the browser open (status

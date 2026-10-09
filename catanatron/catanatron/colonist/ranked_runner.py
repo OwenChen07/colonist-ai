@@ -91,6 +91,26 @@ def install_promoted_model(source, destination):
     return True
 
 
+#: One math-library thread for the bridge, set before numpy loads. The net's
+#: products are tiny; on a busy machine extra threads only wait on each other.
+#: Measured on the cloud VM during self-play: the graph net's 800 simulations
+#: took 10.4 s with the default threads and 0.82 s with one, and colonist rolls
+#: for a player who takes too long to start a turn.
+ONE_THREAD = {
+    k: "1"
+    for k in (
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "VECLIB_MAXIMUM_THREADS",
+    )
+}
+
+
+def bridge_env():
+    return {**os.environ, **ONE_THREAD}
+
+
 async def _bridge(
     net, simulations, captures, log_path, spectator_state=None, label=None
 ):
@@ -122,6 +142,7 @@ async def _bridge(
         *command,
         stdout=log,
         stderr=asyncio.subprocess.STDOUT,
+        env=bridge_env(),
     )
     for _ in range(100):
         if process.returncode is not None:

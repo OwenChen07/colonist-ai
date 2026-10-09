@@ -1,6 +1,7 @@
 """Promoted checkpoints are installed safely for cloud ranked play."""
 
 import json
+import os
 
 import numpy as np
 import pytest
@@ -86,3 +87,12 @@ def test_a_resignation_names_the_other_player_as_winner(tmp_path):
     conversion = SimpleNamespace(ended="resignation", record=record)
     row = record_game(tmp_path, "bridge-2.json", conversion, net, "x", 8, 800)
     assert row["winner"] == "BLUE" == row["bot_color"]
+
+
+def test_the_bridge_runs_with_one_math_thread(monkeypatch):
+    from catanatron.colonist.ranked_runner import bridge_env
+
+    monkeypatch.setenv("OPENBLAS_NUM_THREADS", "8")
+    env = bridge_env()
+    assert env["OPENBLAS_NUM_THREADS"] == env["OMP_NUM_THREADS"] == "1"
+    assert env["PATH"] == os.environ["PATH"]
