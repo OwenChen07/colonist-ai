@@ -110,8 +110,8 @@ def split_by_game(seeds, val_fraction):
 
 
 def load_split(paths, val_fraction, value_mix=0.0):
-    """Reads the shards one at a time into compact training and validation
-    sets, split by game, as (static, train, validation, games).
+    """Reads the shards into compact training and validation sets, split by
+    game, as (static, train, validation, games).
 
     Compact, so many rounds of self-play fit in memory: legal moves stay
     packed (8 per byte), and a search policy keeps only its legal moves'
@@ -119,73 +119,81 @@ def load_split(paths, val_fraction, value_mix=0.0):
     them. The value target mixes the game result with the search's value:
     (1 - value_mix) z + value_mix v, which is just z for rows without a search
     and for quick searches (`full` false: no policy target either; see
-    datagen.load)."""
-    statics, splits, offset = [], {False: [], True: []}, 0
-    for path in sorted(paths):
+    datagen.load).
+
+    Two passes: the first counts rows and policy entries, the second fills
+    arrays allocated once at their final size, so memory never holds a second
+    copy of the positions."""
+    paths = sorted(paths)
+    plans, sizes, games = [], {False: [0, 0], True: [0, 0]}, 0
+    for path in paths:
+        with np.load(path) as shard:
+            seeds, game, legal = shard["seed"], shard["game"], shard["legal"]
+            soft = np.full(len(game), "pi" in shard.files)
+            if "full" in shard.files:
+                soft &= shard["full"].astype(bool)
+        is_val = split_by_game(seeds, val_fraction)[game]
+        count = np.zeros(len(game), np.int64)
+        if soft.any():
+            bits = np.unpackbits(legal[soft], axis=1, count=E.NUM_ACTIONS)
+            count[soft] = bits.sum(1)
+        for val in (False, True):
+            sizes[val][0] += int((is_val == val).sum())
+            sizes[val][1] += int(count[is_val == val].sum())
+        plans.append((is_val, soft, count))
+        games += len(seeds)
+
+    static = np.empty((games, E.STATIC_SIZE), np.float32)
+    splits = {}
+    for val in (False, True):
+        n, n_pi = sizes[val]
+        splits[val] = {
+            "game": np.empty(n, np.int64),
+            "dynamic": np.empty((n, E.DYNAMIC_SIZE), np.float16),
+            "legal": np.empty((n, (E.NUM_ACTIONS + 7) // 8), np.uint8),
+            "action": np.empty(n, np.int16),
+            "value": np.empty(n, np.float32),
+            "soft": np.empty(n, bool),
+            "pi_start": np.empty(n, np.int64),
+            "pi": np.empty(n_pi, np.float16),
+        }
+    at = {False: [0, 0], True: [0, 0]}
+    offset = 0
+    for path, (is_val, soft, count) in zip(paths, plans):
         with np.load(path) as shard:
             d = {k: shard[k] for k in shard.files}
-        n = len(d["z"])
         z = d["z"].astype(np.float32)
-        soft = np.full(n, "pi" in d)
         v = d["v"].astype(np.float32) if "v" in d else z
         if "full" in d:
-            quick = ~d["full"].astype(bool)
-            soft &= ~quick
-            v = np.where(quick, z, v)
+            v = np.where(d["full"].astype(bool), v, z)
         value = (1 - value_mix) * z + value_mix * v
-        is_val = split_by_game(d["seed"], val_fraction)[d["game"]]
+        static[offset : offset + len(d["static"])] = d["static"]
         for val in (False, True):
             rows = np.flatnonzero(is_val == val)
             if not len(rows):
                 continue
-            legal = d["legal"][rows]
-            part = {
-                "game": d["game"][rows].astype(np.int64) + offset,
-                "dynamic": d["dynamic"][rows],
-                "legal": legal,
-                "action": d["action"][rows],
-                "value": value[rows],
-                "soft": soft[rows],
-                "count": np.zeros(len(rows), np.int64),
-                "pi": np.zeros(0, np.float16),
-            }
-            if soft[rows].any():
+            split, (r, q) = splits[val], at[val]
+            end = r + len(rows)
+            split["game"][r:end] = d["game"][rows] + offset
+            split["dynamic"][r:end] = d["dynamic"][rows]
+            split["legal"][r:end] = d["legal"][rows]
+            split["action"][r:end] = d["action"][rows]
+            split["value"][r:end] = value[rows]
+            split["soft"][r:end] = soft[rows]
+            counts = count[rows]
+            split["pi_start"][r:end] = q + np.cumsum(counts) - counts
+            soft_rows = rows[soft[rows]]
+            if len(soft_rows):
                 mask = np.unpackbits(
-                    legal[soft[rows]], axis=1, count=E.NUM_ACTIONS
+                    d["legal"][soft_rows], axis=1, count=E.NUM_ACTIONS
                 ).astype(bool)
-                part["pi"] = d["pi"][rows[soft[rows]]][mask].astype(np.float16)
-                part["count"][soft[rows]] = mask.sum(1)
-            splits[val].append(part)
-        statics.append(d["static"])
+                n_pi = int(counts.sum())
+                split["pi"][q : q + n_pi] = d["pi"][soft_rows][mask]
+            at[val] = [end, q + int(counts.sum())]
         offset += len(d["static"])
-    static = np.concatenate(statics).astype(np.float32)
-    out = []
-    for val in (False, True):
-        parts = splits[val]
-        split = {}
-        # One array at a time, freeing the pieces as they are joined, so the
-        # peak is not two full copies.
-        for k in ("game", "dynamic", "legal", "action", "value", "soft", "count", "pi"):
-            split[k] = _join([p for p in parts], k) if parts else None
-        if parts:
-            ends = np.cumsum(split.pop("count"))
-            split["pi_start"] = ends - np.diff(ends, prepend=0)
-        out.append(split if parts else None)
-    return static, out[0], out[1], offset
-
-
-def _join(parts, key):
-    """np.concatenate of the parts' arrays under `key`, freeing each piece as
-    it is copied: the result's pages fill as the pieces' are released."""
-    first = parts[0][key]
-    out = np.empty((sum(len(p[key]) for p in parts), *first.shape[1:]), first.dtype)
-    at = 0
-    for p in parts:
-        piece = p.pop(key)
-        out[at : at + len(piece)] = piece
-        at += len(piece)
-        del piece
-    return out
+        del d
+    train, val = (splits[v] if sizes[v][0] else None for v in (False, True))
+    return static, train, val, games
 
 
 class Data:
