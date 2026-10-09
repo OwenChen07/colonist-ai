@@ -31,7 +31,6 @@ import time
 import numpy as np
 
 from catanatron.colonist import encode as E
-from catanatron.colonist.datagen import load
 
 
 def build_model(hidden):
@@ -110,49 +109,120 @@ def split_by_game(seeds, val_fraction):
     return h < val_fraction * 1000
 
 
+def load_split(paths, val_fraction, value_mix=0.0):
+    """Reads the shards one at a time into compact training and validation
+    sets, split by game, as (static, train, validation, games).
+
+    Compact, so many rounds of self-play fit in memory: legal moves stay
+    packed (8 per byte), and a search policy keeps only its legal moves'
+    shares, in row order (`pi`, with `pi_start` per row). Data.batch expands
+    them. The value target mixes the game result with the search's value:
+    (1 - value_mix) z + value_mix v, which is just z for rows without a search
+    and for quick searches (`full` false: no policy target either; see
+    datagen.load)."""
+    statics, splits, offset = [], {False: [], True: []}, 0
+    for path in sorted(paths):
+        with np.load(path) as shard:
+            d = {k: shard[k] for k in shard.files}
+        n = len(d["z"])
+        z = d["z"].astype(np.float32)
+        soft = np.full(n, "pi" in d)
+        v = d["v"].astype(np.float32) if "v" in d else z
+        if "full" in d:
+            quick = ~d["full"].astype(bool)
+            soft &= ~quick
+            v = np.where(quick, z, v)
+        value = (1 - value_mix) * z + value_mix * v
+        is_val = split_by_game(d["seed"], val_fraction)[d["game"]]
+        for val in (False, True):
+            rows = np.flatnonzero(is_val == val)
+            if not len(rows):
+                continue
+            legal = d["legal"][rows]
+            part = {
+                "game": d["game"][rows].astype(np.int64) + offset,
+                "dynamic": d["dynamic"][rows],
+                "legal": legal,
+                "action": d["action"][rows],
+                "value": value[rows],
+                "soft": soft[rows],
+                "count": np.zeros(len(rows), np.int64),
+                "pi": np.zeros(0, np.float16),
+            }
+            if soft[rows].any():
+                mask = np.unpackbits(
+                    legal[soft[rows]], axis=1, count=E.NUM_ACTIONS
+                ).astype(bool)
+                part["pi"] = d["pi"][rows[soft[rows]]][mask].astype(np.float16)
+                part["count"][soft[rows]] = mask.sum(1)
+            splits[val].append(part)
+        statics.append(d["static"])
+        offset += len(d["static"])
+    static = np.concatenate(statics).astype(np.float32)
+    out = []
+    for val in (False, True):
+        parts = splits[val]
+        split = {
+            k: np.concatenate([p[k] for p in parts]) if parts else None
+            for k in ("game", "dynamic", "legal", "action", "value", "soft", "count")
+        }
+        split["pi"] = (
+            np.concatenate([p["pi"] for p in parts])
+            if parts
+            else np.zeros(0, np.float16)
+        )
+        if parts:
+            ends = np.cumsum(split.pop("count"))
+            split["pi_start"] = ends - np.diff(ends, prepend=0)
+        out.append(split if parts else None)
+    return static, out[0], out[1], offset
+
+
 class Data:
-    """Positions on the device, with board inputs gathered per batch.
+    """Positions on the device, compact (load_split), expanded per batch."""
 
-    Policy targets are either the bot's move (`action`, a class index) or a
-    search's improved policy (`pi`, a distribution); the value target mixes
-    the game result with the search's value: (1 - value_mix) z + value_mix v,
-    which is just z for rows without a search."""
-
-    def __init__(self, d, rows, device, value_mix=0.0):
+    def __init__(self, static, split, device):
         import torch
 
         t = lambda a: torch.from_numpy(np.ascontiguousarray(a)).to(device)
-        self.static = t(d["static"])
-        self.game = t(d["game"][rows].astype(np.int64))
-        self.dynamic = t(d["dynamic"][rows])
-        self.legal = t(d["legal"][rows])
-        self.action = t(d["action"][rows].astype(np.int64))
-        z = d["z"][rows].astype(np.float32)
-        v = d["v"][rows].astype(np.float32)
-        self.value = t((1 - value_mix) * z + value_mix * v)
-        soft = d["soft"][rows]
-        self.has_soft = len(d["pi"]) > 0
-        if self.has_soft:
-            # pi rows for just these positions, renumbered
-            used = soft >= 0
-            self.pi = t(d["pi"][soft[used]])
-            remap = np.full(len(rows), -1, np.int64)
-            remap[used] = np.arange(used.sum())
-            self.soft = t(remap)
-        self.n = len(rows)
+        self.n = 0 if split is None else len(split["value"])
+        self.static = t(static)
+        self.has_soft = bool(self.n) and bool(split["soft"].any())
+        if not self.n:
+            self.value = torch.zeros(0, device=device)
+            return
+        self.game = t(split["game"])
+        self.dynamic = t(split["dynamic"])
+        self.legal = t(split["legal"])
+        self.action = t(split["action"].astype(np.int64))
+        self.value = t(split["value"].astype(np.float32))
+        self.soft = t(split["soft"])
+        self.pi_start = t(split["pi_start"])
+        self.pi = t(split["pi"])
+        self.shifts = torch.arange(7, -1, -1, device=device, dtype=torch.uint8)
 
     def batch(self, idx):
         import torch
 
         x = torch.cat([self.static[self.game[idx]], self.dynamic[idx].float()], dim=1)
+        packed = self.legal[idx]
+        legal = (packed.unsqueeze(-1) >> self.shifts) & 1
+        legal = legal.reshape(len(idx), -1)[:, : E.NUM_ACTIONS].bool()
+        pi = None
         if self.has_soft:
-            soft = self.soft[idx]
             pi = torch.zeros(len(idx), E.NUM_ACTIONS, device=x.device)
-            has = soft >= 0
-            pi[has] = self.pi[soft[has]].float()
-        else:
-            pi = None
-        return x, self.legal[idx], self.action[idx], pi, self.value[idx]
+            soft = self.soft[idx]
+            if soft.any():
+                mask = legal[soft]
+                counts = mask.sum(1)
+                firsts = torch.cumsum(counts, 0) - counts
+                within = torch.arange(int(counts.sum()), device=x.device)
+                within = within - torch.repeat_interleave(firsts, counts)
+                flat = torch.repeat_interleave(self.pi_start[idx][soft], counts)
+                block = torch.zeros(len(mask), E.NUM_ACTIONS, device=x.device)
+                block[mask] = self.pi[flat + within].float()
+                pi[soft] = block
+        return x, legal, self.action[idx], pi, self.value[idx]
 
 
 class Augment:
@@ -256,6 +326,12 @@ def main(argv=None):
     )
     parser.add_argument("--val-fraction", type=float, default=0.05)
     parser.add_argument(
+        "--sample",
+        type=int,
+        default=0,
+        help="positions per epoch, drawn afresh each epoch (default: all)",
+    )
+    parser.add_argument(
         "--no-augment",
         action="store_true",
         help="train without the 12 board symmetries",
@@ -274,19 +350,19 @@ def main(argv=None):
     if not paths:
         print("no shards found", file=sys.stderr)
         return 1
-    d = load(paths)
-    val_game = split_by_game(d["seed"], args.val_fraction)
-    is_val = val_game[d["game"]]
-    train = Data(d, np.flatnonzero(~is_val), device, args.value_mix)
-    val = Data(d, np.flatnonzero(is_val), device, args.value_mix)
+    static, train_split, val_split, games = load_split(
+        paths, args.val_fraction, args.value_mix
+    )
+    train = Data(static, train_split, device)
+    val = Data(static, val_split, device)
+    del train_split, val_split
     print(
-        f"{len(d['seed'])} games, {train.n} training and {val.n} validation positions, "
+        f"{games} games, {train.n} training and {val.n} validation positions, "
         f"on {device}",
         flush=True,
     )
     baseline = float((val.value**2).mean()) if val.n else float("nan")
     print(f"validation value loss of always guessing 0: {baseline:.3f}", flush=True)
-    del d
 
     if args.hidden:
         hidden = [int(h) for h in args.hidden.split(",")]
@@ -302,7 +378,8 @@ def main(argv=None):
     opt = torch.optim.AdamW(
         model.parameters(), lr=args.lr, weight_decay=args.weight_decay
     )
-    steps_per_epoch = math.ceil(train.n / args.batch)
+    per_epoch = min(args.sample, train.n) if args.sample else train.n
+    steps_per_epoch = math.ceil(per_epoch / args.batch)
     total_steps = steps_per_epoch * args.epochs
     sched = torch.optim.lr_scheduler.LambdaLR(
         opt, lambda s: 0.5 * (1 + math.cos(math.pi * min(s, total_steps) / total_steps))
@@ -346,7 +423,7 @@ def main(argv=None):
     for epoch in range(first_epoch, args.epochs):
         start = time.time()
         gen.manual_seed(args.seed * 1000 + epoch)  # resumable shuffles
-        order = torch.randperm(train.n, generator=gen).to(device)
+        order = torch.randperm(train.n, generator=gen)[:per_epoch].to(device)
         sums = np.zeros(3)
         for s in range(steps_per_epoch):
             idx = order[s * args.batch : (s + 1) * args.batch]

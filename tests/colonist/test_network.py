@@ -326,3 +326,49 @@ def test_full_rate_needs_fast_simulations(tmp_path):
         run("unused.npz", str(tmp_path), games=0, full_rate=0.5, log=lambda _: None)
     with pytest.raises(ValueError, match="full_rate"):
         run("unused.npz", str(tmp_path), games=0, full_rate=0, log=lambda _: None)
+
+
+def test_compact_training_data_matches_the_dense_layout(tmp_path):
+    """load_split keeps legal moves packed and search policies over legal moves
+    only; its batches must equal the dense arrays datagen.load gives."""
+    torch = pytest.importorskip("torch")
+    from catanatron.colonist.datagen import load, run_shard as bot_shard
+    from catanatron.colonist.selfplay import run_shard
+    from catanatron.colonist.train import Data, load_split, split_by_game
+
+    net_path = str(tmp_path / "net.npz")
+    random_net(hidden=(16,)).save(net_path)
+    run_shard((str(tmp_path / "sp"), net_path, 0, 3, {"simulations": 4}))
+    pcr = {"simulations": 6, "full_rate": 0.3, "fast_simulations": 2}
+    run_shard((str(tmp_path / "sp"), net_path, 3, 3, pcr))
+    bot_shard((str(tmp_path / "bot"), "W", 0, 4, 10, 0.0))
+    paths = glob.glob(str(tmp_path / "*" / "*.npz"))
+    mix = 0.5
+
+    d = load(paths)
+    static, train, val, games = load_split(paths, 0.4, mix)
+    assert games == len(d["static"])
+    is_val = split_by_game(d["seed"], 0.4)[d["game"]]
+    for split, rows in (
+        (train, np.flatnonzero(~is_val)),
+        (val, np.flatnonzero(is_val)),
+    ):
+        data = Data(static, split, "cpu")
+        assert data.n == len(rows)
+        x, legal, action, pi, value = data.batch(torch.arange(data.n))
+        expect_x = np.concatenate(
+            [d["static"][d["game"][rows]], d["dynamic"][rows].astype(np.float32)], 1
+        )
+        assert np.array_equal(x.numpy(), expect_x)
+        assert np.array_equal(legal.numpy(), d["legal"][rows])
+        assert np.array_equal(action.numpy(), d["action"][rows])
+        z, v = d["z"][rows].astype(np.float32), d["v"][rows].astype(np.float32)
+        assert np.allclose(value.numpy(), (1 - mix) * z + mix * v)
+        expect_pi = np.zeros((len(rows), E.NUM_ACTIONS), np.float32)
+        soft = d["soft"][rows]
+        expect_pi[soft >= 0] = d["pi"][soft[soft >= 0]]
+        assert np.array_equal(pi.numpy(), expect_pi)
+        # any batch order gives the same rows
+        idx = torch.randperm(data.n)[:7]
+        _, _, _, pi7, _ = data.batch(idx)
+        assert np.array_equal(pi7.numpy(), expect_pi[idx.numpy()])
