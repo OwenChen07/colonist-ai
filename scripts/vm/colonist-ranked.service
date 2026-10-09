@@ -14,7 +14,7 @@ Environment=PYTHONUNBUFFERED=1
 # needs_attention) for the hourly watchdog.
 ExecStart=/home/owen/colonist-ai/.venv/bin/python -m catanatron.colonist.ranked_runner \
     --net /home/owen/colonist-ai/models/ranked/model.npz \
-    --promotions /home/owen/colonist-ai/runs/sp1 \
+    --promotions /home/owen/colonist-ai/runs/g1 \
     --games 0 --simulations 800
 StandardOutput=append:/home/owen/colonist-ai/data/ranked/ranked-run.log
 StandardError=append:/home/owen/colonist-ai/data/ranked/ranked-run.log

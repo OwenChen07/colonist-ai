@@ -33,7 +33,7 @@ state=$(python3 -c 'import json;print(json.load(open("data/ranked/runner-status.
 [ "$state" = needs_attention ] && problems+=("ranked runner status is needs_attention")
 [ "$(age data/ranked/bridge.log)" -gt 2700 ] && problems+=("bridge.log has not changed for $(( $(age data/ranked/bridge.log) / 60 )) minutes")
 [ "$(age data/ranked/games.jsonl)" -gt 10800 ] && problems+=("no ranked game verified for $(( $(age data/ranked/games.jsonl) / 60 )) minutes")
-[ "$(age runs/sp1.log)" -gt 10800 ] && problems+=("training log has not changed for $(( $(age runs/sp1.log) / 60 )) minutes")
+[ "$(age runs/train.log)" -gt 10800 ] && problems+=("training log has not changed for $(( $(age runs/train.log) / 60 )) minutes")
 used=$(df --output=pcent / | tail -1 | tr -dc 0-9)
 [ "$used" -gt 90 ] && problems+=("disk is ${used}% full")
 

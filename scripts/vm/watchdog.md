@@ -12,7 +12,7 @@ say so in the journal rather than looking for a way around it.
 - `colonist-ranked` (systemd): `catanatron.colonist.ranked_runner`. It plays
   ranked 1v1 games on colonist.io as the bot account, in a headless Chromium
   with the extension in `bot/`, through the bridge (`catanatron.colonist.bridge`).
-  - It plays the promoted net of `runs/sp1`, installed at
+  - It plays the promoted net of `runs/g1`, installed at
     `models/ranked/model.npz`, and switches nets between games.
   - Logs: `data/ranked/ranked-run.log` (runner) and `data/ranked/bridge.log`
     (every move). Status: `data/ranked/runner-status.json`.
@@ -20,8 +20,9 @@ say so in the journal rather than looking for a way around it.
   - If it stops during a game, the runner keeps the browser open and writes
     `needs_attention`. It doesn't exit, so systemd will not restart it.
 - `colonist-train` (systemd): `scripts/vm/train.sh`, the self-play loop in
-  `runs/sp1`.
-  - Log: `runs/sp1.log`. State: `runs/sp1/state.json`.
+  `runs/g1` (the graph net; `runs/sp1`, the earlier fully connected net's run,
+  is kept but no longer runs).
+  - Log: `runs/train.log`. State: `runs/g1/state.json`.
   - Self-play workers are listed in `scripts/vm/workers.env`.
 - `colonist-spectator` (systemd): the redacted public feed.
 - `HANDOFF.md` describes the project, the colonist protocol and past fixes.
@@ -70,7 +71,7 @@ say so in the journal rather than looking for a way around it.
      about 10 minutes.
 - **A crash** (Chromium, the bridge process, the network): read the logs,
   restart the service, and check it recovers.
-- **Training crashed:** read the end of `runs/sp1.log`.
+- **Training crashed:** read the end of `runs/train.log`.
   - A code bug gets the same treatment as a bridge stop, then
     `sudo systemctl restart colonist-train`. The loop resumes where it stopped.
   - A self-play worker that is down is not a problem: its range is played here.

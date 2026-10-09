@@ -1,5 +1,5 @@
 [Unit]
-Description=Colonist AI: self-play training loop (runs/sp1)
+Description=Colonist AI: self-play training loop (scripts/vm/train.sh)
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=0
@@ -15,8 +15,8 @@ Environment=COLONIST_WORKERS_FILE=/home/owen/colonist-ai/scripts/vm/workers.env
 Nice=10
 ExecStartPre=/home/owen/colonist-ai/scripts/vm/sync_workers.sh
 ExecStart=/home/owen/colonist-ai/scripts/vm/train.sh
-StandardOutput=append:/home/owen/colonist-ai/runs/sp1.log
-StandardError=append:/home/owen/colonist-ai/runs/sp1.log
+StandardOutput=append:/home/owen/colonist-ai/runs/train.log
+StandardError=append:/home/owen/colonist-ai/runs/train.log
 Restart=always
 RestartSec=120
 KillMode=control-group
