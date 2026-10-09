@@ -183,6 +183,14 @@ def round_label(run_dir, round_number):
     return f"{Path(run_dir).name} round {round_number}"
 
 
+def _winner(record):
+    """The winner on points, or else the player who didn't resign (or leave)."""
+    if record.get("winner"):
+        return record["winner"]
+    others = [c for c in record.get("seats", []) if c != record.get("resigned")]
+    return others[0] if record.get("resigned") and len(others) == 1 else None
+
+
 def record_game(data, path, conversion, net, label, round_number, simulations):
     """Appends one verified game to DATA/games.jsonl: which net played it and
     how it ended. Names and chat stay in the capture."""
@@ -197,7 +205,7 @@ def record_game(data, path, conversion, net, label, round_number, simulations):
         "round": round_number,
         "simulations": simulations,
         "bot_color": you[0] if len(you) == 1 else None,
-        "winner": record.get("winner"),
+        "winner": _winner(record),
         "ended": conversion.ended,
         "at": int(time.time()),
     }

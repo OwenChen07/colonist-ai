@@ -68,3 +68,21 @@ def test_each_verified_game_is_listed_with_its_net(tmp_path):
     assert row["capture"] == "bridge-1.json" and row["round"] == 8
     assert row["bot_color"] == "RED" and row["winner"] == "RED"
     assert row["label"] == label and len(row["net_sha256"]) == 16
+
+
+def test_a_resignation_names_the_other_player_as_winner(tmp_path):
+    from types import SimpleNamespace
+
+    from catanatron.colonist.ranked_runner import record_game
+
+    net = tmp_path / "model.npz"
+    net.write_bytes(b"weights")
+    record = {
+        "seats": ["RED", "BLUE"],
+        "resigned": "RED",
+        "forfeit": True,
+        "players": {"RED": {"you": False}, "BLUE": {"you": True}},
+    }
+    conversion = SimpleNamespace(ended="resignation", record=record)
+    row = record_game(tmp_path, "bridge-2.json", conversion, net, "x", 8, 800)
+    assert row["winner"] == "BLUE" == row["bot_color"]
