@@ -156,3 +156,64 @@ def test_full_rate_needs_fast_simulations(tiny_args):
     run, args, init = tiny_args
     with pytest.raises(SystemExit):
         loop.main(args + ["--init", init, "--full-rate", "0.5"])
+
+
+def test_loose_gate_promotes_unless_clearly_worse(tiny_args, monkeypatch):
+    """An undecided match passes the loose gate; the net is promoted after
+    its benchmark, and the SPRT is 46% against 50%."""
+    pytest.importorskip("torch")
+    from catanatron.colonist import loop
+
+    run, args, init = tiny_args
+    seen = {}
+    monkeypatch.setattr(
+        evaluate,
+        "sprt",
+        lambda *a, **k: seen.update(k) or _fake_result(None, 0.49),
+    )
+    monkeypatch.setattr(evaluate, "match", lambda *a, **k: _fake_result(None, 0.6))
+    assert loop.main(args + ["--gate", "loose", "--init", init, "--rounds", "1"]) == 0
+    state = json.loads((run / "state.json").read_text())
+    record = state["history"][0]
+    assert (seen["p0"], seen["p1"]) == (0.46, 0.50)
+    assert record["passed"] and record["promoted"] and record["gate"] == "loose"
+    assert state["best_round"] == 1
+    assert (run / "best.npz").read_bytes() == (
+        run / "nets" / "round_001.npz"
+    ).read_bytes()
+
+
+def test_loose_gate_guardrail_keeps_the_best(tiny_args, monkeypatch):
+    """A net that passes the match but drops on the benchmark is not promoted,
+    and the best net file is untouched."""
+    pytest.importorskip("torch")
+    from catanatron.colonist import loop
+
+    run, args, init = tiny_args
+    monkeypatch.setattr(evaluate, "sprt", lambda *a, **k: _fake_result("promote", 0.5))
+    scores = iter([0.8, 0.5])  # round 1's benchmark, then round 2's
+    monkeypatch.setattr(
+        evaluate, "match", lambda *a, **k: _fake_result(None, next(scores))
+    )
+    loose = args + ["--gate", "loose"]
+    assert loop.main(loose + ["--init", init, "--rounds", "1"]) == 0
+    best = (run / "best.npz").read_bytes()
+    assert loop.main(loose + ["--rounds", "2"]) == 0
+    state = json.loads((run / "state.json").read_text())
+    record = state["history"][1]
+    assert record["passed"] and not record["promoted"]
+    assert "benchmark 0.5000 vs best's 0.8000" in record["guardrails"][0]
+    assert state["best_round"] == 1 and state["since_promotion"] == 1
+    assert (run / "best.npz").read_bytes() == best
+
+
+def test_strict_gate_keeps_an_undecided_net(tiny_args, monkeypatch):
+    pytest.importorskip("torch")
+    from catanatron.colonist import loop
+
+    run, args, init = tiny_args
+    monkeypatch.setattr(evaluate, "sprt", lambda *a, **k: _fake_result(None, 0.51))
+    monkeypatch.setattr(evaluate, "match", lambda *a, **k: _fake_result(None, 0.6))
+    assert loop.main(args + ["--init", init, "--rounds", "1"]) == 0
+    state = json.loads((run / "state.json").read_text())
+    assert not state["history"][0]["promoted"] and state["best_round"] == 0

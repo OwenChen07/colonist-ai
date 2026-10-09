@@ -11,10 +11,15 @@ Each round:
   2. Train: a new net starts from the best one and trains on the last
      --window rounds of self-play data (plus --extra-data, e.g. the bot games
      Phase 2 learned from).
-  3. Promotion match: new net against best, paired boards, an SPRT of 50%
-     against 54% (so 52% is the bar), at most --max-games games. The new net
-     replaces the best only if the test says so.
-  4. When the best net changed, it plays --benchmark (default AlphaBeta) on
+  3. Promotion match: new net against best, paired boards, at most
+     --max-games games. With --gate strict, an SPRT of 50% against 54% (so
+     52% is the bar): the new net replaces the best only if the test says
+     so. With --gate loose (AlphaZero-like: the data keeps moving instead of
+     coming from one net for many rounds), an SPRT of 46% against 50%: the
+     new net passes unless it is clearly worse, and is promoted in step 4
+     only if its guardrails hold.
+  4. When the best net changed (or, with --gate loose, before a net that
+     passed is promoted), it plays --benchmark (default AlphaBeta) on
      a fixed set of boards, to track progress toward the 65% gate, and each
      of --gauntlet (e.g. earlier rounds' nets), so a gain against one bot
      isn't mistaken for a gain overall. Every round's new net is also scored
@@ -171,27 +176,41 @@ def match(run, n, args):
     # crash then still compares against the same net.
     new = f"Z:{run.net(n)}:{args.match_simulations}"
     best = f"Z:{run.net(run.state['best_round'])}:{args.match_simulations}"
-    say(f"round {n}: promotion match, new vs best (at most {args.max_games} games)")
+    loose = args.gate == "loose"
+    say(
+        f"round {n}: promotion match ({args.gate} gate), new vs best "
+        f"(at most {args.max_games} games)"
+    )
     result = sprt(
         new,
         best,
         seed=args.seed + n * 1_000_000 + 500_000,
         workers=args.workers,
+        p0=0.46 if loose else 0.50,
+        p1=0.50 if loose else 0.54,
         max_games=args.max_games,
         batch_pairs=args.batch_pairs,
         progress=lambda r: say(f"  {r.n} games: {r.score:.1%} ± {r.margin:.1%}"),
     )
-    promoted = result.decision == "promote"
+    passed = result.decision != "keep" if loose else result.decision == "promote"
     say(f"  {result.summary()}")
     record = {
         "round": n,
         "games": result.n,
         "score": round(result.score, 4),
         "decision": result.decision or "undecided",
-        "promoted": promoted,
+        "gate": args.gate,
+        "promoted": passed and not loose,
         "setup_noise_scale": _round_setup_scale(run, n),
     }
-    if promoted:
+    if passed and loose:
+        # Promoted in the benchmark step if the guardrails hold, so nothing
+        # (such as the ranked bot) switches to a net that is then undone.
+        record["passed"] = True
+        say(f"  passed: round {n} is not clearly worse; checking its guardrails")
+        run.state["history"].append(record)
+        return
+    if record["promoted"]:
         shutil.copyfile(run.net(n), run.best)
         run.state["best_round"] = n
         run.state["since_promotion"] = 0
@@ -239,21 +258,80 @@ def gauntlet(run, n, args):
     run.state["history"][-1]["gauntlet"] = results
 
 
+def _reference(run, key):
+    """The current best net's recorded benchmark or live value error, or else
+    the latest promoted net's that has one."""
+    best = run.state["best_round"]
+    rows = [r for r in run.state["history"] if r.get(key) not in (None, "")]
+    rows.sort(key=lambda r: (r["round"] == best, r.get("promoted", False)))
+    return rows[-1][key] if rows else None
+
+
+def guardrails(run, n, args, record):
+    """For a net that passed a loose gate: (ok, reasons). Its benchmark and its
+    live value error must not be clearly worse than the current best's."""
+    reasons = []
+    bench = _reference(run, "benchmark")
+    if args.benchmark and bench and record.get("benchmark"):
+        if float(record["benchmark"]) < float(bench) - args.guard_benchmark:
+            reasons.append(f"benchmark {record['benchmark']} vs best's {bench}")
+    if args.live_data and record.get("live", {}).get("mse") is not None:
+        from catanatron.colonist.calibrate import calibrate, load_value_shards
+        from catanatron.colonist.net import Net
+
+        best = calibrate(
+            Net.load(run.net(run.state["best_round"])),
+            load_value_shards(args.live_data),
+        )
+        record["best_live_mse"] = best.get("mse")
+        if best.get("mse") is not None and (
+            record["live"]["mse"] > best["mse"] + args.guard_live
+        ):
+            reasons.append(
+                f"live value MSE {record['live']['mse']} vs best's {best['mse']}"
+            )
+    return not reasons, reasons
+
+
 def benchmark(run, n, args):
     record = run.state["history"][-1]
     record.setdefault("benchmark", "")
     live_calibration(run, n, args)
-    # Only when the best net changed (or the first round): otherwise the same
-    # net would replay the same boards.
-    if not args.benchmark or n % args.benchmark_every:
-        return
-    if not record["promoted"] and n != 1:
-        return
+    candidate = record.get("passed", False)
+    # Only when the best net changed, a net is a candidate, or the first
+    # round: otherwise the same net would replay the same boards.
+    if (
+        args.benchmark
+        and not n % args.benchmark_every
+        and (record["promoted"] or candidate or n == 1)
+    ):
+        _benchmark(run, n, args, record, run.net(n) if candidate else run.best)
+    if candidate:
+        ok, reasons = guardrails(run, n, args, record)
+        if ok:
+            shutil.copyfile(run.net(n), run.best)
+            run.state["best_round"] = n
+            run.state["since_promotion"] = 0
+            record["promoted"] = True
+            say(f"  promoted: round {n} is the new best (guardrails held)")
+        else:
+            record["guardrails"] = reasons
+            run.state["since_promotion"] += 1
+            say(
+                f"  kept round {run.state['best_round']} as best: " + "; ".join(reasons)
+            )
+    if record["promoted"] and args.gauntlet:
+        gauntlet(run, n, args)
+
+
+def _benchmark(run, n, args, record, net):
     from catanatron.colonist.evaluate import match as play_match
 
-    say(f"round {n}: benchmark, best vs {args.benchmark}, {args.benchmark_games} games")
+    say(
+        f"round {n}: benchmark, {net} vs {args.benchmark}, {args.benchmark_games} games"
+    )
     result = play_match(
-        f"Z:{run.best}:{args.match_simulations}",
+        f"Z:{net}:{args.match_simulations}",
         args.benchmark,
         games=args.benchmark_games,
         seed=args.seed + 900_000_000,  # the same boards every time, to compare rounds
@@ -274,8 +352,6 @@ def benchmark(run, n, args):
     with open(path, "w") as stream:
         json.dump(diagnostic_summary, stream, indent=2)
     say(f"  diagnostics: {path}")
-    if args.gauntlet:
-        gauntlet(run, n, args)
 
 
 def main(argv=None):
@@ -318,6 +394,25 @@ def main(argv=None):
     parser.add_argument("--device", default=None)
     parser.add_argument("--match-simulations", type=int, default=100)
     parser.add_argument("--max-games", type=int, default=2000)
+    parser.add_argument(
+        "--gate",
+        choices=("strict", "loose"),
+        default="strict",
+        help="strict: promote only a clearly better net (52%% bar); loose: "
+        "promote unless clearly worse, if the guardrails hold",
+    )
+    parser.add_argument(
+        "--guard-benchmark",
+        type=float,
+        default=0.03,
+        help="loose gate: largest benchmark drop allowed below the best's",
+    )
+    parser.add_argument(
+        "--guard-live",
+        type=float,
+        default=0.02,
+        help="loose gate: largest live value MSE rise allowed over the best's",
+    )
     parser.add_argument("--batch-pairs", type=int, default=50)
     parser.add_argument("--benchmark", default="AB:2")
     parser.add_argument("--benchmark-every", type=int, default=1)
