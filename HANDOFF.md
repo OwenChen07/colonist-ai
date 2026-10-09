@@ -188,6 +188,19 @@ git checkout of `main-9mnmbh`. It pulls and pushes with a read-write deploy key,
   - Students quota is 6 vCPUs per region. The other allowed regions only offer
     burstable B-series sizes.
   - Measured self-play speed per Azure vCPU is about the same as per GCP T2A core.
+  - Since 2026-10-09 there are also four AWS workers:
+    - `c7i-flex.large` (2 vCPU each), us-east-2, on-demand, user `ubuntu`, in the
+      owner's AWS project account 609022620573.
+    - The new-experience free plan only allows free-tier-eligible types, and the
+      organization blocks spot.
+    - `/home/owen/colonist-ai` links to `/home/ubuntu/colonist-ai` there, so the
+      worker root is the same as on the other workers.
+    - Security group `colonist-workers`: SSH from the coordinator and the owner's
+      Mac.
+    - `scripts/vm/aws_workers.sh status|start|stop` manages them from the Mac
+      (`aws login --profile colonist`).
+    - About 49.6 s per 8-game shard per process, the fastest per vCPU of all the
+      workers.
   - Every round's net is scored on the live games (`calibrate.py`). A promoted net
     also plays a gauntlet against rounds 2 and 5.
 - `colonist-spectator`: the public feed, as before.
