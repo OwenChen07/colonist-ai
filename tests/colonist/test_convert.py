@@ -457,3 +457,32 @@ def test_an_earlier_seats_late_discards_go_first():
         {"at": 4, "color": "BLUE", "resources": 11},
         {"at": 1, "color": "RED", "resources": 12},
     ]
+
+
+def test_several_roads_in_one_update_go_in_an_order_the_game_allows():
+    """A reconnect snapshot delivered two of a player's roads at once (seen
+    live). The one joining the player's network must be logged first, or the
+    other isn't legal yet."""
+    from catanatron.colonist.convert import _Converter
+
+    c = _Converter.__new__(_Converter)
+    c.seat = {1: "RED"}
+    c.log = [
+        [["RED", "BUILD_SETTLEMENT", 20], None],
+        [["RED", "BUILD_ROAD", [20, 21]], None],
+    ]
+    far, near = (1, "road", [49, 22]), (1, "road", [22, 21])
+    assert c._next_placement([far, near], 1, "road") == near
+    assert c._next_placement([far], 1, "road") == far
+    assert c._next_placement([], 1, "road") is None
+    assert c._next_placement([(2, "road", [1, 2])], 1, "road") is None
+
+
+def test_a_reconnect_snapshot_older_than_the_log_changes_nothing(frames):
+    """A snapshot with no newer log entries (a duplicate, or one from before
+    the last update) must not roll anything back."""
+    from catanatron.colonist.convert import GAME_STATE, _Converter
+
+    start = next(f for f in frames if f.type == GAME_STATE)
+    c = _Converter(start.data["data"]["payload"], start)
+    assert not c.reconcile(start.data["data"]["payload"]["gameState"])

@@ -352,47 +352,18 @@ class Bridge:
         return declines + ([] if replaying else self.think())
 
     def reconcile_snapshot(self, payload):
-        """Apply the part of a same-game snapshot missed during a reconnect."""
+        """Apply the part of a same-game snapshot missed during a reconnect
+        (convert._Converter.reconcile, which offline conversion uses too)."""
         state = payload["gameState"]
-        logs = state.get("gameLogState") or {}
-        new_logs = {k: v for k, v in logs.items() if int(k) > self.last_log_id}
-        if not new_logs:
-            return  # an old or duplicate snapshot must not roll back the game
-        board = state.get("mapState") or {}
-        old = self.live.conv
-        corners = {
-            k: v
-            for k, v in (board.get("tileCornerStates") or {}).items()
-            if v.get("owner") != old.corners.get(k, {}).get("owner")
-            or v.get("buildingType") != old.corners.get(k, {}).get("buildingType")
-        }
-        edges = {
-            k: v
-            for k, v in (board.get("tileEdgeStates") or {}).items()
-            if v.get("owner") != old.edges.get(k, {}).get("owner")
-            or v.get("type") != old.edges.get(k, {}).get("type")
-        }
-        if not (new_logs or corners or edges):
-            return
-        diff = {
-            "gameLogState": new_logs,
-            "mapState": {"tileCornerStates": corners, "tileEdgeStates": edges},
-            "currentState": state.get("currentState") or {},
-        }
-        # Full player snapshots include hidden card placeholders (resource 0)
-        # that are not safe to turn into hand checks. Later diffs check cards.
-        if (
-            state.get("mechanicRobberState", {}).get("locationTileIndex")
-            != old.robber_tile
-        ):
-            diff["mechanicRobberState"] = state["mechanicRobberState"]
         try:
-            old.apply(diff)
-            self.live._rebuild()
+            changed = self.live.conv.reconcile(state)
+            if changed:
+                self.live._rebuild()
         except Exception as error:
             self.live.error = f"could not reconcile game snapshot: {error}"
             return
-        self.last_log_id = max([self.last_log_id, *(int(k) for k in new_logs)])
+        logs = state.get("gameLogState") or {}
+        self.last_log_id = max([self.last_log_id, *(int(k) for k in logs)])
 
     def retry_after_reconnect(self, payload):
         """Resend a lost end turn only when the new full snapshot is unchanged."""

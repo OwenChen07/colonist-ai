@@ -227,6 +227,10 @@ class _Converter:
         self.edges = state["mapState"]["tileEdgeStates"]
         self.hexes = state["mapState"]["tileHexStates"]
         self.robber_tile = state.get("mechanicRobberState", {}).get("locationTileIndex")
+        # The highest game-log id applied, for reconnect snapshots.
+        self.last_log_id = max(
+            (int(k) for k in (state.get("gameLogState") or {})), default=-1
+        )
         self.ratios = {
             int(c): {int(r): n for r, n in ps.get("bankTradeRatiosState", {}).items()}
             for c, ps in state["playerStates"].items()
@@ -353,8 +357,70 @@ class _Converter:
             raise _Unsupported("steals are only mapped for 1v1 games")
         return others[0]
 
+    def _next_placement(self, placed, color, piece):
+        """The board change for a build log entry. One diff usually holds one,
+        but a reconnect snapshot can hold several (two roads in a row, seen
+        live): take one that joins what the player already has on the board,
+        so the log stays in an order the game allows."""
+        candidates = [p for p in placed if p[0] == color and p[1] == piece]
+        if len(candidates) < 2:
+            return candidates[0] if candidates else None
+        seat = self.seat[color]
+        mine = set()
+        for (who, kind, value), _ in self.log:
+            if who != seat:
+                continue
+            if kind == ActionType.BUILD_ROAD.value:
+                mine.update(value)
+            elif kind in (
+                ActionType.BUILD_SETTLEMENT.value,
+                ActionType.BUILD_CITY.value,
+            ):
+                mine.add(value)
+        for p in candidates:
+            nodes = p[2] if isinstance(p[2], list) else [p[2]]
+            if mine.intersection(nodes):
+                return p
+        return candidates[0]
+
+    def reconcile(self, state):
+        """Apply the part of a same-game snapshot (colonist resends the whole
+        game after a reconnect) that no diff delivered: the newer log entries
+        and the board changes with them. Returns whether anything was new."""
+        logs = state.get("gameLogState") or {}
+        new_logs = {k: v for k, v in logs.items() if int(k) > self.last_log_id}
+        if not new_logs:
+            return False  # an old or duplicate snapshot must not roll back the game
+        board = state.get("mapState") or {}
+        corners = {
+            k: v
+            for k, v in (board.get("tileCornerStates") or {}).items()
+            if v.get("owner") != self.corners.get(k, {}).get("owner")
+            or v.get("buildingType") != self.corners.get(k, {}).get("buildingType")
+        }
+        edges = {
+            k: v
+            for k, v in (board.get("tileEdgeStates") or {}).items()
+            if v.get("owner") != self.edges.get(k, {}).get("owner")
+            or v.get("type") != self.edges.get(k, {}).get("type")
+        }
+        diff = {
+            "gameLogState": new_logs,
+            "mapState": {"tileCornerStates": corners, "tileEdgeStates": edges},
+            "currentState": state.get("currentState") or {},
+        }
+        # Full player snapshots include hidden card placeholders (resource 0)
+        # that are not safe to turn into hand checks. Later diffs check cards.
+        robber = state.get("mechanicRobberState", {}).get("locationTileIndex")
+        if robber != self.robber_tile:
+            diff["mechanicRobberState"] = state["mechanicRobberState"]
+        self.apply(diff)
+        return True
+
     # ----- one diff -----
     def apply(self, diff):
+        logs = diff.get("gameLogState") or {}
+        self.last_log_id = max([self.last_log_id, *(int(k) for k in logs)])
         map_diff = diff.get("mapState", {})
         placed = []  # pieces placed in this diff, waiting to be put in log order
         for idx, c in map_diff.get("tileCornerStates", {}).items():
@@ -400,9 +466,7 @@ class _Converter:
                     raise _Unsupported(f"piece notice without setup placement: {text}")
             elif kind in (LOG_PLACED_SETUP, LOG_BUILT):
                 piece = PIECE.get(text.get("pieceEnum"))
-                match = next(
-                    (p for p in placed if p[0] == color and p[1] == piece), None
-                )
+                match = self._next_placement(placed, color, piece)
                 if match is None:
                     raise _Unsupported(f"log entry {text} has no matching board change")
                 placed.remove(match)
@@ -637,12 +701,21 @@ def convert(frames) -> Conversion:
             "capture has no game start; the extension must be on before the game begins"
         )
     c = _Converter(start.data["data"]["payload"], start)
+    game_id = (start.data["data"]["payload"].get("gameSettings") or {}).get("id")
     try:
         for f in frames:
             if f.dir != "in" or f.seq < start.seq:
                 continue
             if f.type == DIFF:
                 c.apply(f.data["data"]["payload"].get("diff", {}))
+            elif f.type == GAME_STATE and f.seq > start.seq:
+                payload = f.data["data"].get("payload")
+                if (
+                    isinstance(payload, dict)
+                    and "gameState" in payload
+                    and (payload.get("gameSettings") or {}).get("id") == game_id
+                ):
+                    c.reconcile(payload["gameState"])
             elif f.type == GAME_OVER:
                 c.finish(f.data["data"]["payload"].get("endGameState"))
             if c.conv.ended in ("win", "resignation") and f.type == GAME_OVER:
