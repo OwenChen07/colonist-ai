@@ -61,6 +61,7 @@ allowed=(
   "Bash(.venv/bin/python -m pytest:*)" "Bash(.venv/bin/python -m black:*)"
   "Bash(.venv/bin/python -m catanatron.colonist.convert:*)"
   "Bash(.venv/bin/python -m catanatron.colonist.replay:*)"
+  "Bash(.venv/bin/python -m catanatron.colonist.capture:*)"
   "Bash(tail:*)" "Bash(head:*)" "Bash(ls:*)" "Bash(grep:*)" "Bash(wc:*)" "Bash(df:*)"
   "Bash(systemctl status:*)" "Bash(journalctl:*)"
   "Bash(sudo systemctl restart colonist-train)"
