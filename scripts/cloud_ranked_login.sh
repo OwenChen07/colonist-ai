@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Start a private desktop with normal Chromium for a one-time Colonist sign-in.
+# Without the bot extension: signing in needs none, and on the bot VM it would
+# connect to the running ranked bot's bridge.
 # Tunnel port 5900 over SSH; never expose VNC to the public internet.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -34,7 +36,6 @@ mkdir -p "$PROFILE"
 chmod 700 "$PROFILE"
 "$CHROME" --user-data-dir="$PROFILE" --no-first-run --no-sandbox \
   --enable-webgl --enable-unsafe-swiftshader --use-gl=angle --use-angle=swiftshader \
-  --disable-extensions-except="$PWD/bot" --load-extension="$PWD/bot" \
   https://colonist.io/ >/tmp/colonist-login-browser.log 2>&1 &
 CHROME_PID=$!
 read -r -p "Press Enter after the cloud browser shows the ${ACCOUNT} account signed in. "

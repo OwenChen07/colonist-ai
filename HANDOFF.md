@@ -155,6 +155,21 @@ The VM loop can be stopped and restarted with new flags at any time; it resumes.
 
 ## 6. Running infrastructure (check before changing anything)
 
+**Extra bot accounts (casual 1v1), from 10 Oct 2026:**
+- **Owner's approval:** extra accounts play **casual**, not ranked, so games
+  between our own bots don't affect anyone's rating; a ranked bot resigning to
+  another of ours would be win-trading.
+- **Services:** each runs as `colonist-casual@<account>` on the bot VM, with
+  `scripts/vm/bot/accounts/<account>.env` setting a unique `PORT` (8766, 8767,
+  ...). The VM fits 2-3 alongside the ranked bot.
+- **Our own accounts:** `scripts/vm/bot/own_accounts.env` lists our usernames.
+  A game against one is logged `own_bot` and kept out of the training data.
+  Resigning those games isn't built yet; it needs the resign control
+  observed first.
+- **Sign-in, once per account:** `scripts/cloud_ranked_login.sh <account>` on the
+  bot VM, through an SSH tunnel to port 6080 (noVNC). The owner signs in;
+  never type passwords for them.
+
 **Since 9 Oct 2026, 10:05 pm Toronto: the ranked bot has its own VM.**
 - **Host:** the AWS `c7i-flex.large` at 18.226.232.112 (user `ubuntu`, services in
   `scripts/vm/bot/`, host in `scripts/vm/bot.env` on the coordinator).
