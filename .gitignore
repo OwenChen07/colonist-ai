@@ -153,3 +153,5 @@ recorder/node_modules/
 *.log~
 /scripts/vm/workers.env
 /scripts/vm/bot.env
+/scripts/vm/bot/accounts/
+/scripts/vm/bot/own_accounts.env

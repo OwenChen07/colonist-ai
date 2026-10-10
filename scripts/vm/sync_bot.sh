@@ -19,6 +19,8 @@ rsync -a --exclude "*.egg-info" --exclude __pycache__ -e "$SSH" \
 $SSH "$B" "mkdir -p $R/runs/g1/nets $R/models/ranked $R/data/ranked $R/captures/ranked"
 rsync -a -e "$SSH" runs/g1/nets/ "$B:$R/runs/g1/nets/"
 rsync -a -e "$SSH" runs/g1/state.json "$B:$R/runs/g1/state.json"
-rsync -a --exclude chrome-profile --exclude ".spectator-ingest-key" -e "$SSH" \
-    "$B:$R/data/ranked/" data/ranked/
-rsync -a -e "$SSH" "$B:$R/captures/ranked/" captures/ranked/
+# Every account's folders (data/ranked, data/<account>, ...), not the
+# extension copies or keys.
+rsync -a --exclude chrome-profile --exclude ".spectator-ingest-key" \
+    --exclude "bot-extension-*" -e "$SSH" "$B:$R/data/" data/
+rsync -a -e "$SSH" "$B:$R/captures/" captures/

@@ -125,3 +125,66 @@ def test_frame_cap_script_spaces_out_animation_frames():
     )
     out = subprocess.run(["node", "-e", harness], capture_output=True, text=True)
     assert 45 <= int(out.stdout) <= 51  # about 5 a second, not 60
+
+
+def test_extension_copy_points_at_its_bridge_port(tmp_path):
+    from pathlib import Path
+
+    from catanatron.colonist.ranked_runner import extension_for_port
+
+    source = Path(__file__).resolve().parents[2] / "bot"
+    assert extension_for_port(source, 8765, tmp_path) == source
+    copy = extension_for_port(source, 8766, tmp_path)
+    worker = (copy / "src" / "background.js").read_text()
+    assert "ws://127.0.0.1:8766" in worker and "8765" not in worker
+    assert (copy / "manifest.json").exists()
+    assert "8765" in (source / "src" / "background.js").read_text()  # untouched
+
+
+def test_games_against_our_own_bots_are_marked(tmp_path):
+    from types import SimpleNamespace
+
+    from catanatron.colonist.ranked_runner import opponent_name, record_game
+
+    net = tmp_path / "model.npz"
+    net.write_bytes(b"weights")
+    record = {
+        "seats": ["RED", "BLUE"],
+        "winner": "RED",
+        "players": {
+            "RED": {"you": True, "name": "CatBot77"},
+            "BLUE": {"you": False, "name": "OurBot2"},
+        },
+    }
+    assert opponent_name(record) == "OurBot2"
+    conversion = SimpleNamespace(ended="win", record=record)
+    row = record_game(
+        tmp_path,
+        "b.json",
+        conversion,
+        net,
+        "g1 round 5",
+        5,
+        400,
+        account="casual1",
+        queue="casual",
+        own_bot=True,
+    )
+    assert row["own_bot"] and row["queue"] == "casual" and row["account"] == "casual1"
+    plain = record_game(tmp_path, "c.json", conversion, net, "x", 5, 800)
+    assert "own_bot" not in plain and plain["queue"] == "ranked"
+
+
+def test_a_capture_must_come_from_the_expected_queue(monkeypatch):
+    from types import SimpleNamespace
+
+    from catanatron.colonist import ranked_runner as R
+
+    casual = SimpleNamespace(
+        record={"source": {"ranked": False}}, unsupported=[], ended="win"
+    )
+    monkeypatch.setattr(R, "load_capture", lambda path: None)
+    monkeypatch.setattr(R, "convert", lambda frames: casual)
+    assert R._finished_ranked_capture("x", ranked=False) is casual
+    with pytest.raises(ValueError, match="not a ranked game"):
+        R._finished_ranked_capture("x", ranked=True)

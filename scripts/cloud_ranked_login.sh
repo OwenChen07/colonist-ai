@@ -22,12 +22,14 @@ websockify --web=/usr/share/novnc 127.0.0.1:6080 127.0.0.1:5900 \
 WEB_PID=$!
 export DISPLAY=:99
 echo 'Tunnel port 6080 over SSH, open http://localhost:6080/vnc.html?autoconnect=1, sign in, then press Enter here.'
-CHROME=$(find "$HOME/.cache/ms-playwright" -path '*/chrome-linux-arm64/chrome' -type f | sort | tail -1)
+CHROME=$(find "$HOME/.cache/ms-playwright" \( -path '*/chrome-linux-arm64/chrome' -o -path '*/chrome-linux/chrome' -o -path '*/chrome-linux64/chrome' \) -type f | sort | tail -1)
 if [ -z "$CHROME" ]; then
   echo 'Chromium browser is missing; run setup_ranked_vm.sh first.' >&2
   exit 1
 fi
-PROFILE="$HOME/.local/share/colonist-ai/ranked-profile"
+# Usage: scripts/cloud_ranked_login.sh [ACCOUNT]  (default: ranked)
+ACCOUNT="${1:-ranked}"
+PROFILE="$HOME/.local/share/colonist-ai/${ACCOUNT}-profile"
 mkdir -p "$PROFILE"
 chmod 700 "$PROFILE"
 "$CHROME" --user-data-dir="$PROFILE" --no-first-run --no-sandbox \
@@ -35,5 +37,5 @@ chmod 700 "$PROFILE"
   --disable-extensions-except="$PWD/bot" --load-extension="$PWD/bot" \
   https://colonist.io/ >/tmp/colonist-login-browser.log 2>&1 &
 CHROME_PID=$!
-read -r -p 'Press Enter after the cloud browser shows CatBot77. '
+read -r -p "Press Enter after the cloud browser shows the ${ACCOUNT} account signed in. "
 kill "$CHROME_PID" 2>/dev/null || true
