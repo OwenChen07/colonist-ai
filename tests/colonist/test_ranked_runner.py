@@ -188,3 +188,17 @@ def test_a_capture_must_come_from_the_expected_queue(monkeypatch):
     assert R._finished_ranked_capture("x", ranked=False) is casual
     with pytest.raises(ValueError, match="not a ranked game"):
         R._finished_ranked_capture("x", ranked=True)
+
+
+def test_a_new_account_plays_casual_until_ranked_unlocks(tmp_path):
+    from catanatron.colonist.ranked_runner import next_queue
+
+    assert next_queue("ranked", None, tmp_path) == "ranked"
+    assert next_queue("casual", None, tmp_path) == "casual"
+    assert next_queue("casual", 10, tmp_path, "bot2") == "casual"  # no games yet
+    rows = [{"queue": "casual", "account": "bot2"}] * 9 + [{"queue": "ranked"}]
+    (tmp_path / "games.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+    assert next_queue("casual", 10, tmp_path, "bot2") == "casual"
+    with open(tmp_path / "games.jsonl", "a") as f:
+        f.write(json.dumps({"queue": "casual", "account": "bot2"}) + "\n")
+    assert next_queue("casual", 10, tmp_path, "bot2") == "ranked"

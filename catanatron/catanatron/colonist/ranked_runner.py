@@ -289,6 +289,22 @@ def _finished_ranked_capture(path, ranked=True):
     return conversion
 
 
+def next_queue(queue, ranked_after, data, account=None):
+    """The queue for the next game. A new colonist account must finish some
+    casual games before ranked unlocks: with `ranked_after` set, play casual
+    until this account has that many verified casual games, then ranked."""
+    if queue == "ranked" or ranked_after is None:
+        return queue
+    played = 0
+    path = Path(data) / "games.jsonl"
+    if path.exists():
+        for line in path.read_text().splitlines():
+            row = json.loads(line)
+            if row.get("queue") == "casual" and row.get("account") in (None, account):
+                played += 1
+    return "ranked" if played >= ranked_after else "casual"
+
+
 def opponent_name(record):
     """The other player's colonist username (two-player games)."""
     names = [p.get("name") for p in record.get("players", {}).values() if not p["you"]]
@@ -514,10 +530,22 @@ async def _run(args):
                     break
                 before = set(captures.glob("bridge-*.json"))
                 log_offset = (data / "bridge.log").stat().st_size
-                await queue_1v1(page, "Ranked" if ranked else "Casual")
+                queue = next_queue(args.queue, args.ranked_after, data, args.account)
+                ranked = queue == "ranked"
+                try:
+                    await queue_1v1(page, "Ranked" if ranked else "Casual")
+                except RuntimeError as error:
+                    if not (ranked and args.ranked_after is not None):
+                        raise
+                    # Ranked may need more than the expected games to unlock:
+                    # play casual for now and try ranked again next game.
+                    print(f"ranked unavailable ({error}); playing casual", flush=True)
+                    queue, ranked = "casual", False
+                    await page.goto(URL)
+                    await queue_1v1(page, "Casual")
                 active_game = True
                 total = args.games or "unlimited"
-                print(f"queued {args.queue} 1v1 game {game + 1}/{total}", flush=True)
+                print(f"queued {queue} 1v1 game {game + 1}/{total}", flush=True)
                 path = await _wait_for_capture(
                     captures,
                     before,
@@ -542,7 +570,7 @@ async def _run(args):
                             str(path), str(data / folder), mode=mode
                         )
                         print(f"{mode}: {count} positions -> {out}", flush=True)
-                print(f"verified {args.queue} capture: {path}", flush=True)
+                print(f"verified {queue} capture: {path}", flush=True)
                 record_game(
                     data,
                     path,
@@ -552,7 +580,7 @@ async def _run(args):
                     promotion_round,
                     args.simulations,
                     account=args.account,
-                    queue=args.queue,
+                    queue=queue,
                     own_bot=own_bot,
                 )
                 games_completed += 1
@@ -655,6 +683,13 @@ def main(argv=None):
         choices=("ranked", "casual"),
         default="ranked",
         help="which 1v1 queue to play (extra accounts: casual)",
+    )
+    parser.add_argument(
+        "--ranked-after",
+        type=int,
+        default=None,
+        help="with --queue casual: switch to ranked after this many verified "
+        "casual games (a new account must play some before ranked unlocks)",
     )
     parser.add_argument(
         "--port",
