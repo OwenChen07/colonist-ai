@@ -138,7 +138,14 @@ def play(run, n, args):
 
 
 def train(run, n, args):
+    import torch
+
     from catanatron.colonist import train as T
+
+    # main() sets one thread for the self-play workers; training runs alone
+    # here and should use the machine (bar a core for the ranked bot): with one
+    # thread the graph net's epoch took 57 minutes on the cloud VM.
+    torch.set_num_threads(args.train_threads)
 
     data = [run.dir(k, "data") for k in range(max(1, n - args.window + 1), n + 1)]
     data = [d for d in data if os.path.isdir(d)] + args.extra_data
@@ -404,6 +411,12 @@ def main(argv=None):
     )
     parser.add_argument("--extra-data", default="", help="comma-separated data folders")
     parser.add_argument("--epochs", type=int, default=3)
+    parser.add_argument(
+        "--train-threads",
+        type=int,
+        default=max(1, (os.cpu_count() or 2) - 1),
+        help="PyTorch threads for training (default: all cores but one)",
+    )
     parser.add_argument(
         "--train-sample",
         type=int,

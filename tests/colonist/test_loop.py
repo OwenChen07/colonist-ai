@@ -233,3 +233,18 @@ def test_train_sample_reaches_the_trainer(tiny_args, monkeypatch):
     extra = ["--train-sample", "50", "--init", init, "--rounds", "1"]
     assert loop.main(args + extra) == 0
     assert seen[0][seen[0].index("--sample") + 1] == "50"
+
+
+def test_training_uses_the_threads_it_is_given(tiny_args, monkeypatch):
+    torch = pytest.importorskip("torch")
+    from catanatron.colonist import loop
+
+    run, args, init = tiny_args
+    seen = []
+    monkeypatch.setattr(torch, "set_num_threads", seen.append)
+    monkeypatch.setattr(evaluate, "sprt", lambda *a, **k: _fake_result("keep", 0.4))
+    monkeypatch.setattr(evaluate, "match", lambda *a, **k: _fake_result(None, 0.6))
+    assert (
+        loop.main(args + ["--train-threads", "3", "--init", init, "--rounds", "1"]) == 0
+    )
+    assert seen == [3]
