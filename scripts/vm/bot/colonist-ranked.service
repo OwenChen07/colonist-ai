@@ -1,0 +1,27 @@
+[Unit]
+Description=Colonist AI: ranked 1v1 games on the bot VM, following promoted nets
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/colonist-ai
+Environment=PYTHONUNBUFFERED=1
+Environment=OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
+# The coordinator's sync_bot.sh keeps runs/g1 (promoted nets) up to date here
+# and copies the games back. A small window and 5 frames a second keep
+# Chromium's software drawing off the bridge's core.
+ExecStart=/home/ubuntu/colonist-ai/.venv/bin/python -m catanatron.colonist.ranked_runner \
+    --net /home/ubuntu/colonist-ai/models/ranked/model.npz \
+    --promotions /home/ubuntu/colonist-ai/runs/g1 \
+    --games 0 --simulations 800 --viewport 960x540 --max-fps 5
+StandardOutput=append:/home/ubuntu/colonist-ai/data/ranked/ranked-run.log
+StandardError=append:/home/ubuntu/colonist-ai/data/ranked/ranked-run.log
+Restart=always
+RestartSec=300
+KillMode=control-group
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

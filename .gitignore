@@ -152,3 +152,4 @@ recorder/node_modules/
 /protocol.json
 *.log~
 /scripts/vm/workers.env
+/scripts/vm/bot.env

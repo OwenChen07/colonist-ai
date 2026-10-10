@@ -18,13 +18,18 @@ if [ -e data/ranked/NEEDS_OWNER.md ]; then
   echo "$(date -u +%FT%TZ) waiting for the owner: data/ranked/NEEDS_OWNER.md" >> data/watchdog/health.log
   exit 0
 fi
-for unit in colonist-ranked colonist-train; do
-  systemctl is-active --quiet "$unit" || problems+=("$unit is not active ($(systemctl is-active "$unit"))")
-done
+systemctl is-active --quiet colonist-train || problems+=("colonist-train is not active ($(systemctl is-active colonist-train))")
+# The ranked bot runs on its own VM; its data comes back every 5 minutes.
+bot=$(scripts/vm/bot_ctl.sh is-active 2>&1)
+[ "$bot" = active ] || problems+=("colonist-ranked on the bot VM is not active ($bot)")
 # A crash loop (e.g. running out of memory) can look active between restarts:
 # compare each service's restart counter with the last check's.
-for unit in colonist-ranked colonist-train colonist-spectator; do
-  now=$(systemctl show -p NRestarts --value "$unit" 2>/dev/null || echo 0)
+for unit in colonist-ranked colonist-train; do
+  if [ "$unit" = colonist-ranked ]; then
+    now=$(scripts/vm/bot_ctl.sh restarts 2>/dev/null || echo 0)
+  else
+    now=$(systemctl show -p NRestarts --value "$unit" 2>/dev/null || echo 0)
+  fi
   before=$(cat "data/watchdog/.restarts-$unit" 2>/dev/null || echo "$now")
   echo "$now" > "data/watchdog/.restarts-$unit"
   [ $(( now - before )) -ge 3 ] && problems+=("$unit restarted $(( now - before )) times since the last check ($(systemctl show -p Result --value "$unit"))")
@@ -58,8 +63,9 @@ allowed=(
   "Bash(.venv/bin/python -m catanatron.colonist.replay:*)"
   "Bash(tail:*)" "Bash(head:*)" "Bash(ls:*)" "Bash(grep:*)" "Bash(wc:*)" "Bash(df:*)"
   "Bash(systemctl status:*)" "Bash(journalctl:*)"
-  "Bash(sudo systemctl restart colonist-ranked)" "Bash(sudo systemctl restart colonist-train)"
-  "Bash(sudo systemctl restart colonist-spectator)" "Bash(sudo systemctl stop colonist-ranked)"
+  "Bash(sudo systemctl restart colonist-train)"
+  "Bash(scripts/vm/bot_ctl.sh status)" "Bash(scripts/vm/bot_ctl.sh log)"
+  "Bash(scripts/vm/bot_ctl.sh restart)" "Bash(scripts/vm/bot_ctl.sh stop)"
 )
 timeout 3000 claude -p "$prompt" --permission-mode dontAsk --allowedTools "${allowed[@]}" \
   > "data/watchdog/run-$stamp.log" 2>&1

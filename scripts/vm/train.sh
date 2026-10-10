@@ -18,4 +18,4 @@ exec .venv/bin/python -m catanatron.colonist.loop runs/g1 "${init[@]}" \
     --extra-data $sp1/round_013/data,$sp1/round_014/data,$sp1/round_015/data,$sp1/round_016/data \
     --gauntlet $sp1/nets/round_016.npz,$sp1/nets/round_008.npz \
     --live-data data/ranked/bot_value \
-    --workers "${COLONIST_LOCAL_WORKERS:-7}"
+    --workers "${COLONIST_LOCAL_WORKERS:-8}" --train-threads "${COLONIST_TRAIN_THREADS:-8}"
