@@ -96,3 +96,32 @@ def test_the_bridge_runs_with_one_math_thread(monkeypatch):
     env = bridge_env()
     assert env["OPENBLAS_NUM_THREADS"] == env["OMP_NUM_THREADS"] == "1"
     assert env["PATH"] == os.environ["PATH"]
+
+
+def test_frame_cap_script_spaces_out_animation_frames():
+    import shutil
+    import subprocess
+
+    from catanatron.colonist.ranked_runner import frame_cap_script
+
+    script = frame_cap_script(5)
+    assert "200.0" in script and "requestAnimationFrame" in script
+    if shutil.which("node") is None:
+        return
+    # A fake 60 fps display running a game's render loop for 10 seconds
+    harness = """
+    let t = 0, queue = [];
+    globalThis.window = { requestAnimationFrame: (cb) => queue.push(cb) };
+    eval(SCRIPT);
+    let drawn = 0;
+    const draw = () => { drawn++; window.requestAnimationFrame(draw); };
+    window.requestAnimationFrame(draw);
+    for (let f = 0; f < 600; f++) {
+      t += 1000 / 60; const run = queue; queue = []; run.forEach((cb) => cb(t));
+    }
+    console.log(drawn);
+    """.replace(
+        "SCRIPT", json.dumps(script)
+    )
+    out = subprocess.run(["node", "-e", harness], capture_output=True, text=True)
+    assert 45 <= int(out.stdout) <= 51  # about 5 a second, not 60

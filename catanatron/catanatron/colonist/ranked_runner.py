@@ -235,6 +235,27 @@ def record_game(data, path, conversion, net, label, round_number, simulations):
     return row
 
 
+def frame_cap_script(fps):
+    """Page script that lets the game draw at most `fps` frames a second.
+
+    Without a GPU, Chromium draws colonist's WebGL board in software at 60
+    frames a second: on the cloud VM that was about 3.5 cores, for pictures
+    nobody watches. Moves and game updates come over the WebSocket, which this
+    leaves alone; only animation frames are spaced out."""
+    interval = 1000 / fps
+    return f"""(() => {{
+  const raf = window.requestAnimationFrame.bind(window);
+  let last = 0;
+  window.requestAnimationFrame = (callback) => raf((now) => {{
+    if (now - last < {interval:.1f}) {{
+      return window.requestAnimationFrame(callback);
+    }}
+    last = now;
+    callback(now);
+  }});
+}})();"""
+
+
 def _finished_ranked_capture(path):
     conversion = convert(load_capture(str(path)))
     if conversion.record.get("source", {}).get("ranked") is not True:
@@ -331,15 +352,19 @@ async def _run(args):
                     indent=2,
                 )
             )
+        width, height = (int(x) for x in args.viewport.split("x"))
         context = await playwright.chromium.launch_persistent_context(
             str(profile),
             channel="chromium",
             headless=not args.login_only,
+            viewport={"width": width, "height": height},
             args=[
                 f"--disable-extensions-except={extension}",
                 f"--load-extension={extension}",
             ],
         )
+        if args.max_fps and not args.login_only:
+            await context.add_init_script(frame_cap_script(args.max_fps))
         try:
             # The extension must be running before the game page opens.
             if not context.service_workers:
@@ -548,6 +573,17 @@ def main(argv=None):
         "--hours", type=float, help="stop queueing new games after this many hours"
     )
     parser.add_argument("--login-only", action="store_true")
+    parser.add_argument(
+        "--viewport",
+        default="1280x720",
+        help="browser window size, WxH: fewer pixels to draw in software",
+    )
+    parser.add_argument(
+        "--max-fps",
+        type=float,
+        default=0,
+        help="cap the page's animation frames per second (0: no cap)",
+    )
     parser.add_argument(
         "--inspect", action="store_true", help="show ranked controls without queueing"
     )
