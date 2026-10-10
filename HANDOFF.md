@@ -155,6 +155,19 @@ The VM loop can be stopped and restarted with new flags at any time; it resumes.
 
 ## 6. Running infrastructure (check before changing anything)
 
+**Since 9 Oct 2026, 10:05 pm Toronto: the ranked bot has its own VM.**
+- **Host:** the AWS `c7i-flex.large` at 18.226.232.112 (user `ubuntu`, services in
+  `scripts/vm/bot/`, host in `scripts/vm/bot.env` on the coordinator).
+- **Rendering:** a 960x540 window at 5 frames a second (`--viewport`,
+  `--max-fps`), so Chromium's software drawing takes about 40% of one core
+  instead of 3.5 cores. Moves take about 0.7-1 s.
+- **Sync:** `sync_bot.sh` (coordinator cron, every 5 minutes) sends code and
+  runs/g1's nets out and brings `data/ranked` and `captures/ranked` back.
+- **Control:** `bot_ctl.sh status|log|restart|stop` manages it from the
+  coordinator, and the watchdog uses it.
+- **The coordinator** no longer runs the ranked or spectator services. Training
+  uses all 8 cores (8 self-play processes, 8 training threads).
+
 **Since 9 Oct 2026, 6:25 pm Toronto: the graph net.**
 - Training runs `runs/g1` (`scripts/vm/train.sh`, log `runs/train.log`), from
   `models/graph1`: the board-aware graph net in `graph.py`, trained from scratch on
