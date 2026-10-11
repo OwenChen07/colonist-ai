@@ -248,3 +248,18 @@ def test_training_uses_the_threads_it_is_given(tiny_args, monkeypatch):
         loop.main(args + ["--train-threads", "3", "--init", init, "--rounds", "1"]) == 0
     )
     assert seen == [3]
+
+
+def test_a_net_below_the_minimum_score_is_kept(tiny_args, monkeypatch):
+    """An undecided match passes the loose gate, but 47.95% is below a 50%
+    minimum against the best, so the best net stays."""
+    pytest.importorskip("torch")
+    from catanatron.colonist import loop
+
+    run, args, init = tiny_args
+    monkeypatch.setattr(evaluate, "sprt", lambda *a, **k: _fake_result(None, 0.4795))
+    monkeypatch.setattr(evaluate, "match", lambda *a, **k: _fake_result(None, 0.9))
+    loose = args + ["--gate", "loose", "--min-score", "0.5", "--init", init]
+    assert loop.main(loose + ["--rounds", "1"]) == 0
+    state = json.loads((run / "state.json").read_text())
+    assert not state["history"][0]["promoted"] and state["best_round"] == 0

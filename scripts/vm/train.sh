@@ -11,7 +11,7 @@ init=()
 [ -e runs/g1/state.json ] || init=(--init models/graph1/net.npz)
 sp1=runs/sp1
 exec .venv/bin/python -m catanatron.colonist.loop runs/g1 "${init[@]}" \
-    --rounds 1000 --games 5000 --window 8 --train-sample 4000000 --gate loose \
+    --rounds 1000 --games 5000 --window 8 --train-sample 4000000 --gate loose --min-score 0.5 \
     --distribute-eval \
     --simulations 160 --full-rate 0.25 --fast-simulations 24 \
     --reference AB:2,F \

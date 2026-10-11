@@ -212,6 +212,11 @@ def match(run, n, args):
         progress=lambda r: say(f"  {r.n} games: {r.score:.1%} ± {r.margin:.1%}"),
     )
     passed = result.decision != "keep" if loose else result.decision == "promote"
+    if passed and result.score < args.min_score:
+        # Not "clearly worse" yet below the bar: e.g. 47.95% over 2000 games
+        # ended undecided and was promoted, and the run slipped back.
+        passed = False
+        say(f"  below the minimum score {args.min_score:.0%} against the best")
     say(f"  {result.summary()}")
     record = {
         "round": n,
@@ -438,6 +443,13 @@ def main(argv=None):
         default="strict",
         help="strict: promote only a clearly better net (52%% bar); loose: "
         "promote unless clearly worse, if the guardrails hold",
+    )
+    parser.add_argument(
+        "--min-score",
+        type=float,
+        default=0.0,
+        help="a new net must also score at least this against the best "
+        "(e.g. 0.5) to be promoted",
     )
     parser.add_argument(
         "--guard-benchmark",

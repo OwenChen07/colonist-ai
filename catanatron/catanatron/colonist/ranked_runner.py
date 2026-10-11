@@ -603,7 +603,8 @@ async def _run(args):
                     await page.goto(URL)
                     if args.promotions:
                         new_round, source = promoted_checkpoint(args.promotions)
-                        if new_round > promotion_round:
+                        # A rollback to an earlier round counts too.
+                        if new_round != promotion_round:
                             process.terminate()
                             await process.wait()
                             log.close()
