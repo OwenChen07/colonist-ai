@@ -49,7 +49,9 @@ say so in the journal rather than looking for a way around it.
 - **Commits:**
   - Before any commit, `.venv/bin/python -m black .` and the full
     `.venv/bin/python -m pytest -q` must pass.
-  - Commit to `main-9mnmbh` only, after `git pull --rebase`. Never open PRs.
+  - Commit to `main-9mnmbh` only, after `git pull --rebase`, and push with
+    exactly `git push origin main-9mnmbh` (a bare `git push` isn't allowed).
+    Never open PRs.
   - End every commit message with
     `Co-Authored-By: Claude <noreply@anthropic.com>`.
 - **Decisions:** don't change design decisions (training settings, which net
@@ -73,7 +75,9 @@ say so in the journal rather than looking for a way around it.
      lost). Code reaches the bot VM through `sync_bot.sh` within 5 minutes:
      wait for it (check with `bot_ctl.sh status`) before restarting.
   6. Check the next game starts: `bridge.log` should show new moves within
-     about 10 minutes.
+     about 10 minutes. `sleep` is allowed for waiting: the bot VM gets new
+     code from `sync_bot.sh` every 5 minutes, so wait for it before
+     restarting.
 - **A crash** (Chromium, the bridge process, the network): read the logs,
   restart the service, and check it recovers.
 - **Training crashed:** read the end of `runs/train.log`.
