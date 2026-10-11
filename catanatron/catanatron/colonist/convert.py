@@ -115,8 +115,31 @@ LOG_PIECE_NOTICE = {72, 87}  # before matching setup road / settlement placement
 #: a pre-game counter (130), and how many players the robber can steal
 #: from (139, logged with the robber move; the steal itself may follow in a
 #: later update, seen live), and a player disconnecting (140, logged with
-#: isConnected false in the same update, seen live in a ranked game).
-LOG_IGNORED = {0, 2, 22, 23, 24, 44, 47, 49, 58, 60, 64, 66, 67, 68, 118, 130, 139, 140}
+#: isConnected false in the same update, seen live in a ranked game), and a
+#: player starting a vote to pause the game (124, sent with a type 51 vote
+#: frame; the vote needs every player's accept, so it expires unless the bot
+#: votes, seen live in a ranked game).
+LOG_IGNORED = {
+    0,
+    2,
+    22,
+    23,
+    24,
+    44,
+    47,
+    49,
+    58,
+    60,
+    64,
+    66,
+    67,
+    68,
+    118,
+    124,
+    130,
+    139,
+    140,
+}
 PIECE = {0: "road", 2: "settlement", 3: "city"}
 BUILDING = {1: "settlement", 2: "city"}
 BUILD_ACTION = {

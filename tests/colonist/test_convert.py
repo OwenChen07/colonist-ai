@@ -312,6 +312,8 @@ def test_incomplete_conversion_fails_the_replay_check(frames):
         {"type": 139, "playerCount": 1},
         # a player disconnecting (with isConnected false in the same update)
         {"type": 140, "playerColor": 1},
+        # a player starting a vote to pause the game (with a type 51 vote frame)
+        {"type": 124, "playerColor": 2},
     ],
 )
 def test_timer_playing_for_a_player_is_skipped(frames, notice):
