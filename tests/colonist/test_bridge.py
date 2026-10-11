@@ -762,3 +762,50 @@ def test_info_about_the_net_comes_first(tmp_path):
     first, second = asyncio.run(run())
     assert first == info
     assert second["kind"] == "status" and second["state"] == "waiting"
+
+
+def _reconnect_with_unconfirmed(kind, dice_thrown):
+    """Follow the full game until the bot sends `kind`, then reconnect with a
+    snapshot of the same turn (dice thrown or not). Returns the replies."""
+    import base64
+
+    import msgpack
+
+    from catanatron.colonist.capture import decode
+
+    bridge = Bridge(random_net(hidden=(8,)), 2, play=True, encode=_fake_encode)
+    bridge.choose = _player_of_record("capture_full_game")
+    bridge.reset()
+    start = None
+    for message in _messages("capture_full_game"):
+        frame = decode({**message, "seq": 0, "socket": 1})
+        if frame.type == C.GAME_STATE and isinstance(
+            frame.data["data"].get("payload"), dict
+        ):
+            start = frame.data["data"]["payload"]
+        bridge.handle({**message, "socket": 1})
+        if bridge.expect and bridge.expect[1][0]["type"] == kind:
+            break
+    assert start is not None and bridge.expect is not None
+    snapshot = copy.deepcopy(start)
+    cur = snapshot["gameState"]["currentState"]
+    cur["completedTurns"] = bridge.live.conv.completed
+    cur["currentTurnPlayerColor"] = bridge.live.conv.current
+    snapshot["gameState"]["gameLogState"] = {}
+    snapshot["gameState"]["diceState"] = {"diceThrown": dice_thrown}
+    b64 = base64.b64encode(
+        msgpack.packb({"id": "1", "data": {"type": 4, "payload": snapshot}})
+    ).decode()
+    return bridge.handle({"kind": "frame", "dir": "in", "socket": 2, "b64": b64})
+
+
+def test_reconnect_retries_an_unconfirmed_roll_once():
+    replies = _reconnect_with_unconfirmed("ROLL", dice_thrown=False)
+    assert [r["socket"] for r in replies if r["kind"] == "send"] == [2]
+    assert not any(r.get("state") == "stopped" for r in replies)
+
+
+def test_reconnect_after_the_dice_were_thrown_does_not_roll_again():
+    replies = _reconnect_with_unconfirmed("ROLL", dice_thrown=True)
+    assert not [r for r in replies if r["kind"] == "send"]
+    assert any(r.get("state") == "stopped" for r in replies)

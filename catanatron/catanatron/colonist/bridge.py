@@ -366,7 +366,9 @@ class Bridge:
         self.last_log_id = max([self.last_log_id, *(int(k) for k in logs)])
 
     def retry_after_reconnect(self, payload):
-        """Resend a lost end turn only when the new full snapshot is unchanged."""
+        """Resend a lost end turn or roll only when the new full snapshot is
+        unchanged (for a roll: dice not thrown yet), so neither can happen
+        twice. A roll lost to a reconnect stopped a casual bot (seen live)."""
         _, plan, _ = self.expect
         cur = payload["gameState"].get("currentState", {})
         logs = payload["gameState"].get("gameLogState", {})
@@ -380,7 +382,12 @@ class Bridge:
             and cur.get("currentTurnPlayerColor") == self.live.conv.current
             and all(kind in C.LOG_IGNORED for kind in new_logs)
         )
-        if plan[0]["type"] != "END_TURN" or not unchanged or self.retry_count:
+        kind = plan[0]["type"]
+        if kind == "ROLL" and payload["gameState"].get("diceState", {}).get(
+            "diceThrown"
+        ):
+            unchanged = False
+        if kind not in ("END_TURN", "ROLL") or not unchanged or self.retry_count:
             self.live.error = "reconnected while a move was unconfirmed; stopped safely"
             self.expect = None
             self.pending_sends.clear()
@@ -397,14 +404,17 @@ class Bridge:
             }
             raws = self.encode(plan, context)
         except NotKnownYet as error:
-            self.live.error = f"could not retry end turn: {error}"
+            self.live.error = f"could not retry {kind.lower()}: {error}"
             self.expect = None
             self.pending_sends.clear()
             return [self.status("stopped", self.live.error)]
         self.expect = (self.live.position_key, plan, time.time())
         self.since_sent = []
         return [
-            self.status("following", "reconnected; retrying unconfirmed end turn"),
+            self.status(
+                "following",
+                f"reconnected; retrying unconfirmed {kind.lower().replace('_', ' ')}",
+            ),
             *self.send_replies(raws),
         ]
 
