@@ -65,6 +65,9 @@ from catanatron.serialization import action_from_json
 
 HOST, PORT = "127.0.0.1", 8765
 ROOM_JOINED = 1  # message type when joining a game room: carries its serverId
+# Seconds before colonist's timer acts to send a discard planned early (its
+# timer fired 0.3-0.8 s after the deadline in captures).
+EARLY_DISCARD_MARGIN = 3.0
 
 
 def in_progress(payload):
@@ -137,6 +140,12 @@ class Bridge:
         self.since_sent = []  # message types colonist sent since the last move
         self.last_log_id = -1  # highest Colonist game-log id seen in a diff
         self.timer_discarded = False  # this update has colonist's timer discarding
+        # When colonist's timer acts on the current decision (local clock),
+        # from its currentState's startTime and allocatedTime.
+        self.deadline = None
+        # The bot's discard for a 7, planned while the earlier seat (the
+        # opponent) still had to discard first: {turn, plan, seconds, sent}.
+        self.early_discard = None
         self.retry_count = 0  # a pending end turn may be retried once on reconnect
         self.no_effect_retry = False  # retry one acknowledged road with no board effect
         self.sent_raws = []
@@ -153,6 +162,7 @@ class Bridge:
         self.no_effect_retry = False
         self.sent_raws = []
         self.pending_sends = {}
+        self.deadline = self.early_discard = None
         return [self.status("waiting", "waiting for a game to start")]
 
     @staticmethod
@@ -165,6 +175,8 @@ class Bridge:
         instead of dropping the connection."""
         try:
             replies = self._handle(message)
+            if message.get("kind") == "frame" and not message.get("replay"):
+                replies = replies + self.early_discard_due()
             if (
                 self.snapshot_writer
                 and self.live
@@ -336,11 +348,10 @@ class Bridge:
         before = self.live.position_key
         self.timer_discarded = False
         if frame.type == C.DIFF:
-            logs = (
-                (frame.data["data"].get("payload") or {})
-                .get("diff", {})
-                .get("gameLogState", {})
-            )
+            diff = (frame.data["data"].get("payload") or {}).get("diff", {})
+            logs = diff.get("gameLogState", {})
+            if not replaying:
+                self.note_deadline(diff.get("currentState"), frame.t)
             self.last_log_id = max([self.last_log_id, *(int(k) for k in logs)])
             # The 64 comes in the same update as the discards it chose.
             self.timer_discarded = any(
@@ -629,8 +640,134 @@ class Bridge:
             return [self.status("stopped", self.live.error)]
         return []
 
+    def note_deadline(self, current, t):
+        """colonist's currentState gives each decision's time: startTime (ms)
+        and allocatedTime (s). A 7's discards get 20 s (seen live), then
+        colonist's timer picks the cards."""
+        if not isinstance(current, dict):
+            return
+        start, allocated = current.get("startTime"), current.get("allocatedTime")
+        if not isinstance(start, (int, float)) or not isinstance(
+            allocated, (int, float)
+        ):
+            return
+        lag = max(0.0, (t - start) / 1000) if t else 0.0
+        self.deadline = time.time() + allocated - lag
+
+    def waiting_to_discard(self):
+        """The bot must discard for a 7, but the simulator wants the earlier
+        seat's discard first (colonist takes both at once)."""
+        live = self.live
+        if live is None or live.error or live.over or live.game is None:
+            return False
+        state = live.game.state
+        return bool(
+            live.bot is not None
+            and state.is_discarding
+            and state.current_color() != live.bot
+            and state.discard_counts[state.color_to_index[live.bot]] > 0
+            and live.game.winning_color() is None
+        )
+
+    def plan_discard_early(self):
+        """Plan the bot's discard now, on a guess of the earlier seat's
+        discard (the net's choice), so a slow opponent can't leave the bot
+        without time: colonist's timer would pick its cards at random."""
+        live = self.live
+        turn = live.conv.completed
+        if self.early_discard and self.early_discard["turn"] == turn:
+            return []
+        start = time.time()
+        g = live.game.copy()
+        while (
+            g.state.is_discarding
+            and g.state.current_color() != live.bot
+            and g.winning_color() is None
+        ):
+            actions = g.playable_actions
+            priors, _ = self.net.evaluate(
+                g, g.state.current_color(), E.legal_indices(actions)
+            )
+            g.execute(actions[int(np.argmax(priors))], validate_action=False)
+        if not g.state.is_discarding or g.state.current_color() != live.bot:
+            return []
+        plan = [live.describe(a) for a in self.plan_discards(g)]
+        seconds = time.time() - start
+        self.early_discard = {
+            "turn": turn,
+            "plan": plan,
+            "seconds": seconds,
+            "sent": False,
+        }
+        cards = ", ".join(m["resource"] for m in plan)
+        return [
+            self.status(
+                "following",
+                f"planned discard {cards} before the opponent's ({seconds:.1f} s)",
+            )
+        ]
+
+    def early_discard_due(self):
+        """Send the planned discard when the opponent hasn't discarded and
+        colonist's timer is about to."""
+        early = self.early_discard
+        if (
+            not self.play
+            or early is None
+            or early["sent"]
+            or self.expect is not None
+            or self.deadline is None
+            or time.time() < self.deadline - EARLY_DISCARD_MARGIN
+            or early["turn"] != self.live.conv.completed
+            or not self.waiting_to_discard()
+        ):
+            return []
+        early["sent"] = True
+        replies = self.send_plan(early["plan"], game_phase(self.live.game))
+        return [
+            self.status("following", "the opponent hasn't discarded: sent the plan")
+        ] + replies
+
+    def use_early_discard(self):
+        """The opponent has discarded and it is the bot's turn to: the plan
+        made earlier, when there isn't time to search the real position."""
+        early = self.early_discard
+        if (
+            early is None
+            or early["sent"]
+            or early["turn"] != self.live.conv.completed
+            or self.deadline is None
+        ):
+            return None
+        left = self.deadline - time.time() - EARLY_DISCARD_MARGIN
+        if left > 1.5 * early["seconds"] + 1:
+            return None
+        early["sent"] = True
+        return early["plan"]
+
+    def send_plan(self, plan, phase):
+        """Encode and send a plan; it is then expected to show up."""
+        live = self.live
+        context = {"channel": self.channel, "creator": live.conv.you, "phase": phase}
+        self.sent_raws = self.encode(plan, context)
+        replies = self.send_replies(self.sent_raws)
+        self.expect = (live.position_key, plan, time.time())
+        self.since_sent = []
+        return replies
+
     def think(self):
         live = self.live
+        if self.play and self.expect is None and self.waiting_to_discard():
+            return self.plan_discard_early()
+        early = self.early_discard
+        if (
+            early
+            and early["sent"]
+            and early["turn"] == live.conv.completed
+            and live.game is not None
+            and live.game.state.is_discarding
+        ):
+            return []  # the planned discard is already sent for this 7
         if not live.bot_to_move or live.position_key == self.answered:
             return []
         self.answered = live.position_key
@@ -639,27 +776,28 @@ class Bridge:
         self.sent_raws = []
         start = time.time()
         game = live.game
-        move, options, value = self.choose(game)
-        plan = [live.describe(move)]
-        if move.action_type == ActionType.DISCARD_RESOURCE:
-            # colonist takes all discards at once; the simulator one at a time.
-            plan = [live.describe(a) for a in self.plan_discards(game)]
+        early = (
+            self.use_early_discard() if game.state.is_discarding and self.play else None
+        )
+        if early is not None:
+            plan, options, value = early, [], 0.0
+        else:
+            move, options, value = self.choose(game)
+            plan = [live.describe(move)]
+            options = [
+                {"move": live.describe(a), "share": round(s, 3)} for a, s in options
+            ]
+            if move.action_type == ActionType.DISCARD_RESOURCE:
+                # colonist takes all discards at once; the simulator one at a time.
+                plan = [live.describe(a) for a in self.plan_discards(game)]
         replies = []
         played = False
         if self.play:
             from catanatron.colonist.client import NotKnownYet
 
             try:
-                context = {
-                    "channel": self.channel,
-                    "creator": live.conv.you,
-                    "phase": game_phase(game),
-                }
-                self.sent_raws = self.encode(plan, context)
-                replies.extend(self.send_replies(self.sent_raws))
+                replies.extend(self.send_plan(plan, game_phase(game)))
                 played = True
-                self.expect = (live.position_key, plan, time.time())
-                self.since_sent = []
             except NotKnownYet as e:
                 replies.append(self.status("following", f"suggesting only: {e}"))
         move = {
@@ -667,9 +805,7 @@ class Bridge:
             "position": live.position_key,
             "move": plan[0],
             "plan": plan,
-            "options": [
-                {"move": live.describe(a), "share": round(s, 3)} for a, s in options
-            ],
+            "options": options,
             "win_chance": round((value + 1) / 2, 3),
             "ms": int((time.time() - start) * 1000),
             "played": played,

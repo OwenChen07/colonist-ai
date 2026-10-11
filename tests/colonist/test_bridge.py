@@ -946,3 +946,107 @@ def test_a_snapshot_on_the_same_socket_recovers_an_unconfirmed_move():
     replies = bridge.handle({"kind": "frame", "dir": "in", "socket": 1, "b64": b64})
     assert [r["socket"] for r in replies if r["kind"] == "send"] == [1]
     assert not any(r.get("state") == "stopped" for r in replies)
+
+
+def _discard_race(deadline_in):
+    """A bridge whose game has just had a 7: both players must discard, and
+    the bot sits in the later seat, so the simulator wants the opponent's
+    discard first. colonist's timer acts in `deadline_in` seconds."""
+    from catanatron.game import Game
+    from catanatron.models.enums import Action, ActionRecord, ActionType
+    from catanatron.models.player import Color, RandomPlayer
+    from catanatron.state_functions import player_freqdeck_add
+
+    game = Game([RandomPlayer(Color.RED), RandomPlayer(Color.BLUE)], seed=3)
+    while game.state.is_initial_build_phase:
+        game.play_tick()
+    for color in game.state.colors:
+        player_freqdeck_add(game.state, color, [2, 2, 2, 2, 2])
+    roller = game.state.current_color()
+    game.execute(
+        Action(roller, ActionType.ROLL, None),
+        validate_action=False,
+        action_record=ActionRecord(Action(roller, ActionType.ROLL, (3, 4)), (3, 4)),
+    )
+    assert game.state.is_discarding
+    opponent = game.state.current_color()
+    bot = next(c for c in game.state.colors if c != opponent)
+
+    def describe(action):
+        return {
+            "type": action.action_type.value,
+            "resource": action.value,
+            "label": f"discard {action.value}",
+        }
+
+    live = SimpleNamespace(
+        game=game,
+        bot=bot,
+        error=None,
+        over=False,
+        bot_to_move=False,
+        position_key=10,
+        conv=SimpleNamespace(completed=5, you=1),
+        describe=describe,
+    )
+    bridge = Bridge(random_net(hidden=(8,)), 2, play=True, encode=_fake_encode)
+    bridge.live = live
+    bridge.deadline = time.time() + deadline_in
+    return bridge
+
+
+def _opponent_discards(bridge):
+    """The opponent's discard arrives: the bot is to move."""
+    live = bridge.live
+    while live.game.state.current_color() != live.bot:
+        live.game.execute(live.game.playable_actions[0], validate_action=False)
+    live.bot_to_move = True
+    live.position_key += 1
+
+
+def test_discard_is_planned_before_the_opponents():
+    bridge = _discard_race(deadline_in=20)
+    replies = bridge.think()
+    assert [r["kind"] for r in replies] == ["status"]  # planned, not sent
+    assert "planned discard" in replies[0]["text"]
+    plan = bridge.early_discard["plan"]
+    state = bridge.live.game.state
+    assert len(plan) == state.discard_counts[state.color_to_index[bridge.live.bot]]
+    assert all(m["type"] == "DISCARD_RESOURCE" for m in plan)
+    assert bridge.think() == []  # planned once per 7
+    assert bridge.early_discard_due() == []  # plenty of time left
+
+
+def test_planned_discard_is_sent_when_the_opponent_is_too_slow():
+    bridge = _discard_race(deadline_in=20)
+    bridge.think()
+    bridge.deadline = time.time() + 2  # colonist's timer is about to act
+    replies = bridge.early_discard_due()
+    assert [r["kind"] for r in replies] == ["status", "send"]
+    assert bridge.expect[1] == bridge.early_discard["plan"]
+    assert bridge.early_discard_due() == []  # sent once
+    _opponent_discards(bridge)
+    assert bridge.think() == []  # and not again when the opponent discards
+
+
+@pytest.mark.parametrize("left, searched", [(60, True), (4, False)])
+def test_late_opponent_discard_uses_the_plan_only_without_time(left, searched):
+    bridge = _discard_race(deadline_in=20)
+    bridge.think()
+    planned = bridge.early_discard["plan"]
+    calls = []
+    real = bridge.choose
+
+    def choose(game):
+        calls.append(1)
+        return real(game)
+
+    bridge.choose = choose
+    bridge.deadline = time.time() + left
+    _opponent_discards(bridge)
+    replies = bridge.think()
+    move = next(r for r in replies if r["kind"] == "move")
+    assert any(r["kind"] == "send" for r in replies)
+    assert bool(calls) == searched
+    if not searched:
+        assert move["plan"] == planned
