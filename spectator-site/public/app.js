@@ -64,12 +64,39 @@ function card(bot) {
     watch);
 }
 
+const STEPS = { selfplay: 'playing self-play games', train: 'training', match: 'promotion match' };
+const pct = (x) => (x == null ? '—' : `${(100 * x).toFixed(1)}%`);
+
+function renderTraining(training, records) {
+  const box = document.getElementById('training');
+  if (!training) { box.hidden = true; return; }
+  box.hidden = false;
+  const since = new Date(training.since).toLocaleTimeString('en-CA', { timeZone: 'America/Toronto', hour: 'numeric', minute: '2-digit' });
+  document.getElementById('trainingNow').replaceChildren(
+    'Round ', el('strong', {}, String(training.round)), `: ${STEPS[training.step] || training.step} (since ${since}). `,
+    'The bots play ', el('strong', {}, `round ${training.bestRound}`), ', the best net so far.');
+  const ranked = Object.fromEntries((records || []).map((r) => [r.round, r]));
+  const rows = [...training.rounds].reverse().map((r) => {
+    const result = r.rolledBack ? ['Rolled back', 'back'] : r.promoted ? ['Promoted', 'up'] : ['Kept previous', 'kept'];
+    const live = ranked[r.round];
+    return el('tr', { class: r.round === training.bestRound ? 'best' : '' },
+      el('td', {}, String(r.round), r.round === training.bestRound ? el('span', { class: 'chip' }, 'playing') : ''),
+      el('td', {}, pct(r.score), el('small', {}, r.games ? ` of ${r.games.toLocaleString('en-CA')}` : '')),
+      el('td', {}, el('span', { class: `result-tag ${result[1]}` }, result[0])),
+      el('td', {}, pct(r.original)),
+      el('td', {}, pct(r.benchmark)),
+      el('td', {}, live && live.wins + live.losses ? score(live) : '—'));
+  });
+  document.getElementById('rounds').replaceChildren(...rows);
+}
+
 async function refresh() {
   const box = document.getElementById('bots');
   try {
     const response = await fetch('/api/live', { cache: 'no-store' });
     const data = await response.json();
     if (!response.ok || !Array.isArray(data.bots)) throw new Error('bad response');
+    renderTraining(data.training, data.netRecords);
     box.replaceChildren(...(data.bots.length ? data.bots.map(card) : [el('p', { class: 'empty' }, 'No bots reporting yet.')]));
     document.getElementById('updated').textContent = data.updatedAt
       ? `Updated ${new Date(data.updatedAt).toLocaleTimeString('en-CA', { timeZone: 'America/Toronto', hour: 'numeric', minute: '2-digit' })} Toronto time`

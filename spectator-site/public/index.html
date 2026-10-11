@@ -16,6 +16,26 @@
       <section id="bots" class="bots" aria-live="polite">
         <p class="empty">Loading…</p>
       </section>
+      <section class="training" id="training" hidden>
+        <h2>Training</h2>
+        <p id="trainingNow" class="now"></p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Round</th>
+                <th>vs previous best</th>
+                <th>Result</th>
+                <th title="Score against sp1 round 16, the earlier fully connected net">vs original net</th>
+                <th title="Score against the AlphaBeta search bot">vs AlphaBeta</th>
+                <th>Ranked vs people</th>
+              </tr>
+            </thead>
+            <tbody id="rounds"></tbody>
+          </table>
+        </div>
+        <p class="note">Each round plays self-play games, trains a new net on them, then matches it against the best net so far. It is promoted (and the bots switch to it) if it scores at least 50% there.</p>
+      </section>
       <footer>
         <p>Watching opens the game on colonist.io. You need to be signed in there to spectate.</p>
         <p id="updated">&nbsp;</p>

@@ -121,7 +121,82 @@ def bot_status(folder, name, now=None):
     }
 
 
-def snapshot(data, names, source, now=None):
+def _number(value):
+    try:
+        return round(float(value), 4)
+    except (TypeError, ValueError):
+        return None
+
+
+def training(run, limit=20):
+    """The self-play run's progress, from its state.json: the current round
+    and step, and each round's results."""
+    path = Path(run) / "state.json"
+    state = _read_json(path)
+    if not isinstance(state, dict):
+        return None
+    rolled = set()
+    for back in state.get("rollbacks") or []:
+        rolled.update(range(int(back["to"]) + 1, int(back["from"]) + 1))
+    rounds = []
+    for row in (state.get("history") or [])[-limit:]:
+        gauntlet = row.get("gauntlet") or {}
+        original = next((v for k, v in gauntlet.items() if "round_016" in k), None)
+        rounds.append(
+            {
+                "round": int(row["round"]),
+                "games": int(row.get("games") or 0),
+                "score": _number(row.get("score")),
+                "promoted": bool(row.get("promoted")),
+                "rolledBack": int(row["round"]) in rolled,
+                "benchmark": _number(row.get("benchmark")),
+                "original": _number(original),
+                "liveError": _number((row.get("live") or {}).get("mse")),
+            }
+        )
+    return {
+        "round": int(state.get("round", 0)),
+        "step": str(state.get("step", ""))[:20],
+        "bestRound": int(state.get("best_round", 0)),
+        "since": dt.datetime.fromtimestamp(
+            path.stat().st_mtime, dt.timezone.utc
+        ).isoformat(),
+        "rounds": rounds,
+    }
+
+
+def net_records(data, names, run="runs/g1"):
+    """Ranked wins and losses against people for each of the run's nets
+    (labels "g1 round N"; earlier runs' rounds are left out), over this VM's
+    bots."""
+    prefix = Path(run).name + " round "
+    counts = {}
+    for account in names:
+        try:
+            lines = (Path(data) / account / "games.jsonl").read_text().splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if (
+                row.get("own_bot")
+                or not row.get("winner")
+                or row.get("queue", "ranked") != "ranked"
+                or not isinstance(row.get("round"), int)
+                or not str(row.get("label", "")).startswith(prefix)
+            ):
+                continue
+            pair = counts.setdefault(row["round"], [0, 0])
+            pair[int(row["winner"] != row.get("bot_color"))] += 1
+    return [
+        {"round": r, "wins": w, "losses": l} for r, (w, l) in sorted(counts.items())
+    ][-30:]
+
+
+def snapshot(data, names, source, now=None, run="runs/g1"):
     bots = []
     for folder in sorted(Path(data).iterdir()):
         if folder.is_dir() and (folder / "runner-status.json").exists():
@@ -133,6 +208,8 @@ def snapshot(data, names, source, now=None):
         "source": source,
         "updatedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
         "bots": bots,
+        "training": training(run),
+        "netRecords": net_records(data, names, run),
     }
 
 
@@ -161,6 +238,7 @@ def main(argv=None):
         default=os.environ.get("COLONIST_BOT_NAMES", ""),
         help="account=colonist name, comma-separated; other accounts aren't shown",
     )
+    parser.add_argument("--run", default="runs/g1", help="the self-play run shown")
     parser.add_argument("--interval", type=int, default=30)
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args(argv)
@@ -168,7 +246,7 @@ def main(argv=None):
     names = parse_names(args.names)
     source = re.sub(r"[^a-z0-9-]", "-", args.source.lower())[:32]
     while True:
-        body = snapshot(args.data, names, source)
+        body = snapshot(args.data, names, source, run=args.run)
         try:
             publish(args.site, key, body)
             playing = sum(b["status"] == "playing" for b in body["bots"])

@@ -24,7 +24,18 @@ export default async function handler(request, response) {
     const standing = await ranks(db, bots.map((b) => b.name));
     for (const bot of bots) bot.rank = standing[bot.name] ?? null;
     const updated = sources.map((s) => s.updatedAt).sort().pop() || null;
-    return response.status(200).json({ schema: 2, updatedAt: updated, bots });
+    // Every VM has a copy of the run's state: show the newest.
+    const training = sources.map((s) => s.training).filter(Boolean)
+      .sort((a, b) => Date.parse(b.since) - Date.parse(a.since))[0] || null;
+    const byRound = {};
+    for (const row of sources.flatMap((s) => s.netRecords || [])) {
+      const total = (byRound[row.round] ??= { round: row.round, wins: 0, losses: 0 });
+      total.wins += row.wins;
+      total.losses += row.losses;
+    }
+    return response.status(200).json({
+      schema: 2, updatedAt: updated, bots, training, netRecords: Object.values(byRound),
+    });
   } catch (error) {
     console.error('spectator read failed', error?.name || 'unknown');
     return response.status(503).json({ error: 'Status temporarily unavailable' });

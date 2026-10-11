@@ -2,7 +2,7 @@ import json
 import os
 import time
 
-from catanatron.colonist.spectator_publish import parse_names, snapshot
+from catanatron.colonist.spectator_publish import parse_names, snapshot, training
 
 
 def _account(folder, pid, games=(), live=None, age=0):
@@ -59,3 +59,90 @@ def test_finished_game_has_no_link(tmp_path):
     _account(tmp_path / "ranked", os.getpid(), live=live)
     (bot,) = snapshot(tmp_path, {"ranked": "A"}, "vm1")["bots"]
     assert bot["status"] == "searching" and bot["gameId"] is None
+
+
+def test_training_progress_and_records_by_net(tmp_path):
+    run = tmp_path / "run"
+    run.mkdir()
+    history = [
+        {
+            "round": 5,
+            "games": 400,
+            "score": 0.55,
+            "promoted": True,
+            "benchmark": "0.93",
+            "gauntlet": {"x/round_016.npz": 0.66},
+            "live": {"mse": 0.6},
+        },
+        {"round": 6, "games": 2000, "score": 0.4795, "promoted": True, "benchmark": ""},
+        {"round": 7, "games": 700, "score": 0.49, "promoted": False},
+    ]
+    (run / "state.json").write_text(
+        json.dumps(
+            {
+                "round": 8,
+                "step": "match",
+                "best_round": 5,
+                "history": history,
+                "rollbacks": [{"from": 6, "to": 5}],
+            }
+        )
+    )
+    rows = [
+        {
+            "winner": "BLUE",
+            "bot_color": "BLUE",
+            "queue": "ranked",
+            "round": 5,
+            "label": "run round 5",
+        },
+        {
+            "winner": "RED",
+            "bot_color": "BLUE",
+            "queue": "ranked",
+            "round": 5,
+            "label": "run round 5",
+        },
+        {
+            "winner": "RED",
+            "bot_color": "BLUE",
+            "queue": "casual",
+            "round": 5,
+            "label": "run round 5",
+        },
+        {
+            "winner": "BLUE",
+            "bot_color": "BLUE",
+            "queue": "ranked",
+            "round": 6,
+            "label": "run round 6",
+        },
+        {
+            "winner": "BLUE",
+            "bot_color": "BLUE",
+            "queue": "ranked",
+            "round": 6,
+            "label": "sp1 round 6",
+        },
+    ]
+    _account(tmp_path / "data", os.getpid())
+    (tmp_path / "data" / "ranked").mkdir()
+    (tmp_path / "data" / "ranked" / "runner-status.json").write_text("{}")
+    (tmp_path / "data" / "ranked" / "games.jsonl").write_text(
+        "".join(json.dumps(r) + "\n" for r in rows)
+    )
+
+    body = snapshot(tmp_path / "data", {"ranked": "A"}, "vm1", run=run)
+
+    t = body["training"]
+    assert (t["round"], t["step"], t["bestRound"]) == (8, "match", 5)
+    first, second, third = t["rounds"]
+    assert first["original"] == 0.66 and first["benchmark"] == 0.93
+    assert first["liveError"] == 0.6 and not first["rolledBack"]
+    assert second["rolledBack"] and second["benchmark"] is None
+    assert not third["promoted"] and not third["rolledBack"]
+    assert body["netRecords"] == [
+        {"round": 5, "wins": 1, "losses": 1},
+        {"round": 6, "wins": 1, "losses": 0},
+    ]
+    assert training(tmp_path / "missing") is None

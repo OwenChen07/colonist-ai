@@ -26,8 +26,32 @@ function validBot(bot) {
     && record(bot.today) && record(bot.ranked);
 }
 
+function fraction(value) { return value === null || (typeof value === 'number' && value >= 0 && value <= 1.5); }
+function iso(value) { return typeof value === 'string' && value.length < 40 && !Number.isNaN(Date.parse(value)); }
+
+function validRound(row) {
+  return exact(row, ['round', 'games', 'score', 'promoted', 'rolledBack', 'benchmark', 'original', 'liveError'])
+    && count(row.round) && count(row.games)
+    && fraction(row.score) && fraction(row.benchmark) && fraction(row.original) && fraction(row.liveError)
+    && typeof row.promoted === 'boolean' && typeof row.rolledBack === 'boolean';
+}
+
+function validTraining(t) {
+  return t === null || (exact(t, ['round', 'step', 'bestRound', 'since', 'rounds'])
+    && count(t.round) && count(t.bestRound) && iso(t.since)
+    && typeof t.step === 'string' && /^[a-z_]{0,20}$/.test(t.step)
+    && Array.isArray(t.rounds) && t.rounds.length <= 20 && t.rounds.every(validRound));
+}
+
+function validNetRecords(rows) {
+  return Array.isArray(rows) && rows.length <= 30 && rows.every((row) =>
+    exact(row, ['round', 'wins', 'losses']) && count(row.round) && count(row.wins) && count(row.losses));
+}
+
 export function validBody(body) {
-  return exact(body, ['schema', 'source', 'updatedAt', 'bots'])
+  const base = ['schema', 'source', 'updatedAt', 'bots'];
+  return (exact(body, base) || (exact(body, [...base, 'training', 'netRecords'])
+      && validTraining(body.training) && validNetRecords(body.netRecords)))
     && body.schema === 2
     && typeof body.source === 'string' && /^[a-z0-9-]{1,32}$/.test(body.source)
     && typeof body.updatedAt === 'string' && !Number.isNaN(Date.parse(body.updatedAt))
