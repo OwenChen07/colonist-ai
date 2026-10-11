@@ -862,3 +862,39 @@ def test_reconnect_after_the_move_landed_catches_up_and_plays_on():
     assert not any(r.get("state") == "stopped" for r in replies), replies
     assert bridge.live.error is None
     assert len(bridge.live.record["log"]) > before  # the roll was caught up
+
+
+def test_a_snapshot_on_the_same_socket_recovers_an_unconfirmed_move():
+    """colonist reconnected the game session without a new socket and resent
+    the whole game (seen live): the lost end turn is resent, not left to time
+    out."""
+    import base64
+
+    import msgpack
+
+    from catanatron.colonist.capture import decode
+
+    bridge = Bridge(random_net(hidden=(8,)), 2, play=True, encode=_fake_encode)
+    bridge.choose = _player_of_record("capture_full_game")
+    bridge.reset()
+    start = None
+    for message in _messages("capture_full_game"):
+        frame = decode({**message, "seq": 0, "socket": 1})
+        if frame.type == C.GAME_STATE and isinstance(
+            frame.data["data"].get("payload"), dict
+        ):
+            start = frame.data["data"]["payload"]
+        bridge.handle({**message, "socket": 1})
+        if bridge.expect and bridge.expect[1][0]["type"] == "END_TURN":
+            break
+    snapshot = copy.deepcopy(start)
+    cur = snapshot["gameState"]["currentState"]
+    cur["completedTurns"] = bridge.live.conv.completed
+    cur["currentTurnPlayerColor"] = bridge.live.conv.current
+    snapshot["gameState"]["gameLogState"] = {}
+    b64 = base64.b64encode(
+        msgpack.packb({"id": "1", "data": {"type": 4, "payload": snapshot}})
+    ).decode()
+    replies = bridge.handle({"kind": "frame", "dir": "in", "socket": 1, "b64": b64})
+    assert [r["socket"] for r in replies if r["kind"] == "send"] == [1]
+    assert not any(r.get("state") == "stopped" for r in replies)

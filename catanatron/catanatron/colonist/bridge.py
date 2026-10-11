@@ -282,8 +282,12 @@ class Bridge:
                     replaying and self.expect
                 ):
                     self.socket = message.get("socket")
-                    if not replaying and self.expect is not None:
-                        return self.retry_after_reconnect(payload)
+                # Colonist can also reconnect the game session on the same
+                # socket ("isReconnectingSession", seen live on new accounts)
+                # and resend the full game: a move sent just before is lost
+                # the same way, so recover the same way.
+                if not replaying and self.expect is not None:
+                    return self.retry_after_reconnect(payload)
                 self.reconcile_snapshot(payload)
                 if self.live.error:
                     return [self.status("stopped", self.live.error)]
