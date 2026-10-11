@@ -345,6 +345,22 @@ def opponent_name(record):
     return names[0] if len(names) == 1 else None
 
 
+def export_training_data(path, data):
+    """Export a finished game's value and opponent opening positions. A game
+    that can't give one of them (an opponent who leaves before placing
+    anything, seen live) is skipped for it rather than stopping the runner."""
+    for mode, folder in (
+        ("value", "bot_value"),
+        ("opponent_openings", "human_openings"),
+    ):
+        try:
+            out, count, _ = export_capture(str(path), str(data / folder), mode=mode)
+        except ValueError as error:
+            print(f"{mode}: skipped ({error})", flush=True)
+            continue
+        print(f"{mode}: {count} positions -> {out}", flush=True)
+
+
 async def _wait_for_capture(
     captures, before, process, bridge_log, log_offset, ranked=True
 ):
@@ -601,14 +617,7 @@ async def _run(args):
                         "opponent was one of our own bots: no training data", flush=True
                     )
                 else:
-                    for mode, folder in (
-                        ("value", "bot_value"),
-                        ("opponent_openings", "human_openings"),
-                    ):
-                        out, count, _ = export_capture(
-                            str(path), str(data / folder), mode=mode
-                        )
-                        print(f"{mode}: {count} positions -> {out}", flush=True)
+                    export_training_data(path, data)
                 print(f"verified {queue} capture: {path}", flush=True)
                 record_game(
                     data,

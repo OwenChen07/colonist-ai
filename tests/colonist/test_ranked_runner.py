@@ -190,6 +190,27 @@ def test_a_capture_must_come_from_the_expected_queue(monkeypatch):
         R._finished_ranked_capture("x", ranked=True)
 
 
+def test_a_game_without_opponent_decisions_skips_that_export(
+    monkeypatch, tmp_path, capsys
+):
+    """An opponent who leaves before placing anything gives no opening
+    positions (seen live); the runner must go on to the next game."""
+    from pathlib import Path
+
+    from catanatron.colonist import ranked_runner as R
+
+    def export(path, out_dir, mode):
+        if mode == "opponent_openings":
+            raise ValueError("capture has no non-forced decisions")
+        return os.path.join(out_dir, "shard.npz"), 2, 2
+
+    monkeypatch.setattr(R, "export_capture", export)
+    R.export_training_data(Path("game.json"), tmp_path)
+    out = capsys.readouterr().out
+    assert "value: 2 positions" in out
+    assert "opponent_openings: skipped (capture has no non-forced decisions)" in out
+
+
 def test_a_new_account_plays_casual_until_ranked_unlocks(tmp_path):
     from catanatron.colonist.ranked_runner import next_queue
 
