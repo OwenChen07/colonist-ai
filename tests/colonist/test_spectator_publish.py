@@ -1,8 +1,14 @@
+import datetime as dt
 import json
 import os
 import time
 
-from catanatron.colonist.spectator_publish import parse_names, snapshot, training
+from catanatron.colonist.spectator_publish import (
+    parse_names,
+    round_progress,
+    snapshot,
+    training,
+)
 
 
 def _account(folder, pid, games=(), live=None, age=0):
@@ -146,3 +152,50 @@ def test_training_progress_and_records_by_net(tmp_path):
         {"round": 6, "wins": 1, "losses": 0},
     ]
     assert training(tmp_path / "missing") is None
+
+
+LOG = """[14:52:39] round 12: self-play, 5000 games, opponents [], setup noise scale 1
+[14:53:28]   self-play: 1728 games here
+[15:00:01]   shard_1_64.npz: 64 games in 737 s | 64 games, 0.26/s
+[15:43:52]   self-play complete across 7 machines: 5000 games
+[15:43:52] round 12: training on 12 data folders, from the best net
+epoch 1: train policy 0.984 value 0.401 | val policy 0.991 value 0.417 accuracy 74.1% | 2891 s
+epoch 2: train policy 0.981 value 0.399 | val policy 0.982 value 0.415 accuracy 74.7% | 2770 s
+[18:05:14] round 12: promotion match (loose gate), new vs best (at most 2000 games)
+[18:07:23]   100 games: 54.0% ± 8.3%
+[18:09:14]   200 games: 49.5% ± 6.2%
+[18:31:41] round 13: self-play, 4000 games, opponents [], setup noise scale 1
+[18:31:43]   self-play: 1000 games here
+[18:40:00]   shard_2_64.npz: 64 games in 700 s | 128 games, 0.3/s
+""".splitlines()
+
+
+def test_round_progress_from_the_training_log():
+    now = dt.datetime(2026, 10, 11, 19, 0, tzinfo=dt.timezone.utc).timestamp()
+    twelve = round_progress(LOG, 12, now=now)
+    assert twelve["selfplay"]["done"] and twelve["selfplay"]["localDone"] == 64
+    assert twelve["training"]["started"] == "2026-10-11T15:43:52+00:00"
+    assert [e["epoch"] for e in twelve["training"]["epochs"]] == [1, 2]
+    assert twelve["training"]["epochs"][1]["accuracy"] == 0.747
+    assert twelve["match"] == {
+        "started": "2026-10-11T18:05:14+00:00",
+        "maxGames": 2000,
+        "games": 200,
+        "score": 0.495,
+        "margin": 0.062,
+    }
+    thirteen = round_progress(LOG, 13, now=now)
+    assert thirteen["selfplay"] == {
+        "started": "2026-10-11T18:31:41+00:00",
+        "games": 4000,
+        "done": False,
+        "localDone": 128,
+        "localTotal": 1000,
+    }
+    assert thirteen["training"] is None and thirteen["match"] is None
+    assert round_progress(LOG, 14, now=now) is None
+    # Just after midnight UTC, a late-evening stamp is from the day before.
+    early = dt.datetime(2026, 10, 12, 0, 5, tzinfo=dt.timezone.utc).timestamp()
+    assert round_progress(LOG, 13, now=early)["selfplay"]["started"].startswith(
+        "2026-10-11T18:31"
+    )

@@ -128,3 +128,16 @@ td small { color: var(--muted); font-weight: 400; }
 .result-tag.up { background: color-mix(in srgb, var(--live) 18%, transparent); color: var(--live); }
 .result-tag.kept { background: var(--line); color: var(--muted); }
 .result-tag.back { background: color-mix(in srgb, var(--bad) 15%, transparent); color: var(--bad); }
+
+.steps { list-style: none; margin: 0 0 16px; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 760px) { .steps { grid-template-columns: 1fr; } }
+.step { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; font-size: 0.88rem; }
+.step div { display: flex; flex-direction: column; gap: 2px; }
+.step span:not(.mark) { color: var(--muted); }
+.mark { flex-shrink: 0; width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--line); display: grid; place-items: center; font-size: 0.75rem; color: #fff; }
+.step.done .mark { background: var(--live); border-color: var(--live); }
+.step.now { border-color: var(--wait); }
+.step.now .mark { border-color: var(--wait); border-top-color: transparent; animation: spin 1.2s linear infinite; }
+.step.next { opacity: 0.6; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .step.now .mark { animation: none; } }

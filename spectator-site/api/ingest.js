@@ -36,8 +36,27 @@ function validRound(row) {
     && typeof row.promoted === 'boolean' && typeof row.rolledBack === 'boolean';
 }
 
+function nullCount(value) { return value === null || count(value); }
+
+function validProgress(p) {
+  if (p === null) return true;
+  if (!exact(p, ['selfplay', 'training', 'match'])) return false;
+  const { selfplay: s, training: t, match: m } = p;
+  return (s === null || (exact(s, ['started', 'games', 'done', 'localDone', 'localTotal'])
+      && iso(s.started) && nullCount(s.games) && typeof s.done === 'boolean'
+      && count(s.localDone) && nullCount(s.localTotal)))
+    && (t === null || (exact(t, ['started', 'epochs', 'total']) && iso(t.started) && count(t.total)
+      && Array.isArray(t.epochs) && t.epochs.length <= 20 && t.epochs.every((e) =>
+        exact(e, ['epoch', 'valueLoss', 'accuracy', 'seconds']) && count(e.epoch)
+        && fraction(e.valueLoss) && fraction(e.accuracy) && count(e.seconds))))
+    && (m === null || (exact(m, ['started', 'maxGames', 'games', 'score', 'margin'])
+      && iso(m.started) && nullCount(m.maxGames) && count(m.games)
+      && fraction(m.score) && fraction(m.margin)));
+}
+
 function validTraining(t) {
-  return t === null || (exact(t, ['round', 'step', 'bestRound', 'since', 'rounds'])
+  const keys = ['round', 'step', 'bestRound', 'since', 'rounds'];
+  return t === null || ((exact(t, keys) || (exact(t, [...keys, 'progress']) && validProgress(t.progress)))
     && count(t.round) && count(t.bestRound) && iso(t.since)
     && typeof t.step === 'string' && /^[a-z_]{0,20}$/.test(t.step)
     && Array.isArray(t.rounds) && t.rounds.length <= 20 && t.rounds.every(validRound));

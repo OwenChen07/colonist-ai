@@ -64,17 +64,66 @@ function card(bot) {
     watch);
 }
 
-const STEPS = { selfplay: 'playing self-play games', train: 'training', match: 'promotion match' };
 const pct = (x) => (x == null ? '—' : `${(100 * x).toFixed(1)}%`);
+
+const clock = (ms) => new Date(ms).toLocaleTimeString('en-CA', { timeZone: 'America/Toronto', hour: 'numeric', minute: '2-digit' });
+const minutes = (ms) => {
+  const m = Math.max(1, Math.round(ms / 60000));
+  return m >= 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m} min`;
+};
+
+// The current round, step by step: what's done, what's running, when it should end.
+function steps(training) {
+  const p = training.progress;
+  if (!p) return [];
+  const now = Date.now();
+  const out = [];
+  const s = p.selfplay;
+  const t = p.training;
+  const m = p.match;
+  if (s) {
+    const start = Date.parse(s.started);
+    const games = s.games ? `${s.games.toLocaleString('en-CA')} games` : 'games';
+    if (s.done || t) {
+      const end = t ? Date.parse(t.started) : now;
+      out.push(['done', 'Self-play', `${games} in ${minutes(end - start)}`]);
+    } else {
+      const frac = s.localTotal ? s.localDone / s.localTotal : 0;
+      const eta = frac > 0.05 ? ` · done about ${clock(start + (now - start) / frac)}` : '';
+      out.push(['now', 'Self-play', `${games}: about ${Math.round(100 * frac)}%${eta}`]);
+    }
+  } else out.push(['next', 'Self-play', '']);
+  if (t) {
+    const done = t.epochs.length;
+    const last = t.epochs[done - 1];
+    const quality = last ? ` · value loss ${last.valueLoss.toFixed(3)}, accuracy ${(100 * last.accuracy).toFixed(1)}%` : '';
+    if (m) {
+      out.push(['done', 'Training', `${t.total} epochs${quality}`]);
+    } else {
+      const spent = t.epochs.reduce((a, e) => a + e.seconds, 0);
+      const each = done ? spent / done : 2800;
+      const eta = Date.parse(t.started) + 1000 * (spent + (t.total - done) * each);
+      out.push(['now', 'Training', `epoch ${done} of ${t.total} done${quality} · done about ${clock(eta)}`]);
+    }
+  } else out.push(['next', 'Training', '3 epochs, about 2 h 20 min']);
+  if (m) {
+    const score = m.score != null ? `${(100 * m.score).toFixed(1)}% ± ${(100 * m.margin).toFixed(1)}% after ${m.games.toLocaleString('en-CA')} games` : 'starting';
+    out.push(['now', 'Promotion match', `vs round ${training.bestRound}: ${score} (needs 50% to be promoted; at most ${(m.maxGames || 2000).toLocaleString('en-CA')} games)`]);
+  } else out.push(['next', 'Promotion match', `vs round ${training.bestRound}, the best net`]);
+  return out;
+}
 
 function renderTraining(training, records) {
   const box = document.getElementById('training');
   if (!training) { box.hidden = true; return; }
   box.hidden = false;
-  const since = new Date(training.since).toLocaleTimeString('en-CA', { timeZone: 'America/Toronto', hour: 'numeric', minute: '2-digit' });
   document.getElementById('trainingNow').replaceChildren(
-    'Round ', el('strong', {}, String(training.round)), `: ${STEPS[training.step] || training.step} (since ${since}). `,
+    'Round ', el('strong', {}, String(training.round)), ` is under way. `,
     'The bots play ', el('strong', {}, `round ${training.bestRound}`), ', the best net so far.');
+  document.getElementById('steps').replaceChildren(...steps(training).map(([state, name, text]) =>
+    el('li', { class: `step ${state}` },
+      el('span', { class: 'mark' }, state === 'done' ? '✓' : ''),
+      el('div', {}, el('strong', {}, name), el('span', {}, text)))));
   const ranked = Object.fromEntries((records || []).map((r) => [r.round, r]));
   const rows = [...training.rounds].reverse().map((r) => {
     const result = r.rolledBack ? ['Rolled back', 'back'] : r.promoted ? ['Promoted', 'up'] : ['Kept previous', 'kept'];

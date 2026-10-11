@@ -130,7 +130,94 @@ def _number(value):
         return None
 
 
-def training(run, limit=20):
+STAMP = re.compile(r"^\[(\d\d):(\d\d):(\d\d)\] ")
+EPOCH = re.compile(
+    r"^epoch (\d+): .*\| val policy [\d.]+ value ([\d.]+) accuracy ([\d.]+)% \| (\d+) s"
+)
+LOCAL_SHARD = re.compile(r"\| (\d+) games, [\d.]+/s$")
+MATCH = re.compile(r"^\[[\d:]+\]\s+(\d+) games: ([\d.]+)% ± ([\d.]+)%")
+
+
+def _when(line, now):
+    """A log line's [hh:mm:ss] (UTC) as an ISO time, the latest one not after
+    now."""
+    match = STAMP.match(line)
+    if not match:
+        return None
+    h, m, sec = map(int, match.groups())
+    day = dt.datetime.fromtimestamp(now, dt.timezone.utc)
+    stamp = day.replace(hour=h, minute=m, second=sec, microsecond=0)
+    if stamp.timestamp() > now + 60:
+        stamp -= dt.timedelta(days=1)
+    return stamp
+
+
+def round_progress(lines, number, epochs=3, now=None):
+    """The current round's progress, from the end of the training log:
+    self-play games, training epochs, the promotion match's running score."""
+    now = time.time() if now is None else now
+    head = f"] round {number}: "
+    first = next((i for i, line in enumerate(lines) if head in line), None)
+    if first is None:
+        return None
+    progress = {"selfplay": None, "training": None, "match": None}
+    stamp = None
+    for line in lines[first:]:
+        if "] round " in line and head not in line:
+            break  # the next round
+        stamp = _when(line, now) or stamp
+        if head + "self-play" in line:
+            total = re.search(r"self-play, (\d+) games", line)
+            progress["selfplay"] = {
+                "started": stamp.isoformat(),
+                "games": int(total.group(1)) if total else None,
+                "done": False,
+                "localDone": 0,
+                "localTotal": None,
+            }
+        elif progress["selfplay"] and "games here" in line:
+            here = re.search(r"(\d+) games here", line)
+            progress["selfplay"]["localTotal"] = int(here.group(1))
+        elif progress["selfplay"] and LOCAL_SHARD.search(line):
+            progress["selfplay"]["localDone"] = int(LOCAL_SHARD.search(line).group(1))
+        elif "self-play complete" in line and progress["selfplay"]:
+            progress["selfplay"]["done"] = True
+        elif head + "training" in line:
+            progress["training"] = {
+                "started": stamp.isoformat(),
+                "epochs": [],
+                "total": epochs,
+            }
+        elif progress["training"] and EPOCH.match(line):
+            e, value, accuracy, seconds = EPOCH.match(line).groups()
+            progress["training"]["epochs"].append(
+                {
+                    "epoch": int(e),
+                    "valueLoss": float(value),
+                    "accuracy": round(float(accuracy) / 100, 4),
+                    "seconds": int(seconds),
+                }
+            )
+        elif head + "promotion match" in line:
+            most = re.search(r"at most (\d+) games", line)
+            progress["match"] = {
+                "started": stamp.isoformat(),
+                "maxGames": int(most.group(1)) if most else None,
+                "games": 0,
+                "score": None,
+                "margin": None,
+            }
+        elif progress["match"] and MATCH.match(line):
+            games, score, margin = MATCH.match(line).groups()
+            progress["match"].update(
+                games=int(games),
+                score=round(float(score) / 100, 4),
+                margin=round(float(margin) / 100, 4),
+            )
+    return progress
+
+
+def training(run, limit=20, now=None):
     """The self-play run's progress, from its state.json: the current round
     and step, and each round's results."""
     path = Path(run) / "state.json"
@@ -156,8 +243,16 @@ def training(run, limit=20):
                 "liveError": _number((row.get("live") or {}).get("mse")),
             }
         )
+    current = int(state.get("round", 0))
+    progress = None
+    try:
+        tail = (Path(run) / "train-tail.log").read_text(errors="replace")
+        progress = round_progress(tail.splitlines(), current, now=now)
+    except OSError:
+        pass
     return {
-        "round": int(state.get("round", 0)),
+        "round": current,
+        "progress": progress,
         "step": str(state.get("step", ""))[:20],
         "bestRound": int(state.get("best_round", 0)),
         "since": dt.datetime.fromtimestamp(
