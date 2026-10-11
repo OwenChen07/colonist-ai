@@ -156,8 +156,9 @@ The VM loop can be stopped and restarted with new flags at any time; it resumes.
 ## 6. Running infrastructure (check before changing anything)
 
 **Extra bot accounts, from 10 Oct 2026:**
-- **Queues:** a new account plays **casual** until it has 10 verified casual games
-  (`--ranked-after 10`, which colonist needs before ranked unlocks), then
+- **Queues:** a new account plays **casual** until it has 5 verified casual games
+  (`--ranked-after 5`: colonist's home page shows "0/5 Casual games to unlock"),
+  then
   **ranked**, the owner's choice.
   - If ranked still isn't available, it plays casual and retries.
   - Games against our own bots are played out (no auto-resign, the owner's choice).
@@ -171,6 +172,11 @@ The VM loop can be stopped and restarted with new flags at any time; it resumes.
 - **Sign-in, once per account:** `scripts/cloud_ranked_login.sh <account>` on the
   bot VM, through an SSH tunnel to port 6080 (noVNC). The owner signs in;
   never type passwords for them.
+
+**bot2** (colonist username Ericha8499) has run since 11 Oct, about midnight
+Toronto, as `colonist-casual@bot2` on port 8766. The bot VM is full with two
+bots: about 0.7 GB of memory free, CPU load about 2.6. A third account needs
+another VM; the owner chose to hold off.
 
 **Since 9 Oct 2026, 10:05 pm Toronto: the ranked bot has its own VM.**
 - **Host:** the AWS `c7i-flex.large` at 18.226.232.112 (user `ubuntu`, services in

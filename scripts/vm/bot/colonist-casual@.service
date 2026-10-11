@@ -1,5 +1,5 @@
 [Unit]
-Description=Colonist AI: bot account %i (10 casual 1v1 games to unlock ranked, then ranked)
+Description=Colonist AI: bot account %i (5 casual 1v1 games to unlock ranked, then ranked)
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=0
@@ -9,7 +9,7 @@ User=ubuntu
 WorkingDirectory=/home/ubuntu/colonist-ai
 Environment=PYTHONUNBUFFERED=1
 Environment=OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
-Environment=SIMULATIONS=800 RANKED_AFTER=10
+Environment=SIMULATIONS=800 RANKED_AFTER=5
 # Per account: PORT (unique on this machine, e.g. 8766), optionally SIMULATIONS.
 EnvironmentFile=/home/ubuntu/colonist-ai/scripts/vm/bot/accounts/%i.env
 # COLONIST_OWN_ACCOUNTS: all our bot usernames, to spot bot-vs-bot games.
