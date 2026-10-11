@@ -119,13 +119,17 @@ LOG_PIECE_NOTICE = {72, 87}  # before matching setup road / settlement placement
 #: isConnected false in the same update, seen live in a ranked game), and a
 #: player starting a vote to pause the game (124, sent with a type 51 vote
 #: frame; the vote needs every player's accept, so it expires unless the bot
-#: votes, seen live in a ranked game).
+#: votes, seen live in a ranked game), and a player starting a vote to
+#: disable karma (36, sent with a type 51 vote frame titled
+#: disableKarmaInitiator; it also needs every player's accept, seen live in a
+#: ranked game).
 LOG_IGNORED = {
     0,
     2,
     22,
     23,
     24,
+    36,
     44,
     47,
     49,

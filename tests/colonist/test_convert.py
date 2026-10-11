@@ -314,6 +314,8 @@ def test_incomplete_conversion_fails_the_replay_check(frames):
         {"type": 140, "playerColor": 1},
         # a player starting a vote to pause the game (with a type 51 vote frame)
         {"type": 124, "playerColor": 2},
+        # a player starting a vote to disable karma (with a type 51 vote frame)
+        {"type": 36, "playerColor": 6},
     ],
 )
 def test_timer_playing_for_a_player_is_skipped(frames, notice):
