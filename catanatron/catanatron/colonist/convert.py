@@ -438,6 +438,13 @@ class _Converter:
         if robber != self.robber_tile:
             diff["mechanicRobberState"] = state["mechanicRobberState"]
         self.apply(diff)
+        # Port rates from a settlement whose diff was missed (seen live: the
+        # opponent then traded 4 wood for 2 ore at 2:1).
+        for c, ps in (state.get("playerStates") or {}).items():
+            if "bankTradeRatiosState" in ps:
+                self.ratios.setdefault(int(c), {}).update(
+                    {int(r): n for r, n in ps["bankTradeRatiosState"].items()}
+                )
         return True
 
     # ----- one diff -----
@@ -729,8 +736,19 @@ class _Converter:
             del self.record["winner"]
 
 
+def game_start(frames):
+    """The first full game snapshot. Type 4 also comes with another layout, a
+    list of players (seen live before a ranked game), which is not a start."""
+    for f in frames:
+        if f.dir == "in" and f.type == GAME_STATE:
+            payload = f.data["data"].get("payload")
+            if isinstance(payload, dict) and "gameState" in payload:
+                return f
+    return None
+
+
 def convert(frames) -> Conversion:
-    start = next((f for f in frames if f.dir == "in" and f.type == GAME_STATE), None)
+    start = game_start(frames)
     if start is None:
         raise ConvertError(
             "capture has no game start; the extension must be on before the game begins"

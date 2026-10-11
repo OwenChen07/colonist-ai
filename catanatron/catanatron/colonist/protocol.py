@@ -67,7 +67,7 @@ def pair(frames):
     """[(messages sent since the previous update, [log entries by the sender
     in this update])]. The move's own message is among the candidates; which
     one shows up in the summary, as the shape every instance shares."""
-    start = next((f for f in frames if f.dir == "in" and f.type == C.GAME_STATE), None)
+    start = C.game_start(frames)
     if start is None:
         return []
     conv = C._Converter(start.data["data"]["payload"], start)

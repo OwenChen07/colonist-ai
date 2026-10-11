@@ -504,3 +504,42 @@ def test_a_combined_bank_trade_takes_its_rate_from_the_cards():
     assert [e[0] for e in c.log] == [
         ["RED", "MARITIME_TRADE", ["WOOD", "WOOD", None, None, "ORE"]]
     ] * 2
+
+
+def test_a_reconnect_snapshot_brings_port_rates_a_missed_diff_had(frames):
+    """The opponent's 2:1 wood port first showed in a reconnect snapshot
+    (seen live); their later 4-wood trades are 4:1, not two 2:1 trades."""
+    from catanatron.colonist.convert import GAME_STATE, _Converter
+
+    start = next(f for f in frames if f.type == GAME_STATE)
+    c = _Converter(start.data["data"]["payload"], start)
+    state = copy.deepcopy(start.data["data"]["payload"]["gameState"])
+    other = next(int(k) for k in state["playerStates"] if int(k) != c.you)
+    state["gameLogState"][str(c.last_log_id + 1)] = {"text": {"type": 0}}
+    state["playerStates"][str(other)]["bankTradeRatiosState"]["1"] = 2
+    assert c.reconcile(state)
+    assert c.ratios[other][1] == 2
+
+
+def test_a_player_list_with_the_game_state_type_is_not_the_start(frames):
+    """Before a ranked game, colonist sent type 4 with a list of players
+    (seen live); the game start is the later type 4 with a game state."""
+    import dataclasses
+
+    from catanatron.colonist.convert import GAME_STATE, game_start
+
+    start = next(f for f in frames if f.type == GAME_STATE)
+    players = {
+        "id": "1",
+        "data": {
+            "type": GAME_STATE,
+            "payload": [
+                {"id": "a", "playerCount": 2, "disconnected": True},
+                {"id": "b", "playerCount": 2, "disconnected": True},
+            ],
+        },
+    }
+    early = dataclasses.replace(start, seq=start.seq - 1, data=players)
+    with_list = [early] + list(frames)
+    assert game_start(with_list) is start
+    assert convert(with_list).record == convert(frames).record
