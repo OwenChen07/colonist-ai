@@ -173,6 +173,13 @@ The VM loop can be stopped and restarted with new flags at any time; it resumes.
   bot VM, through an SSH tunnel to port 6080 (noVNC). The owner signs in;
   never type passwords for them.
 
+**Bot VM 2** (AWS `c7i-flex.large` 3.18.220.56, tag Role=bot) has run since
+11 Oct: **bot3** (Dilly6283, port 8766) and **bot4** (Sherie3424, port 8767).
+`scripts/vm/bot.env` on the coordinator lists both bot VMs, and the sync,
+`bot_ctl.sh` and the watchdog cover both. The new accounts' game sessions
+reconnect often (`isReconnectingSession`, sometimes on the same socket); the
+bridge resends or catches up a move lost to any reconnect.
+
 **bot2** (colonist username Ericha8499) has run since 11 Oct, about midnight
 Toronto, as `colonist-casual@bot2` on port 8766.
 - **Ranked unlock:** the runner reads colonist's "N/5 Casual games to unlock"
