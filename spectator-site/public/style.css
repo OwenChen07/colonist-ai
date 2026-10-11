@@ -39,7 +39,7 @@ body {
   color: var(--text);
   font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
 }
-main { max-width: 860px; margin: 0 auto; padding: 40px 16px; }
+main { max-width: 1180px; margin: 0 auto; padding: 40px 16px; }
 header h1 { margin: 0 0 4px; font-size: 1.75rem; }
 header p, footer p { margin: 0; color: var(--muted); }
 footer { margin-top: 28px; font-size: 0.875rem; }
@@ -47,7 +47,7 @@ footer p + p { margin-top: 4px; }
 
 .bots {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 16px;
   margin-top: 28px;
 }
@@ -108,3 +108,6 @@ dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
 .result { width: 12px; height: 12px; border-radius: 50%; }
 .result.win { background: var(--live); }
 .result.loss { background: var(--bad); }
+
+@media (max-width: 1000px) { .bots { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 540px) { .bots { grid-template-columns: 1fr; } }
