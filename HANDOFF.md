@@ -174,7 +174,15 @@ The VM loop can be stopped and restarted with new flags at any time; it resumes.
   never type passwords for them.
 
 **bot2** (colonist username Ericha8499) has run since 11 Oct, about midnight
-Toronto, as `colonist-casual@bot2` on port 8766. The bot VM is full with two
+Toronto, as `colonist-casual@bot2` on port 8766.
+- **Ranked unlock:** the runner reads colonist's "N/5 Casual games to unlock"
+  counter from the home page and switches to ranked when it disappears.
+- **Reconnects:** bot2's browser reconnected about once a minute in its first
+  games (the ranked bot about once per 80 games). Likely cause: the account open
+  in another session. The bridge now recovers from a reconnect whatever the
+  unconfirmed move was.
+- **Watchdog:** runs every 15 minutes and covers every account
+  (`bot_ctl.sh accounts`, `restart-account NAME`). The bot VM is full with two
 bots: about 0.7 GB of memory free, CPU load about 2.6. A third account needs
 another VM; the owner chose to hold off.
 
