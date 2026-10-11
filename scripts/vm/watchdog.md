@@ -29,6 +29,12 @@ say so in the journal rather than looking for a way around it.
   - Log: `runs/train.log`. State: `runs/g1/state.json`.
   - Self-play workers are listed in `scripts/vm/workers.env`.
 - `colonist-spectator` (systemd, on the bot VM): the redacted public feed.
+- Extra bot accounts, `colonist-casual@NAME` on the bot VM: 5 casual games, then
+  ranked. Their data is in `data/NAME/`.
+  - `scripts/vm/bot_ctl.sh accounts` lists them, `log-account NAME` shows logs,
+    and `restart-account NAME` restarts one.
+  - The same rules and fixes apply as for the ranked bot. Restart an account only
+    when it isn't mid-game, or when its game is already stuck.
 - `HANDOFF.md` describes the project, the colonist protocol and past fixes.
 
 ## Rules (from the owner; never break them)

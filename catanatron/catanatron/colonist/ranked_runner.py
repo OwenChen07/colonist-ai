@@ -289,6 +289,40 @@ def _finished_ranked_capture(path, ranked=True):
     return conversion
 
 
+UNLOCK = re.compile(r"(\d+)/(\d+) Casual games to unlock")
+
+
+def ranked_locked_from_text(text):
+    """True while the home page still shows "N/M Casual games to unlock",
+    False once it doesn't (ranked open), None if the page has no game modes."""
+    if "Casual" not in text or "Ranked" not in text:
+        return None
+    return bool(UNLOCK.search(text))
+
+
+async def ranked_locked(page):
+    try:
+        await page.get_by_role("button", name=re.compile("Casual")).wait_for(
+            timeout=30000
+        )
+        return ranked_locked_from_text(await page.locator("body").inner_text())
+    except Exception:
+        return None
+
+
+async def queue_with_retries(page, mode, attempts=3):
+    """queue_1v1, reloading the page between tries: on a busy machine the home
+    page sometimes takes more than 30 s to show the game modes (seen live)."""
+    for attempt in range(attempts):
+        try:
+            return await queue_1v1(page, mode)
+        except Exception as error:
+            if attempt == attempts - 1 or "signed in" in str(error):
+                raise
+            print(f"queueing failed ({error!s:.80}); reloading", flush=True)
+            await page.goto(URL)
+
+
 def next_queue(queue, ranked_after, data, account=None):
     """The queue for the next game. A new colonist account must finish some
     casual games before ranked unlocks: with `ranked_after` set, play casual
@@ -531,9 +565,14 @@ async def _run(args):
                 before = set(captures.glob("bridge-*.json"))
                 log_offset = (data / "bridge.log").stat().st_size
                 queue = next_queue(args.queue, args.ranked_after, data, args.account)
+                if args.ranked_after is not None:
+                    # colonist's own counter decides when ranked is open.
+                    locked = await ranked_locked(page)
+                    if locked is not None:
+                        queue = "casual" if locked else "ranked"
                 ranked = queue == "ranked"
                 try:
-                    await queue_1v1(page, "Ranked" if ranked else "Casual")
+                    await queue_with_retries(page, "Ranked" if ranked else "Casual")
                 except RuntimeError as error:
                     if not (ranked and args.ranked_after is not None):
                         raise
@@ -542,7 +581,7 @@ async def _run(args):
                     print(f"ranked unavailable ({error}); playing casual", flush=True)
                     queue, ranked = "casual", False
                     await page.goto(URL)
-                    await queue_1v1(page, "Casual")
+                    await queue_with_retries(page, "Casual")
                 active_game = True
                 total = args.games or "unlimited"
                 print(f"queued {queue} 1v1 game {game + 1}/{total}", flush=True)

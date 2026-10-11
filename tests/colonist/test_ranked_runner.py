@@ -202,3 +202,15 @@ def test_a_new_account_plays_casual_until_ranked_unlocks(tmp_path):
     with open(tmp_path / "games.jsonl", "a") as f:
         f.write(json.dumps({"queue": "casual", "account": "bot2"}) + "\n")
     assert next_queue("casual", 10, tmp_path, "bot2") == "ranked"
+
+
+def test_ranked_unlock_is_read_from_the_home_page():
+    from catanatron.colonist.ranked_runner import ranked_locked_from_text
+
+    home = (
+        "Ericha8499\nBots\nCasual\nRanked\n1v1\n2/5 Casual games to unlock\nStart Game"
+    )
+    assert ranked_locked_from_text(home) is True
+    unlocked = "Ericha8499\nBots\nCasual\nRanked\n1v1\n10\n2\nStart Game"
+    assert ranked_locked_from_text(unlocked) is False
+    assert ranked_locked_from_text("Loading...") is None

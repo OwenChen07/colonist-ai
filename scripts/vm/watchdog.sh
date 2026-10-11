@@ -22,6 +22,12 @@ systemctl is-active --quiet colonist-train || problems+=("colonist-train is not 
 # The ranked bot runs on its own VM; its data comes back every 5 minutes.
 bot=$(scripts/vm/bot_ctl.sh is-active 2>&1)
 [ "$bot" = active ] || problems+=("colonist-ranked on the bot VM is not active ($bot)")
+# The extra accounts (colonist-casual@NAME): each line is "NAME service state".
+while read -r name service state; do
+  [ -n "$name" ] || continue
+  [ "$service" = active ] || problems+=("bot account $name: service $service")
+  [ "$state" = needs_attention ] && problems+=("bot account $name: runner needs_attention")
+done < <(scripts/vm/bot_ctl.sh accounts 2>/dev/null)
 # A crash loop (e.g. running out of memory) can look active between restarts:
 # compare each service's restart counter with the last check's.
 for unit in colonist-ranked colonist-train; do
@@ -67,6 +73,8 @@ allowed=(
   "Bash(sudo systemctl restart colonist-train)"
   "Bash(scripts/vm/bot_ctl.sh status)" "Bash(scripts/vm/bot_ctl.sh log)"
   "Bash(scripts/vm/bot_ctl.sh restart)" "Bash(scripts/vm/bot_ctl.sh stop)"
+  "Bash(scripts/vm/bot_ctl.sh accounts)" "Bash(scripts/vm/bot_ctl.sh log-account:*)"
+  "Bash(scripts/vm/bot_ctl.sh restart-account:*)"
 )
 timeout 3000 claude -p "$prompt" --permission-mode dontAsk --allowedTools "${allowed[@]}" \
   > "data/watchdog/run-$stamp.log" 2>&1
