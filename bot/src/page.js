@@ -139,7 +139,17 @@
       window.postMessage({ [TAG]: 'to-relay', msg: { kind: 'send-confirmed', sendId } }, '*');
       return true;
     }
-    const entry = sockets[id];
+    let entry = sockets[id];
+    if (entry && entry[0].readyState !== NativeWebSocket.OPEN) {
+      // The named socket closed: colonist reconnected the game on a newer one
+      // (seen live, often, on new accounts). Use the newest open socket.
+      const newer = Object.keys(sockets).map(Number).filter((k) => k > id).sort((a, b) => b - a)
+        .find((k) => sockets[k][0].readyState === NativeWebSocket.OPEN);
+      if (newer !== undefined) {
+        id = newer;
+        entry = sockets[newer];
+      }
+    }
     if (!entry || entry[0].readyState !== NativeWebSocket.OPEN) {
       console.warn('[colonist-ai bot] game socket not open; move not sent');
       window.postMessage({ [TAG]: 'to-relay', msg: { kind: 'send-failed', socket: id, sendId, reason: 'game socket not open' } }, '*');

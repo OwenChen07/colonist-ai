@@ -43,9 +43,12 @@ say so in the journal rather than looking for a way around it.
   and never touch the browser profile's sign-in. If colonist shows a login
   prompt, a captcha, a warning, or anything about the account:
   1. Run `scripts/vm/bot_ctl.sh stop`.
-  2. Write `data/ranked/NEEDS_OWNER.md` saying what you saw.
+  2. Write `data/<account>/NEEDS_OWNER.md` (`data/ranked/` for the ranked
+     bot) saying what you saw. It silences only that account; for an extra
+     account, stop it with `scripts/vm/bot_ctl.sh stop-account NAME`.
   3. Stop.
-- **Secrets and data:** never print or store the reconnect token. Never commit
+- **Secrets and data:** never print or store the reconnect token. Decode
+  captures to the screen only (pipe through `head`/`grep`), never to a file. Never commit
   anything in `captures/`, `data/`, `runs/` or `models/` (usernames, chat, big
   files).
 - **Play:** the bot never trades with the opponent and does not chat.
@@ -63,7 +66,7 @@ say so in the journal rather than looking for a way around it.
 - **Decisions:** don't change design decisions (training settings, which net
   plays, the rules of play), and don't guess colonist's message formats without
   a capture that shows them. If the fix needs either, write
-  `data/ranked/NEEDS_OWNER.md` and stop. For a ranked-bot problem, stop the bot
+  `data/<account>/NEEDS_OWNER.md` and stop. For a bot problem, stop that bot
   before writing it.
 - **Retries:** if `data/watchdog/journal.md` shows this same problem was already
   "fixed" three times, don't try again. Write `NEEDS_OWNER.md` instead.

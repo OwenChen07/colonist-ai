@@ -67,6 +67,20 @@ const frame = Uint8Array.from([0x82, 0xa2, 0x69, 0x64, 0xa3, 0x31, 0x33, 0x30]);
   fromPage({ [TAG]: 'send', socket: 7, b64: 'AQID' });  // unknown socket: nothing sent
   assert.strictEqual(ws.sent.length, 2);
   assert(posted.some((p) => p.msg && p.msg.kind === 'send-failed' && p.msg.socket === 7));
+  // The named socket closed after a reconnect: the move goes out on the
+  // newer open socket instead of failing.
+  const replaced = new WebSocket('wss://socket.svr.colonist.io/?version=2');
+  replaced.readyState = FakeWebSocket.OPEN;
+  ws.readyState = 3;  // CLOSED
+  posted.length = 0;
+  fromPage({ [TAG]: 'send', socket: 1, b64: 'BAUG', sendId: 'move-b' });
+  await new Promise((r) => setTimeout(r, 20));  // the copy back is asynchronous
+  assert.deepStrictEqual(Array.from(replaced.sent[0]), [4, 5, 6]);
+  assert.strictEqual(ws.sent.length, 2, 'nothing more on the closed socket');
+  assert(posted.some((p) => p.msg && p.msg.kind === 'frame' && p.msg.dir === 'out' && p.msg.socket === 2));
+  assert(!posted.some((p) => p.msg && p.msg.kind === 'send-failed'));
+  ws.readyState = FakeWebSocket.OPEN;
+  replaced.readyState = 3;
   // ----- sequence numbers -----
   // A game message: header 3,1, channel "G1", then {action, payload, sequence}.
   const gameMsg = (action, seq) => {
@@ -86,7 +100,7 @@ const frame = Uint8Array.from([0x82, 0xa2, 0x69, 0x64, 0xa3, 0x31, 0x33, 0x30]);
   game.send(gameMsg(2, 2));
   game.send(gameMsg(6, 3));
   assert.deepStrictEqual(game.sent.map(seqOf), [2, 3], "the client's own numbers pass unchanged");
-  fromPage({ [TAG]: 'send', socket: 2, b64: Buffer.from(gameMsg(9, 0)).toString('base64') });
+  fromPage({ [TAG]: 'send', socket: 3, b64: Buffer.from(gameMsg(9, 0)).toString('base64') });
   game.send(gameMsg(6, 4));  // the client doesn't know the bot sent number 4
   assert.deepStrictEqual(game.sent.map(seqOf), [2, 3, 4, 5], 'bot and client never share a number');
   assert.strictEqual(game.sent[2][13], 9, 'the bot message itself is unchanged apart from its number');
@@ -95,7 +109,7 @@ const frame = Uint8Array.from([0x82, 0xa2, 0x69, 0x64, 0xa3, 0x31, 0x33, 0x30]);
   fromPage({ [TAG]: 'new-game' });
   game.sent.length = 0;
   game.send(gameMsg(2, 127));
-  fromPage({ [TAG]: 'send', socket: 2, b64: Buffer.from(gameMsg(6, 0)).toString('base64') });
+  fromPage({ [TAG]: 'send', socket: 3, b64: Buffer.from(gameMsg(6, 0)).toString('base64') });
   assert.deepStrictEqual(game.sent.map(seqOf), [127, 128]);
   assert.strictEqual(game.sent[1].length, game.sent[0].length + 1);
 
@@ -106,7 +120,7 @@ const frame = Uint8Array.from([0x82, 0xa2, 0x69, 0x64, 0xa3, 0x31, 0x33, 0x30]);
   // Before the client sends anything in a game, the bot starts at 2.
   fromPage({ [TAG]: 'new-game' });
   game.sent.length = 0;
-  fromPage({ [TAG]: 'send', socket: 2, b64: Buffer.from(gameMsg(15, 0)).toString('base64') });
+  fromPage({ [TAG]: 'send', socket: 3, b64: Buffer.from(gameMsg(15, 0)).toString('base64') });
   assert.deepStrictEqual(game.sent.map(seqOf), [2]);
   // Lobby messages are left alone.
   const lobby = Uint8Array.from([2, 7, 5, ...Buffer.from('lobby'), 0x80]);

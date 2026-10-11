@@ -8,6 +8,7 @@
 #   scripts/vm/bot_ctl.sh accounts             each extra account: service, runner state
 #   scripts/vm/bot_ctl.sh restart-account NAME restart one extra account (between games)
 #   scripts/vm/bot_ctl.sh log-account NAME
+#   scripts/vm/bot_ctl.sh stop-account NAME    stop one extra account
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 source scripts/vm/bot.env
@@ -32,6 +33,7 @@ case "${1:-status}" in
   accounts)
     for h in ${COLONIST_BOT_HOSTS:-$COLONIST_BOT_HOST}; do on "$h" 'cd colonist-ai; for f in scripts/vm/bot/accounts/*.env; do [ -e "$f" ] || continue; a=$(basename "$f" .env); s=$(python3 -c "import json;print(json.load(open(\"data/$a/runner-status.json\")).get(\"state\",\"?\"))" 2>/dev/null || echo none); echo "$a $(systemctl is-active colonist-casual@$a) $s"; done'; done ;;
   restart-account) h=$(host_of "${2:?account}") && on "$h" sudo systemctl restart "colonist-casual@$2" ;;
+  stop-account) h=$(host_of "${2:?account}") && on "$h" sudo systemctl stop "colonist-casual@$2" ;;
   log-account) h=$(host_of "${2:?account}") && on "$h" "tail -50 colonist-ai/data/$2/bridge.log; tail -20 colonist-ai/data/$2/run.log" ;;
-  *) echo "usage: $0 status|is-active|restarts|restart|stop|log|accounts|restart-account NAME|log-account NAME" >&2; exit 2 ;;
+  *) echo "usage: $0 status|is-active|restarts|restart|stop|log|accounts|restart-account NAME|stop-account NAME|log-account NAME" >&2; exit 2 ;;
 esac
