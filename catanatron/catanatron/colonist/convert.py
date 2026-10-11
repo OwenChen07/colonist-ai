@@ -614,16 +614,28 @@ class _Converter:
     def _bank_trade(self, color, given, received):
         """One colonist entry can hold several trades: split the cards given
         into lots at the player's rate for each resource, one per card received."""
+        rates = dict(self.ratios.get(color, {}))
+        if (
+            len(set(given)) == 1
+            and received
+            and len(given) % len(received) == 0
+            and 2 <= len(given) // len(received) <= 4
+        ):
+            # One resource for several cards: the trade itself shows the rate.
+            # The player's new rate can arrive in the same update, after the
+            # log (seen live: 4 wood for 2 ore at a 2:1 port, rate still 4).
+            # The replay checks the port, so a wrong rate can't slip through.
+            rates[given[0]] = len(given) // len(received)
         lots = []
         for r in sorted(set(given), key=given.index):
-            n, rate = given.count(r), self.ratios.get(color, {}).get(r, 4)
+            n, rate = given.count(r), rates.get(r, 4)
             if n % rate:
                 raise _Unsupported(f"trade of {n} x {r} at {rate}:1")
             lots += [r] * (n // rate)
         if len(lots) != len(received):
             raise _Unsupported(f"trade gives {given} for {received}")
         for r, want in zip(lots, received):
-            rate = self.ratios.get(color, {}).get(r, 4)
+            rate = rates.get(r, 4)
             value = [RESOURCE[r]] * rate + [None] * (4 - rate) + [RESOURCE[want]]
             self.emit(color, ActionType.MARITIME_TRADE.value, value)
 

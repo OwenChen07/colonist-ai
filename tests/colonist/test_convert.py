@@ -488,3 +488,19 @@ def test_a_reconnect_snapshot_older_than_the_log_changes_nothing(frames):
     start = next(f for f in frames if f.type == GAME_STATE)
     c = _Converter(start.data["data"]["payload"], start)
     assert not c.reconcile(start.data["data"]["payload"]["gameState"])
+
+
+def test_a_combined_bank_trade_takes_its_rate_from_the_cards():
+    """4 wood for 2 ore in one entry, before the player's 2:1 rate arrived
+    (seen live): two 2:1 trades."""
+    from catanatron.colonist.convert import _Converter
+
+    c = _Converter.__new__(_Converter)
+    c.seat, c.ratios, c.log = {1: "RED"}, {}, []
+    c.pending_play, c.pending_robber, c.discards = None, None, []
+    c.discard_phase = None
+    c.record = {"seats": ["RED", "BLUE"], "checks": []}
+    c._bank_trade(1, [1, 1, 1, 1], [5, 5])
+    assert [e[0] for e in c.log] == [
+        ["RED", "MARITIME_TRADE", ["WOOD", "WOOD", None, None, "ORE"]]
+    ] * 2
