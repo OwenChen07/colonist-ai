@@ -809,3 +809,56 @@ def test_reconnect_after_the_dice_were_thrown_does_not_roll_again():
     replies = _reconnect_with_unconfirmed("ROLL", dice_thrown=True)
     assert not [r for r in replies if r["kind"] == "send"]
     assert any(r.get("state") == "stopped" for r in replies)
+
+
+def test_reconnect_after_the_move_landed_catches_up_and_plays_on():
+    """The roll went through while the socket was down: the snapshot already
+    has its log entries. The bridge catches up from it and carries on."""
+    import base64
+
+    import msgpack
+
+    from catanatron.colonist.capture import decode
+
+    bridge = Bridge(random_net(hidden=(8,)), 2, play=True, encode=_fake_encode)
+    bridge.choose = _player_of_record("capture_full_game")
+    bridge.reset()
+    start, messages = None, list(_messages("capture_full_game"))
+    for i, message in enumerate(messages):
+        frame = decode({**message, "seq": 0, "socket": 1})
+        if frame.type == C.GAME_STATE and isinstance(
+            frame.data["data"].get("payload"), dict
+        ):
+            start = frame.data["data"]["payload"]
+        bridge.handle({**message, "socket": 1})
+        if bridge.expect and bridge.expect[1][0]["type"] == "ROLL":
+            break
+    # The roll's own update, which the dropped socket never delivered.
+    landed = next(
+        decode({**m, "seq": 0, "socket": 1})
+        for m in messages[i + 1 :]
+        if decode({**m, "seq": 0, "socket": 1}).type == C.DIFF
+        and decode({**m, "seq": 0, "socket": 1})
+        .data["data"]["payload"]
+        .get("diff", {})
+        .get("gameLogState")
+    )
+    diff = landed.data["data"]["payload"]["diff"]
+    snapshot = copy.deepcopy(start)
+    state = snapshot["gameState"]
+    state["gameLogState"] = {**state.get("gameLogState", {}), **diff["gameLogState"]}
+    state["currentState"] = {
+        **state["currentState"],
+        "completedTurns": bridge.live.conv.completed,
+        "currentTurnPlayerColor": bridge.live.conv.current,
+        **diff.get("currentState", {}),
+    }
+    state["diceState"] = {"diceThrown": True}
+    before = len(bridge.live.record["log"])
+    b64 = base64.b64encode(
+        msgpack.packb({"id": "1", "data": {"type": 4, "payload": snapshot}})
+    ).decode()
+    replies = bridge.handle({"kind": "frame", "dir": "in", "socket": 2, "b64": b64})
+    assert not any(r.get("state") == "stopped" for r in replies), replies
+    assert bridge.live.error is None
+    assert len(bridge.live.record["log"]) > before  # the roll was caught up

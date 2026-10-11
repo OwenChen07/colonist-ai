@@ -366,9 +366,12 @@ class Bridge:
         self.last_log_id = max([self.last_log_id, *(int(k) for k in logs)])
 
     def retry_after_reconnect(self, payload):
-        """Resend a lost end turn or roll only when the new full snapshot is
-        unchanged (for a roll: dice not thrown yet), so neither can happen
-        twice. A roll lost to a reconnect stopped a casual bot (seen live)."""
+        """A reconnect while a move was unconfirmed. If the new full snapshot
+        shows nothing happened (same turn, no new log entries; for a roll, dice
+        not thrown), resend the move once: it can't happen twice. If the game
+        moved on, catch up from the snapshot, check the move as usual and play
+        on. Reconnects mid-move stopped a casual bot twice in 15 minutes (seen
+        live: a roll, then a road)."""
         _, plan, _ = self.expect
         cur = payload["gameState"].get("currentState", {})
         logs = payload["gameState"].get("gameLogState", {})
@@ -387,7 +390,26 @@ class Bridge:
             "diceThrown"
         ):
             unchanged = False
-        if kind not in ("END_TURN", "ROLL") or not unchanged or self.retry_count:
+        if not unchanged:
+            before = self.live.position_key
+            self.reconcile_snapshot(payload)
+            if self.live.error:
+                self.expect = None
+                self.pending_sends.clear()
+                return [self.status("stopped", self.live.error)]
+            replies = self.check_played(before)
+            if any(r.get("state") == "stopped" for r in replies):
+                return replies
+            if self.expect is not None:
+                # The game moved on without our move showing: can't tell why.
+                self.live.error = (
+                    "reconnected while a move was unconfirmed; stopped safely"
+                )
+                self.expect = None
+                self.pending_sends.clear()
+                return [self.status("stopped", self.live.error)]
+            return replies + self.think()
+        if self.retry_count:
             self.live.error = "reconnected while a move was unconfirmed; stopped safely"
             self.expect = None
             self.pending_sends.clear()
