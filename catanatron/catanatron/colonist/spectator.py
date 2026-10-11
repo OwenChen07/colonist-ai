@@ -133,7 +133,13 @@ class SnapshotWriter:
         if not force and now - self.last_write < self.min_write_interval:
             return
         self.last_write = now
-        doc = {"schema": 1, "live": snap, "rewind": self.frames}
+        doc = {
+            "schema": 1,
+            "live": snap,
+            "rewind": self.frames,
+            # Local only: the publisher turns it into a colonist watch link.
+            "colonistGame": (live.record.get("source") or {}).get("colonist_game"),
+        }
         directory = os.path.dirname(os.path.abspath(self.path))
         os.makedirs(directory, exist_ok=True)
         with tempfile.NamedTemporaryFile("w", dir=directory, delete=False) as out:

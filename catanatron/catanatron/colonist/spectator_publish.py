@@ -1,7 +1,13 @@
-"""Publish only redacted ranked telemetry to the public spectator dashboard.
+"""Publish each bot account's status, with a colonist link to its live game.
 
-Runs on the ranked VM beside the existing bot, without controlling its browser.
-Raw captures, names, chat, and hidden hands never leave the machine.
+Runs on every bot VM (`colonist-spectator`). For each account folder in DATA
+(data/ranked, data/bot2, ...) it posts: the bot's colonist name, what it is
+doing, the net it plays, its record, and the colonist game id while it plays.
+Raw captures, opponents, chat and cards never leave the machine.
+
+    python -m catanatron.colonist.spectator_publish --source vm1 \
+        --key-file data/.spectator-ingest-key \
+        --site https://colonist-ai-spectator.vercel.app
 """
 
 import argparse
@@ -9,216 +15,166 @@ import datetime as dt
 import json
 import os
 import re
+import socket
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
-from catanatron.colonist.capture import load as load_capture
-from catanatron.colonist.convert import GAME_STATE, convert
-from catanatron.colonist.live import LiveGame
-from catanatron.colonist.spectator import public_snapshot
-
-
-USING = re.compile(r"using promoted training round (\d+)")
-SWITCH = re.compile(r"switched to promoted training round (\d+)")
-VERIFIED = re.compile(r"verified ranked capture: (\S+)")
-STAMP = re.compile(r"bridge-(\d{8})-(\d{6})\.json$")
+TORONTO = ZoneInfo("America/Toronto")
+GAME_ID = re.compile(r"^[A-Za-z0-9]{1,32}$")
+# The bridge writes the state after every move; a game with no write for
+# this long is over or stuck, not live.
+LIVE_SECONDS = 180
 
 
-def verified_paths(data):
-    """Read runner evidence; only explicitly versioned, verified games count."""
-    found = {}
-    for log in sorted(data.glob("*run.log"), key=lambda p: p.stat().st_mtime):
-        version = None
-        for line in log.read_text(errors="replace").splitlines():
-            match = USING.search(line) or SWITCH.search(line)
-            if match:
-                version = int(match.group(1))
-            match = VERIFIED.search(line)
-            if match and version is not None:
-                path = Path(match.group(1))
-                if path.is_file():
-                    found[path] = version
-    return found
+def parse_names(text):
+    """'ranked=CatBot77,bot2=Ericha8499' -> {'ranked': 'CatBot77', ...}"""
+    names = {}
+    for item in (text or "").split(","):
+        account, _, name = item.partition("=")
+        if account.strip() and name.strip():
+            names[account.strip()] = name.strip()
+    return names
 
 
-def result_for_capture(path, version):
-    conversion = convert(load_capture(path))
-    if conversion.unsupported or conversion.ended not in ("win", "resignation"):
+def _alive(pid):
+    try:
+        os.kill(int(pid), 0)
+    except (OSError, TypeError, ValueError):
+        return False
+    return True
+
+
+def _read_json(path):
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
         return None
-    record = conversion.record
-    if record.get("source", {}).get("ranked") is not True:
+
+
+def live_game(folder, now):
+    """The colonist game id the account is playing now, or None."""
+    path = folder / "spectator-state.json"
+    try:
+        if now - path.stat().st_mtime > LIVE_SECONDS:
+            return None
+    except OSError:
         return None
-    bot = next(
-        (color for color, player in record["players"].items() if player.get("you")),
-        None,
-    )
-    if not bot:
+    doc = _read_json(path) or {}
+    game = doc.get("colonistGame")
+    if (doc.get("live") or {}).get("phase") != "live" or not game:
         return None
-    winner = record.get("winner")
-    if winner is None and record.get("resigned"):
-        winner = next(
-            (color for color in record["seats"] if color != record["resigned"]), None
-        )
-    if not winner:
-        return None
-    match = STAMP.search(path.name)
-    if match:
-        when = dt.datetime.strptime("".join(match.groups()), "%Y%m%d%H%M%S").replace(
-            tzinfo=dt.timezone.utc
-        )
+    return str(game) if GAME_ID.match(str(game)) else None
+
+
+def record(folder, now):
+    """Wins and losses against people: today (Toronto) and in ranked."""
+    today = dt.datetime.fromtimestamp(now, TORONTO).date()
+    counts = {"today": [0, 0], "ranked": [0, 0]}
+    queue = None
+    try:
+        lines = (folder / "games.jsonl").read_text().splitlines()
+    except OSError:
+        lines = []
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        queue = row.get("queue", queue)
+        if row.get("own_bot") or not row.get("winner"):
+            continue
+        lost = int(row["winner"] != row.get("bot_color"))
+        if row.get("queue", "ranked") == "ranked":
+            counts["ranked"][lost] += 1
+        if dt.datetime.fromtimestamp(row.get("at", 0), TORONTO).date() == today:
+            counts["today"][lost] += 1
+    return {k: {"wins": w, "losses": l} for k, (w, l) in counts.items()}, queue
+
+
+def bot_status(folder, name, now=None):
+    now = time.time() if now is None else now
+    runner = _read_json(folder / "runner-status.json") or {}
+    game = live_game(folder, now)
+    if (folder / "NEEDS_OWNER.md").exists() or runner.get("state") == "needs_attention":
+        status, game = "paused", None
+    elif not _alive(runner.get("pid")):
+        status, game = "offline", None
+    elif game:
+        status = "playing"
     else:
-        when = dt.datetime.fromtimestamp(path.stat().st_mtime, dt.timezone.utc)
+        status = "searching"
+    counts, queue = record(folder, now)
     return {
-        "version": version,
-        "result": "win" if bot == winner else "loss",
-        "at": when.isoformat(),
+        "name": name,
+        "status": status,
+        "queue": queue if queue in ("ranked", "casual") else None,
+        "net": runner.get("label") if isinstance(runner.get("label"), str) else None,
+        "gameId": game,
+        **counts,
     }
 
 
-def replay_for_capture(path, limit=55):
-    """Rebuild checked positions; return public snapshots, never raw frames."""
-    frames = load_capture(path)
-    start = next((f for f in frames if f.dir == "in" and f.type == GAME_STATE), None)
-    if not start:
-        return []
-    game = LiveGame(start.data["data"]["payload"], start.t)
-    snapshots = [public_snapshot(game)]
-    for frame in frames:
-        if frame.seq <= start.seq:
-            continue
-        if game.apply(frame):
-            if game.error:
-                break
-            snap = public_snapshot(game)
-            if (
-                snapshots[-1]["moveNumber"] != snap["moveNumber"]
-                or snap["phase"] == "finished"
-            ):
-                snapshots.append(snap)
-    if len(snapshots) <= limit:
-        return snapshots
-    # Preserve the opening as well as the ending while bounding public payloads.
-    indices = [round(i * (len(snapshots) - 1) / (limit - 1)) for i in range(limit)]
-    return [snapshots[i] for i in indices]
+def snapshot(data, names, source, now=None):
+    bots = []
+    for folder in sorted(Path(data).iterdir()):
+        if folder.is_dir() and (folder / "runner-status.json").exists():
+            name = names.get(folder.name)
+            if name:
+                bots.append(bot_status(folder, name, now))
+    return {
+        "schema": 2,
+        "source": source,
+        "updatedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "bots": bots,
+    }
 
 
-class Publisher:
-    def __init__(self, data, key_file, endpoint):
-        self.data = Path(data)
-        self.key = Path(key_file).read_text().strip()
-        self.endpoint = endpoint.rstrip("/") + "/api/ingest"
-        self.results = {}
-        self.replay_path = None
-        self.replay = []
-
-    def snapshot(self):
-        paths = verified_paths(self.data)
-        for path, version in paths.items():
-            if path not in self.results:
-                try:
-                    self.results[path] = result_for_capture(path, version)
-                except Exception as exc:
-                    print(
-                        f"Skipping unverifiable capture {path.name}: {type(exc).__name__}",
-                        flush=True,
-                    )
-        games = sorted(
-            (r for r in self.results.values() if r), key=lambda r: r["at"], reverse=True
-        )
-        counts = {}
-        for game in games:
-            row = counts.setdefault(
-                game["version"], {"version": game["version"], "wins": 0, "losses": 0}
-            )
-            row["wins" if game["result"] == "win" else "losses"] += 1
-        latest = max(paths, key=lambda p: p.stat().st_mtime) if paths else None
-        if latest and latest != self.replay_path:
-            try:
-                self.replay = replay_for_capture(latest)
-                self.replay_path = latest
-            except Exception as exc:
-                print(f"Replay unavailable: {type(exc).__name__}", flush=True)
-        telemetry = self.data / "spectator-state.json"
-        current = None
-        if telemetry.is_file() and time.time() - telemetry.stat().st_mtime < 75:
-            try:
-                doc = json.loads(telemetry.read_text())
-                if (
-                    doc.get("schema") == 1
-                    and doc.get("live", {}).get("phase") == "live"
-                ):
-                    current = doc
-            except (ValueError, OSError):
-                pass
-        active_version = None
-        # The current runner can switch models before its first verified result.
-        for log in sorted(self.data.glob("*run.log"), key=lambda p: p.stat().st_mtime):
-            for line in log.read_text(errors="replace").splitlines():
-                match = USING.search(line) or SWITCH.search(line)
-                if match:
-                    active_version = int(match.group(1))
-        if active_version is None and counts:
-            active_version = max(counts)
-        frames = current["rewind"] if current else self.replay
-        return {
-            "schema": 1,
-            "updatedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
-            "live": current["live"] if current else frames[-1] if frames else None,
-            "rewind": frames,
-            "stats": sorted(counts.values(), key=lambda row: row["version"]),
-            "recentGames": games[:16],
-            "meta": {"activeVersion": active_version, "verifiedGames": len(games)},
-        }
-
-    def publish(self):
-        snapshot = self.snapshot()
-        encoded = json.dumps(snapshot, separators=(",", ":")).encode()
-        request = urllib.request.Request(
-            self.endpoint,
-            data=encoded,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.key}",
-            },
-            method="POST",
-        )
-        with urllib.request.urlopen(request, timeout=20) as response:
-            if response.status != 200:
-                raise RuntimeError(f"HTTP {response.status}")
-        print(
-            f"published {len(snapshot['recentGames'])} recent results; live={snapshot['live'] is not None}; bytes={len(encoded)}",
-            flush=True,
-        )
+def publish(endpoint, key, body):
+    request = urllib.request.Request(
+        endpoint.rstrip("/") + "/api/ingest",
+        data=json.dumps(body, separators=(",", ":")).encode(),
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=20) as response:
+        if response.status != 200:
+            raise RuntimeError(f"HTTP {response.status}")
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--data", default="data/ranked")
-    parser.add_argument("--key-file", required=True)
+    parser.add_argument("--data", default="data")
+    parser.add_argument("--key-file", default="data/.spectator-ingest-key")
     parser.add_argument("--site", required=True)
-    parser.add_argument("--interval", type=int, default=40)
     parser.add_argument(
-        "--deadline", help="UTC ISO timestamp; stop publishing at this time"
+        "--source", default=socket.gethostname(), help="this VM's name on the site"
     )
+    parser.add_argument(
+        "--names",
+        default=os.environ.get("COLONIST_BOT_NAMES", ""),
+        help="account=colonist name, comma-separated; other accounts aren't shown",
+    )
+    parser.add_argument("--interval", type=int, default=30)
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args(argv)
-    deadline = (
-        dt.datetime.fromisoformat(args.deadline.replace("Z", "+00:00"))
-        if args.deadline
-        else None
-    )
-    publisher = Publisher(args.data, args.key_file, args.site)
+    key = Path(args.key_file).read_text().strip()
+    names = parse_names(args.names)
+    source = re.sub(r"[^a-z0-9-]", "-", args.source.lower())[:32]
     while True:
+        body = snapshot(args.data, names, source)
         try:
-            publisher.publish()
-        except (OSError, ValueError, urllib.error.HTTPError) as exc:
+            publish(args.site, key, body)
+            playing = sum(b["status"] == "playing" for b in body["bots"])
+            print(f"published {len(body['bots'])} bots, {playing} playing", flush=True)
+        except (OSError, ValueError, RuntimeError, urllib.error.HTTPError) as exc:
             print(
                 f"publish retry: {type(exc).__name__}: {getattr(exc, 'code', '')}",
                 flush=True,
             )
-        if args.once or (deadline and dt.datetime.now(dt.timezone.utc) >= deadline):
+        if args.once:
             break
         time.sleep(max(args.interval, 15))
 

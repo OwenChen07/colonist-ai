@@ -1,60 +1,35 @@
 import { timingSafeEqual } from 'node:crypto';
 import { put } from '@vercel/blob';
 
-const FORBIDDEN = /reconnect|token|username|chat|cookie|password|email|hand|secret/i;
-const COLORS = new Set(['RED', 'BLUE', 'ORANGE', 'WHITE']);
-const RESOURCES = new Set(['WOOD', 'BRICK', 'SHEEP', 'WHEAT', 'ORE', null]);
+// Each bot VM posts its bots' status. Only these fields are accepted.
+const STATUSES = new Set(['playing', 'searching', 'paused', 'offline']);
 
 function exact(value, keys) {
   return value && typeof value === 'object' && !Array.isArray(value)
+    && Object.keys(value).length === keys.length
     && Object.keys(value).every((key) => keys.includes(key));
 }
 
-function isColor(value) { return value == null || COLORS.has(value); }
-function isNumber(value) { return Number.isFinite(value); }
-function validFrame(frame) {
-  if (!exact(frame, ['gameKey', 'phase', 'observedAt', 'moveNumber', 'turn', 'toMove', 'winner', 'botColor', 'tiles', 'nodes', 'buildings', 'roads', 'players', 'recentMoves'])) return false;
-  if (!/^[0-9a-f]{16}$/.test(frame.gameKey || '') || !['live', 'paused', 'finished'].includes(frame.phase)
-      || !isNumber(frame.observedAt) || !isNumber(frame.moveNumber) || !isNumber(frame.turn)
-      || !isColor(frame.toMove) || !isColor(frame.winner) || !isColor(frame.botColor)) return false;
-  return Array.isArray(frame.tiles) && frame.tiles.length <= 19 && frame.tiles.every((tile) =>
-    exact(tile, ['q', 'r', 'resource', 'number', 'robber']) && isNumber(tile.q) && isNumber(tile.r)
-    && RESOURCES.has(tile.resource) && (tile.number == null || isNumber(tile.number)) && typeof tile.robber === 'boolean')
-    && Array.isArray(frame.nodes) && frame.nodes.length <= 54 && frame.nodes.every((node) =>
-      exact(node, ['id', 'x', 'y']) && isNumber(node.id) && isNumber(node.x) && isNumber(node.y))
-    && Array.isArray(frame.buildings) && frame.buildings.length <= 54 && frame.buildings.every((building) =>
-      exact(building, ['node', 'color', 'type']) && isNumber(building.node) && COLORS.has(building.color)
-      && ['SETTLEMENT', 'CITY'].includes(String(building.type).toUpperCase()))
-    && Array.isArray(frame.roads) && frame.roads.length <= 72 && frame.roads.every((road) =>
-      exact(road, ['a', 'b', 'color']) && isNumber(road.a) && isNumber(road.b) && COLORS.has(road.color))
-    && Array.isArray(frame.players) && frame.players.length <= 4 && frame.players.every((player) =>
-      exact(player, ['color', 'bot', 'points', 'resources', 'developmentCards']) && COLORS.has(player.color)
-      && typeof player.bot === 'boolean' && isNumber(player.points) && isNumber(player.resources)
-      && isNumber(player.developmentCards))
-    && Array.isArray(frame.recentMoves) && frame.recentMoves.length <= 10 && frame.recentMoves.every((move) =>
-      exact(move, ['color', 'type']) && COLORS.has(move.color) && /^[A-Z0-9_]{1,64}$/.test(move.type));
+function count(value) { return Number.isInteger(value) && value >= 0 && value < 1e6; }
+function record(value) { return exact(value, ['wins', 'losses']) && count(value.wins) && count(value.losses); }
+function nullOr(value, test) { return value === null || (typeof value === 'string' && test.test(value)); }
+
+function validBot(bot) {
+  return exact(bot, ['name', 'status', 'queue', 'net', 'gameId', 'today', 'ranked'])
+    && typeof bot.name === 'string' && /^[A-Za-z0-9_]{1,32}$/.test(bot.name)
+    && STATUSES.has(bot.status)
+    && (bot.queue === null || ['ranked', 'casual'].includes(bot.queue))
+    && nullOr(bot.net, /^[\w .-]{1,40}$/)
+    && nullOr(bot.gameId, /^[A-Za-z0-9]{1,32}$/)
+    && record(bot.today) && record(bot.ranked);
 }
 
-export function validPublicBody(body) {
-  return exact(body, ['schema', 'updatedAt', 'live', 'rewind', 'stats', 'recentGames', 'meta'])
-    && body.schema === 1 && !Number.isNaN(Date.parse(body.updatedAt))
-    && (body.live == null || validFrame(body.live))
-    && Array.isArray(body.rewind) && body.rewind.length <= 55 && body.rewind.every(validFrame)
-    && Array.isArray(body.stats) && body.stats.length <= 20 && body.stats.every((row) =>
-      exact(row, ['version', 'wins', 'losses']) && isNumber(row.version) && isNumber(row.wins) && isNumber(row.losses))
-    && Array.isArray(body.recentGames) && body.recentGames.length <= 16 && body.recentGames.every((game) =>
-      exact(game, ['version', 'result', 'at']) && isNumber(game.version)
-      && ['win', 'loss'].includes(game.result) && !Number.isNaN(Date.parse(game.at)))
-    && exact(body.meta, ['activeVersion', 'verifiedGames'])
-    && (body.meta.activeVersion == null || isNumber(body.meta.activeVersion))
-    && isNumber(body.meta.verifiedGames);
-}
-
-function containsForbiddenKey(value) {
-  if (!value || typeof value !== 'object') return false;
-  return Object.entries(value).some(
-    ([key, item]) => FORBIDDEN.test(key) || containsForbiddenKey(item),
-  );
+export function validBody(body) {
+  return exact(body, ['schema', 'source', 'updatedAt', 'bots'])
+    && body.schema === 2
+    && typeof body.source === 'string' && /^[a-z0-9-]{1,32}$/.test(body.source)
+    && typeof body.updatedAt === 'string' && !Number.isNaN(Date.parse(body.updatedAt))
+    && Array.isArray(body.bots) && body.bots.length <= 8 && body.bots.every(validBot);
 }
 
 function authorized(request) {
@@ -73,23 +48,17 @@ export default async function handler(request, response) {
   }
   if (!authorized(request)) return response.status(401).json({ error: 'Unauthorized' });
   const body = request.body;
-  if (!validPublicBody(body) || containsForbiddenKey(body)) {
-    return response.status(400).json({ error: 'Invalid public snapshot' });
-  }
-  const encoded = JSON.stringify(body);
-  if (Buffer.byteLength(encoded) > 850_000) {
-    return response.status(413).json({ error: 'Snapshot too large' });
-  }
+  if (!validBody(body)) return response.status(400).json({ error: 'Invalid status' });
   try {
-    await put('spectator/live.json', encoded, {
+    await put(`spectator/bots/${body.source}.json`, JSON.stringify(body), {
       access: 'public',
       allowOverwrite: true,
       contentType: 'application/json',
     });
     response.setHeader('Cache-Control', 'no-store');
-    return response.status(200).json({ ok: true, updatedAt: body.updatedAt });
+    return response.status(200).json({ ok: true });
   } catch (error) {
     console.error('spectator write failed', error?.name || 'unknown');
-    return response.status(503).json({ error: 'Snapshot could not be stored' });
+    return response.status(503).json({ error: 'Status could not be stored' });
   }
 }
