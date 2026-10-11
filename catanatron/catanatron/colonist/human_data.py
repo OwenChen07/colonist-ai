@@ -25,12 +25,17 @@ from catanatron.colonist import encode as E
 from catanatron.colonist.capture import load as load_capture
 from catanatron.colonist.convert import convert
 from catanatron.colonist.replay import replay
+from catanatron.state_functions import player_num_dev_cards
 
 
 class _Positions:
-    def __init__(self, color, setup_only=False):
+    def __init__(self, color, setup_only=False, known_only=False):
         self.color = color
         self.setup_only = setup_only
+        # Only decisions where the player holds no unplayed development card:
+        # then everything they knew is in the capture (their card count is
+        # public, and in 1v1 every resource that moves is seen by both).
+        self.known_only = known_only
         self.rows = []
         self.static = None
         self.winner = None
@@ -42,6 +47,10 @@ class _Positions:
         if game.state.current_color().value != self.color:
             return
         if self.setup_only and not game.state.is_initial_build_phase:
+            return
+        if self.known_only and player_num_dev_cards(
+            game.state, game.state.current_color()
+        ):
             return
         actions = game.playable_actions
         if len(actions) <= 1:
@@ -101,16 +110,17 @@ def export_capture(path, out_dir, keep=40, mode="human"):
     you = [color for color, player in record["players"].items() if player["you"]]
     if len(you) != 1:
         raise ValueError("capture has no single recording-player perspective")
-    if mode not in ("human", "value", "opponent_openings"):
+    if mode not in ("human", "value", "opponent_openings", "opponent_known"):
         raise ValueError("unknown export mode")
-    if mode == "opponent_openings" and len(record["seats"]) != 2:
-        raise ValueError("opponent openings require a two-player game")
-    color = (
-        next(c for c in record["seats"] if c != you[0])
-        if mode == "opponent_openings"
-        else you[0]
+    opponent = mode in ("opponent_openings", "opponent_known")
+    if opponent and len(record["seats"]) != 2:
+        raise ValueError("opponent exports require a two-player game")
+    color = next(c for c in record["seats"] if c != you[0]) if opponent else you[0]
+    observer = _Positions(
+        color,
+        setup_only=mode == "opponent_openings",
+        known_only=mode == "opponent_known",
     )
-    observer = _Positions(color, setup_only=mode == "opponent_openings")
     report = replay(record, observer=observer)
     if not report.ok:
         raise ValueError("capture did not replay with matching cards and points")
