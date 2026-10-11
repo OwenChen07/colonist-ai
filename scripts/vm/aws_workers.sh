@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Start, stop or list the AWS self-play workers (tag Project=colonist-ai), from
+# Start, stop or list the AWS self-play workers (tag Project=colonist-ai; start
+# and stop skip the bot VMs, tagged Role=bot), from
 # a machine with the AWS CLI logged in (aws login --profile colonist).
 #   scripts/vm/aws_workers.sh status|start|stop
 # A stopped worker costs only its disk; its public IP changes when it starts
@@ -11,12 +12,13 @@ export AWS_PROFILE="${AWS_PROFILE:-colonist}" AWS_REGION="${AWS_REGION:-us-east-
 ids() {
   aws ec2 describe-instances \
     --filters Name=tag:Project,Values=colonist-ai Name=instance-state-name,Values="$1" \
-    --query "Reservations[].Instances[].InstanceId" --output text
+    --query "Reservations[].Instances[?!(Tags[?Key=='Role' && Value=='bot'])].InstanceId" \
+    --output text
 }
 case "${1:-status}" in
   status)
     aws ec2 describe-instances --filters Name=tag:Project,Values=colonist-ai \
-      --query "Reservations[].Instances[].[InstanceId,InstanceType,State.Name,PublicIpAddress]" \
+      --query "Reservations[].Instances[].[InstanceId,InstanceType,State.Name,PublicIpAddress,Tags[?Key=='Role']|[0].Value]" \
       --output table ;;
   start)
     i=$(ids stopped); [ -n "$i" ] && aws ec2 start-instances --instance-ids $i --output text >/dev/null

@@ -13,6 +13,14 @@ cd "$(dirname "$0")/../.."
 source scripts/vm/bot.env
 KEY="${COLONIST_WORKER_SSH_KEY:-$HOME/.ssh/colonist_worker_ed25519}"
 run() { ssh -i "$KEY" -o BatchMode=yes -o ConnectTimeout=20 "$COLONIST_BOT_HOST" "$@"; }
+on() { local host=$1; shift; ssh -i "$KEY" -o BatchMode=yes -o ConnectTimeout=20 "$host" "$@"; }
+# The bot VM that has an extra account's settings.
+host_of() {
+  for h in ${COLONIST_BOT_HOSTS:-$COLONIST_BOT_HOST}; do
+    on "$h" "test -e colonist-ai/scripts/vm/bot/accounts/$1.env" && { echo "$h"; return; }
+  done
+  return 1
+}
 case "${1:-status}" in
   status)
     run 'systemctl is-active colonist-ranked colonist-spectator; cat colonist-ai/data/ranked/runner-status.json; tail -5 colonist-ai/data/ranked/bridge.log' ;;
@@ -22,8 +30,8 @@ case "${1:-status}" in
   stop) run sudo systemctl stop colonist-ranked ;;
   log) run 'tail -50 colonist-ai/data/ranked/bridge.log; tail -20 colonist-ai/data/ranked/ranked-run.log' ;;
   accounts)
-    run 'cd colonist-ai; for f in scripts/vm/bot/accounts/*.env; do [ -e "$f" ] || continue; a=$(basename "$f" .env); s=$(python3 -c "import json;print(json.load(open(\"data/$a/runner-status.json\")).get(\"state\",\"?\"))" 2>/dev/null || echo none); echo "$a $(systemctl is-active colonist-casual@$a) $s"; done' ;;
-  restart-account) [ -n "${2:-}" ] && run sudo systemctl restart "colonist-casual@$2" ;;
-  log-account) [ -n "${2:-}" ] && run "tail -50 colonist-ai/data/$2/bridge.log; tail -20 colonist-ai/data/$2/run.log" ;;
+    for h in ${COLONIST_BOT_HOSTS:-$COLONIST_BOT_HOST}; do on "$h" 'cd colonist-ai; for f in scripts/vm/bot/accounts/*.env; do [ -e "$f" ] || continue; a=$(basename "$f" .env); s=$(python3 -c "import json;print(json.load(open(\"data/$a/runner-status.json\")).get(\"state\",\"?\"))" 2>/dev/null || echo none); echo "$a $(systemctl is-active colonist-casual@$a) $s"; done'; done ;;
+  restart-account) h=$(host_of "${2:?account}") && on "$h" sudo systemctl restart "colonist-casual@$2" ;;
+  log-account) h=$(host_of "${2:?account}") && on "$h" "tail -50 colonist-ai/data/$2/bridge.log; tail -20 colonist-ai/data/$2/run.log" ;;
   *) echo "usage: $0 status|is-active|restarts|restart|stop|log|accounts|restart-account NAME|log-account NAME" >&2; exit 2 ;;
 esac
