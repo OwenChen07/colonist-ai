@@ -332,9 +332,10 @@ closed, then `... 0` after. Spotlight indexing caused a load-average spike once.
 - Rules found live (fixed in the simulator): the friendly robber also protects the
   **mover** at ≤2 visible points; longest road counts the road **into** an opponent's
   settlement but not through it.
-- Log entries skipped as notices: 0, 2, 22, 24, 44, 47, 49, 58 (timer moving the robber),
-  60, 64 (timer choosing discards), 66, 68, 118 (trade offer), 130, 139 (robber victim
-  count). Monopoly/YoP cards may arrive in a later update; colonist's Easy bot can play
+- Log entries skipped as notices: 0, 2, 22, 23, 24, 36 (a vote to disable karma, with a
+  type 51 vote frame), 44, 47, 49, 58 (timer moving the
+  robber), 60, 64 (timer choosing discards), 66, 67, 68, 118 (trade offer), 124 (pause
+  vote), 130, 139 (robber victim count), 140 (disconnect). Monopoly/YoP cards may arrive in a later update; colonist's Easy bot can play
   Monopoly and never choose (recorded as taking nothing).
 - The bridge refuses games joined midway (a mid-game snapshot after a reload) and
   never plays on a position it can't verify.
