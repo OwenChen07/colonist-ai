@@ -186,6 +186,54 @@ def test_playing_stops_when_colonist_records_another_move():
     assert "colonist recorded" in statuses[-1]["text"]
 
 
+@pytest.mark.parametrize("timer", [False, True])
+def test_discards_chosen_by_colonists_timer_are_followed(timer):
+    """The bot can be too slow to discard (it waits for the earlier seat):
+    colonist's timer then picks its cards (log 64, then 55 in the same update,
+    seen live on bot4). That is no reason to stop; other cards still are."""
+    import msgpack
+
+    bridge = Bridge(random_net(hidden=(8,)), 2, play=True, encode=_fake_encode)
+    real = _player_of_record("capture_full_game")
+
+    def wrong_discard(game):
+        move, _, _ = real(game)
+        if move.action_type.value == "DISCARD_RESOURCE":
+            other = next((a for a in game.playable_actions if a != move), move)
+            return other, [(other, 1.0)], 0.0
+        return move, [(move, 1.0)], 0.0
+
+    bridge.choose = wrong_discard
+    bridge.reset()
+    statuses = []
+    for message in _messages("capture_full_game"):
+        doc = msgpack.unpackb(base64.b64decode(message["b64"]), strict_map_key=False)
+        data = doc.get("data") if isinstance(doc, dict) else None
+        if timer and isinstance(data, dict) and data.get("type") == C.DIFF:
+            logs = (data.get("payload") or {}).get("diff", {}).get("gameLogState", {})
+            you = bridge.live.conv.you if bridge.live else None
+            if any(
+                (e.get("text") or {}).get("type") == C.LOG_DISCARDED
+                and e["text"].get("playerColor") == you
+                for e in logs.values()
+            ):
+                logs["-1"] = {"text": {"type": 64, "playerColor": you}, "from": you}
+                message = {
+                    **message,
+                    "b64": base64.b64encode(msgpack.packb(doc)).decode(),
+                }
+        statuses += [r for r in bridge.handle(message) if r["kind"] == "status"]
+        if statuses and statuses[-1]["state"] == "stopped":
+            break
+    texts = [s["text"] for s in statuses]
+    if timer:
+        assert not any(s["state"] == "stopped" for s in statuses), texts
+        assert any("timer discarded" in t for t in texts)
+    else:
+        assert statuses[-1]["state"] == "stopped"
+        assert "colonist recorded discards" in statuses[-1]["text"]
+
+
 def test_playing_stops_when_a_move_never_shows_up():
     import base64
 

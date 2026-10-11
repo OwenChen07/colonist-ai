@@ -136,6 +136,7 @@ class Bridge:
         self.saved_path = None
         self.since_sent = []  # message types colonist sent since the last move
         self.last_log_id = -1  # highest Colonist game-log id seen in a diff
+        self.timer_discarded = False  # this update has colonist's timer discarding
         self.retry_count = 0  # a pending end turn may be retried once on reconnect
         self.no_effect_retry = False  # retry one acknowledged road with no board effect
         self.sent_raws = []
@@ -333,6 +334,7 @@ class Bridge:
         self.track_offers(frame)
         declines = [] if replaying else self.decline_offers()
         before = self.live.position_key
+        self.timer_discarded = False
         if frame.type == C.DIFF:
             logs = (
                 (frame.data["data"].get("payload") or {})
@@ -340,6 +342,13 @@ class Bridge:
                 .get("gameLogState", {})
             )
             self.last_log_id = max([self.last_log_id, *(int(k) for k in logs)])
+            # The 64 comes in the same update as the discards it chose.
+            self.timer_discarded = any(
+                isinstance(entry, dict)
+                and (entry.get("text") or {}).get("type") == C.LOG_TIMER_DISCARDED
+                and entry["text"].get("playerColor") == self.live.conv.you
+                for entry in logs.values()
+            )
         if not self.live.apply(frame):
             return declines + self.check_timeout()
         if self.live.error:
@@ -530,6 +539,16 @@ class Bridge:
                 for a in mine
                 if a.action_type == ActionType.DISCARD_RESOURCE
             )
+            if sent != done and self.timer_discarded:
+                # The bot was too slow (it waits for an earlier seat's
+                # discard): colonist's timer chose its cards, and the game
+                # goes on from them.
+                return [
+                    self.status(
+                        "following",
+                        f"colonist's timer discarded {done} for the bot",
+                    )
+                ]
             if sent != done:
                 self.live.error = (
                     f"sent discards {sent}, but colonist recorded discards {done}"
