@@ -70,8 +70,9 @@ def live_game(folder, now):
 
 
 def record(folder, now):
-    """Wins and losses against people: today (Toronto) and in ranked, and the
-    last 10 results, oldest first ("WLW...")."""
+    """Ranked wins and losses against people: today (Toronto) and in all, and
+    the last 10 results, oldest first ("WLW..."). Casual games (a new
+    account's unlock games) aren't counted."""
     today = dt.datetime.fromtimestamp(now, TORONTO).date()
     counts = {"today": [0, 0], "ranked": [0, 0]}
     queue = None
@@ -88,10 +89,11 @@ def record(folder, now):
         queue = row.get("queue", queue)
         if row.get("own_bot") or not row.get("winner"):
             continue
+        if row.get("queue", "ranked") != "ranked":
+            continue
         lost = int(row["winner"] != row.get("bot_color"))
         recent = (recent + "WL"[lost])[-10:]
-        if row.get("queue", "ranked") == "ranked":
-            counts["ranked"][lost] += 1
+        counts["ranked"][lost] += 1
         if dt.datetime.fromtimestamp(row.get("at", 0), TORONTO).date() == today:
             counts["today"][lost] += 1
     counts = {k: {"wins": w, "losses": l} for k, (w, l) in counts.items()}

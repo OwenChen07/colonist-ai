@@ -46,8 +46,8 @@ def test_snapshot_reports_live_game_and_record(tmp_path):
     assert set(bots) == {"A", "B", "C"}
     assert bots["A"]["status"] == "playing" and bots["A"]["gameId"] == "city871"
     assert bots["A"]["ranked"] == {"wins": 1, "losses": 1}
-    assert bots["A"]["today"] == {"wins": 1, "losses": 1}
-    assert bots["A"]["recent"] == "WLL"
+    assert bots["A"]["today"] == {"wins": 1, "losses": 0}  # casual left out
+    assert bots["A"]["recent"] == "WL"
     assert bots["A"]["queue"] == "ranked" and bots["A"]["net"] == "g1 round 11"
     assert bots["B"]["status"] == "paused" and bots["B"]["gameId"] is None
     assert bots["C"]["status"] == "offline"

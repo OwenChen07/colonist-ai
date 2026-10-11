@@ -23,6 +23,8 @@ export default async function handler(request, response) {
     bots.sort((a, b) => a.name.localeCompare(b.name));
     const standing = await ranks(db, bots.map((b) => b.name));
     for (const bot of bots) bot.rank = standing[bot.name] ?? null;
+    // Highest Elo first; bots without a rating (placement games) last.
+    bots.sort((a, b) => (b.rank?.rating ?? -1) - (a.rank?.rating ?? -1));
     const updated = sources.map((s) => s.updatedAt).sort().pop() || null;
     // Every VM has a copy of the run's state: show the newest.
     const training = sources.map((s) => s.training).filter(Boolean)
