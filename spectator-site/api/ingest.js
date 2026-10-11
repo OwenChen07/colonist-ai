@@ -15,7 +15,9 @@ function record(value) { return exact(value, ['wins', 'losses']) && count(value.
 function nullOr(value, test) { return value === null || (typeof value === 'string' && test.test(value)); }
 
 function validBot(bot) {
-  return exact(bot, ['name', 'status', 'queue', 'net', 'gameId', 'today', 'ranked'])
+  const keys = ['name', 'status', 'queue', 'net', 'gameId', 'today', 'ranked'];
+  return (exact(bot, keys) || exact(bot, [...keys, 'recent']))
+    && (bot.recent === undefined || (typeof bot.recent === 'string' && /^[WL]{0,10}$/.test(bot.recent)))
     && typeof bot.name === 'string' && /^[A-Za-z0-9_]{1,32}$/.test(bot.name)
     && STATUSES.has(bot.status)
     && (bot.queue === null || ['ranked', 'casual'].includes(bot.queue))

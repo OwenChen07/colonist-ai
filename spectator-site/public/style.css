@@ -87,3 +87,24 @@ dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
 }
 .watch:hover { filter: brightness(1.08); }
 .watch.disabled { background: transparent; color: var(--muted); border: 1px dashed var(--line); font-weight: 500; }
+
+.rank { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.rank.muted { color: var(--muted); font-size: 0.9rem; }
+.tier { font-weight: 650; padding: 2px 8px; border-radius: 6px; font-size: 0.85rem; background: var(--line); }
+.tier.grandmaster { background: #fde2e2; color: #9f1239; }
+.tier.master { background: #ede4fb; color: #6b21a8; }
+.tier.diamond { background: #dbeefe; color: #1d4ed8; }
+.tier.platinum { background: #d9f4ef; color: #0f766e; }
+.tier.gold { background: #fdf0c8; color: #92400e; }
+.tier.silver { background: #e8eaee; color: #475569; }
+.tier.bronze { background: #f6e3d3; color: #9a3412; }
+.rating { font-size: 1.35rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.rating small { font-size: 0.8rem; font-weight: 500; color: var(--muted); }
+.global { font-size: 0.85rem; color: var(--muted); margin-left: auto; }
+
+.recent { display: flex; justify-content: space-between; align-items: center; font-size: 0.9rem; }
+.recent .label { color: var(--muted); }
+.dots { display: inline-flex; gap: 4px; }
+.result { width: 12px; height: 12px; border-radius: 50%; }
+.result.win { background: var(--live); }
+.result.loss { background: var(--bad); }

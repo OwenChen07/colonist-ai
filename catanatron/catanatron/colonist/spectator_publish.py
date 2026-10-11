@@ -70,10 +70,12 @@ def live_game(folder, now):
 
 
 def record(folder, now):
-    """Wins and losses against people: today (Toronto) and in ranked."""
+    """Wins and losses against people: today (Toronto) and in ranked, and the
+    last 10 results, oldest first ("WLW...")."""
     today = dt.datetime.fromtimestamp(now, TORONTO).date()
     counts = {"today": [0, 0], "ranked": [0, 0]}
     queue = None
+    recent = ""
     try:
         lines = (folder / "games.jsonl").read_text().splitlines()
     except OSError:
@@ -87,11 +89,13 @@ def record(folder, now):
         if row.get("own_bot") or not row.get("winner"):
             continue
         lost = int(row["winner"] != row.get("bot_color"))
+        recent = (recent + "WL"[lost])[-10:]
         if row.get("queue", "ranked") == "ranked":
             counts["ranked"][lost] += 1
         if dt.datetime.fromtimestamp(row.get("at", 0), TORONTO).date() == today:
             counts["today"][lost] += 1
-    return {k: {"wins": w, "losses": l} for k, (w, l) in counts.items()}, queue
+    counts = {k: {"wins": w, "losses": l} for k, (w, l) in counts.items()}
+    return {**counts, "recent": recent}, queue
 
 
 def bot_status(folder, name, now=None):

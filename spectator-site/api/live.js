@@ -1,4 +1,5 @@
 import { KEY, redis } from './_store.js';
+import { ranks } from './_rank.js';
 
 // A VM that hasn't posted for this long is shown as offline.
 const STALE_MS = 3 * 60 * 1000;
@@ -10,7 +11,8 @@ export default async function handler(request, response) {
   }
   response.setHeader('Cache-Control', 'no-store');
   try {
-    const sources = Object.values(await (await redis()).hGetAll(KEY))
+    const db = await redis();
+    const sources = Object.values(await db.hGetAll(KEY))
       .map((text) => { try { return JSON.parse(text); } catch { return null; } })
       .filter((s) => s && s.schema === 2);
     const now = Date.now();
@@ -19,6 +21,8 @@ export default async function handler(request, response) {
       return source.bots.map((bot) => (stale ? { ...bot, status: 'offline', gameId: null } : bot));
     });
     bots.sort((a, b) => a.name.localeCompare(b.name));
+    const standing = await ranks(db, bots.map((b) => b.name));
+    for (const bot of bots) bot.rank = standing[bot.name] ?? null;
     const updated = sources.map((s) => s.updatedAt).sort().pop() || null;
     return response.status(200).json({ schema: 2, updatedAt: updated, bots });
   } catch (error) {
