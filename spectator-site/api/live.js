@@ -1,13 +1,7 @@
-import { get, list } from '@vercel/blob';
+import { KEY, redis } from './_store.js';
 
 // A VM that hasn't posted for this long is shown as offline.
 const STALE_MS = 3 * 60 * 1000;
-
-async function readSource(pathname) {
-  const result = await get(pathname, { access: 'public', useCache: false });
-  if (!result || result.statusCode !== 200 || !result.stream) return null;
-  return JSON.parse(await new Response(result.stream).text());
-}
 
 export default async function handler(request, response) {
   if (request.method !== 'GET') {
@@ -16,8 +10,8 @@ export default async function handler(request, response) {
   }
   response.setHeader('Cache-Control', 'no-store');
   try {
-    const { blobs } = await list({ prefix: 'spectator/bots/' });
-    const sources = (await Promise.all(blobs.map((b) => readSource(b.pathname).catch(() => null))))
+    const sources = Object.values(await (await redis()).hGetAll(KEY))
+      .map((text) => { try { return JSON.parse(text); } catch { return null; } })
       .filter((s) => s && s.schema === 2);
     const now = Date.now();
     const bots = sources.flatMap((source) => {

@@ -1,5 +1,5 @@
 import { timingSafeEqual } from 'node:crypto';
-import { put } from '@vercel/blob';
+import { KEY, redis } from './_store.js';
 
 // Each bot VM posts its bots' status. Only these fields are accepted.
 const STATUSES = new Set(['playing', 'searching', 'paused', 'offline']);
@@ -50,15 +50,11 @@ export default async function handler(request, response) {
   const body = request.body;
   if (!validBody(body)) return response.status(400).json({ error: 'Invalid status' });
   try {
-    await put(`spectator/bots/${body.source}.json`, JSON.stringify(body), {
-      access: 'public',
-      allowOverwrite: true,
-      contentType: 'application/json',
-    });
+    await (await redis()).hSet(KEY, body.source, JSON.stringify(body));
     response.setHeader('Cache-Control', 'no-store');
     return response.status(200).json({ ok: true });
   } catch (error) {
-    console.error('spectator write failed', error?.name || 'unknown');
+    console.error('spectator write failed', error?.name || 'unknown', String(error?.message || '').slice(0, 200));
     return response.status(503).json({ error: 'Status could not be stored' });
   }
 }

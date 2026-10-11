@@ -4,9 +4,9 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "check": "node --check public/app.js && node --check api/live.js && node --check api/ingest.js"
+    "check": "node --check public/app.js && node --check api/live.js && node --check api/ingest.js && node --check api/_store.js"
   },
   "dependencies": {
-    "@vercel/blob": "^2.6.1"
+    "redis": "^6.3.0"
   }
 }
