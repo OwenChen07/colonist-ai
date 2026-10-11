@@ -5,6 +5,10 @@
 # nets) is mixed in, so training doesn't start from one round of its own.
 # Same self-play, gate and evaluation as train-sp1.sh; the gauntlet anchors
 # progress against the old line (sp1 round 16 and round 8).
+# From round 14, the bot's real games against people (human_dataset.py,
+# rebuilt weekly by human_dataset.sh) are mixed in as value targets only, at
+# their natural share (about 1% of positions); live value error is scored on
+# the held-out 15% of those games, which training never reads.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 init=()
@@ -15,7 +19,7 @@ exec .venv/bin/python -m catanatron.colonist.loop runs/g1 "${init[@]}" \
     --distribute-eval \
     --simulations 160 --full-rate 0.25 --fast-simulations 24 \
     --reference AB:2,F \
-    --extra-data $sp1/round_013/data,$sp1/round_014/data,$sp1/round_015/data,$sp1/round_016/data \
+    --extra-data $sp1/round_013/data,$sp1/round_014/data,$sp1/round_015/data,$sp1/round_016/data,data/human/train/value \
     --gauntlet $sp1/nets/round_016.npz,$sp1/nets/round_008.npz \
-    --live-data data/ranked/bot_value \
+    --live-data data/human/holdout/value \
     --workers "${COLONIST_LOCAL_WORKERS:-8}" --train-threads "${COLONIST_TRAIN_THREADS:-8}"

@@ -153,6 +153,19 @@ the code, simulated data, and model to it; no payload reached that VM.
    last resort, a hand rule (opening must reach all 5 resources or a port).
 The VM loop can be stopped and restarted with new flags at any time; it resumes.
 
+**Human games (from 2026-10-11, round 14 of `runs/g1`):** `human_dataset.py`
+builds `data/human` from every account's captures of games against people
+(846 games at first: 727 train, 119 held out by game id). `train.sh` mixes
+`data/human/train/value` into training as value-only rows (no policy target;
+about 1% of positions) and scores live value error on
+`data/human/holdout/value`, which training never reads (earlier rounds' live
+MSE was on `data/ranked/bot_value`, so the numbers aren't comparable across
+that switch). `scripts/vm/human_dataset.sh` (weekly cron) adds new games. The
+road diagnostic in `data/human/index.jsonl` confirms the problem above: the
+bot builds 1.97 roads before its third settlement against people's 1.37, and
+ends with 2.79 dead roads against 1.19. Next (step 2): an opponent model from
+`data/human/*/opponent`.
+
 ## 6. Running infrastructure (check before changing anything)
 
 **Extra bot accounts, from 10 Oct 2026:**

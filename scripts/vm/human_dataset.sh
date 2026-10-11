@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Weekly (cron on the coordinator): add new games against people to the
+# human-game training set, data/human (human_dataset.py; it skips captures it
+# has already indexed). train.sh reads data/human/train/value each round.
+set -euo pipefail
+cd "$(dirname "$0")/../.."
+exec nice -n 19 .venv/bin/python -m catanatron.colonist.human_dataset \
+    "captures/*/bridge-*.json" --games "data/*/games.jsonl" --out data/human \
+    --own-accounts CatBot77,Ericha8499,Dilly6283,Sherie3424 \
+    >> data/human/build.log 2>&1
