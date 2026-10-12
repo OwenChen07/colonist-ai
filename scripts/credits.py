@@ -21,7 +21,9 @@ OUT = Path(__file__).resolve().parent.parent / "data" / "credits.json"
 COORDINATOR = "owen@34.60.203.129"
 SSH_KEY = "~/.ssh/google_compute_engine"
 # Free credits each platform granted, in the currency its console shows.
-TOTALS = {"GCP": 425.0, "Azure": 100.0, "AWS": 200.0}
+# AWS's free plan grants $100 and up to $100 more for completed activities
+# (aws_total adds the ones earned).
+TOTALS = {"GCP": 425.0, "Azure": 100.0, "AWS": 100.0}
 CURRENCY = {"GCP": "CAD", "Azure": "USD", "AWS": "USD"}
 
 
@@ -81,6 +83,27 @@ def aws():
     return round(float(state["accountPlanRemainingCredits"]["amount"]), 2)
 
 
+def aws_total():
+    """$100, plus the credits of completed free-plan activities."""
+    activities = _run(
+        "aws",
+        "freetier",
+        "list-account-activities",
+        "--profile",
+        "colonist",
+        "--region",
+        "us-east-1",
+        "--output",
+        "json",
+    ).get("activities", [])
+    earned = sum(
+        float(a.get("reward", {}).get("credit", {}).get("amount", 0))
+        for a in activities
+        if a.get("status") == "COMPLETED"
+    )
+    return TOTALS["AWS"] + earned
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--gcp", type=float, help="GCP credits left (its console)")
@@ -102,6 +125,8 @@ def main(argv=None):
         elif read is not None:
             try:
                 row.update(remaining=read(), asOf=now)
+                if provider == "AWS":
+                    row["total"] = aws_total()
             except Exception as error:  # keep the last figure; say why
                 print(f"{provider}: kept the last figure ({error})")
         row["source"] = "console" if provider == "GCP" else "api"
