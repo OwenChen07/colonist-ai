@@ -614,7 +614,7 @@ def test_acknowledged_road_without_board_effect_retries_only_once():
     assert bridge.check_timeout()[-1]["state"] == "stopped"
 
 
-def test_page_reports_unsent_move_immediately():
+def test_page_reports_failed_send_immediately():
     bridge = Bridge(random_net(hidden=(8,)), 2, play=True, encode=_fake_encode)
     bridge.choose = _player_of_record("capture_full_game")
     bridge.reset()
@@ -629,12 +629,84 @@ def test_page_reports_unsent_move_immediately():
             "kind": "send-failed",
             "socket": 1,
             "sendId": send_id,
-            "reason": "game socket not open",
+            "reason": "game socket send failed",
         }
     )
     assert bridge.expect is None
     assert replies[-1]["state"] == "stopped"
-    assert "game socket not open" in replies[-1]["text"]
+    assert "game socket send failed" in replies[-1]["text"]
+
+
+def test_closed_socket_waits_for_reconnect_and_resends_on_new_socket():
+    # Ranked, 2026-10-12: the game socket closed just as a move was sent and
+    # colonist rejoined the game on a new socket, as the same player, 1.3 s
+    # later. Stopping at the failed send lost the game.
+    import base64
+
+    import msgpack
+
+    from catanatron.colonist.capture import decode
+
+    bridge = Bridge(random_net(hidden=(8,)), 2, play=True, encode=_fake_encode)
+    bridge.choose = _player_of_record("capture_full_game")
+    bridge.reset()
+    start = None
+    for message in _messages("capture_full_game"):
+        frame = decode({**message, "seq": 0, "socket": 1})
+        if frame.type == C.GAME_STATE and isinstance(
+            frame.data["data"].get("payload"), dict
+        ):
+            start = frame.data["data"]["payload"]
+        replies = bridge.handle({**message, "socket": 1})
+        if bridge.expect and bridge.expect[1][0]["type"] == "END_TURN":
+            break
+    assert start is not None and bridge.expect is not None
+    send_id = next(r["sendId"] for r in replies if r["kind"] == "send")
+    replies = bridge.handle(
+        {
+            "kind": "send-failed",
+            "socket": 1,
+            "sendId": send_id,
+            "reason": "game socket not open",
+        }
+    )
+    assert bridge.expect is not None and not bridge.live.error
+    assert replies[-1]["state"] == "following"
+    assert bridge.check_timeout() == []
+
+    snapshot = copy.deepcopy(start)
+    cur = snapshot["gameState"]["currentState"]
+    cur["completedTurns"] = bridge.live.conv.completed
+    cur["currentTurnPlayerColor"] = bridge.live.conv.current
+    snapshot["gameState"]["gameLogState"] = {}
+    b64 = base64.b64encode(
+        msgpack.packb({"id": "1", "data": {"type": 4, "payload": snapshot}})
+    ).decode()
+    replies = bridge.handle({"kind": "frame", "dir": "in", "socket": 2, "b64": b64})
+    assert [r["socket"] for r in replies if r["kind"] == "send"] == [2]
+    assert bridge.expect is not None and not bridge.live.error
+
+
+def test_closed_socket_without_reconnect_still_times_out():
+    bridge = Bridge(random_net(hidden=(8,)), 2, play=True, encode=_fake_encode)
+    bridge.choose = _player_of_record("capture_full_game")
+    bridge.reset()
+    for message in _messages("capture_full_game"):
+        replies = bridge.handle({**message, "socket": 1})
+        if bridge.expect:
+            break
+    send_id = next(r["sendId"] for r in replies if r["kind"] == "send")
+    bridge.handle(
+        {
+            "kind": "send-failed",
+            "socket": 1,
+            "sendId": send_id,
+            "reason": "game socket not open",
+        }
+    )
+    bridge.expect = (*bridge.expect[:2], time.time() - bridge.move_timeout - 1)
+    assert bridge.check_timeout()[-1]["state"] == "stopped"
+    assert bridge.expect is None
 
 
 def test_unacknowledged_browser_send_retries_once_with_same_id():

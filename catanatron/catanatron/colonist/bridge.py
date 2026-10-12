@@ -222,6 +222,18 @@ class Bridge:
             and self.expect is not None
             and message.get("sendId") in self.pending_sends
         ):
+            if message.get("reason") == "game socket not open":
+                # The game socket closed and no newer one is open yet: colonist
+                # reconnects within a second or two (seen live, ranked 2026-10-12:
+                # the new socket rejoined as the same player 1.3 s later). Wait
+                # for its snapshot, which resends the move once
+                # (retry_after_reconnect); without one, the move times out.
+                self.pending_sends.clear()
+                return [
+                    self.status(
+                        "following", "move not sent: waiting for colonist to reconnect"
+                    )
+                ]
             self.live.error = (
                 f"could not send move: {message.get('reason', 'unknown error')}"
             )
