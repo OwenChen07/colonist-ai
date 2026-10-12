@@ -187,6 +187,11 @@ ends with 2.79 dead roads against 1.19. Next (step 2): an opponent model from
   bot VM, through an SSH tunnel to port 6080 (noVNC). The owner signs in;
   never type passwords for them.
 
+**bot2 retired (12 Oct):** colonist showed Ericha8499's 1v1 Start buttons as
+"Unavailable" from 07:01Z with no notice (karma 20/20). Its settings moved to
+`scripts/vm/bot/accounts-retired/`; **bot5** (Petra4620, port 8766, 5 casual
+games then ranked) took its place on bot VM 1.
+
 **Bot VM 2** (AWS `c7i-flex.large` 3.18.220.56, tag Role=bot) has run since
 11 Oct: **bot3** (Dilly6283, port 8766) and **bot4** (Sherie3424, port 8767).
 `scripts/vm/bot.env` on the coordinator lists both bot VMs, and the sync,
