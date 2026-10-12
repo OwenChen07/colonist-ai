@@ -122,7 +122,9 @@ LOG_PIECE_NOTICE = {72, 87}  # before matching setup road / settlement placement
 #: votes, seen live in a ranked game), and a player starting a vote to
 #: disable karma (36, sent with a type 51 vote frame titled
 #: disableKarmaInitiator; it also needs every player's accept, seen live in a
-#: ranked game).
+#: ranked game), and a bare notice with no fields (128) logged alone right
+#: after a pause vote expired and colonist reset the client with paused false
+#: (seen live in a ranked game; it changes nothing).
 LOG_IGNORED = {
     0,
     2,
@@ -141,6 +143,7 @@ LOG_IGNORED = {
     68,
     118,
     124,
+    128,
     130,
     139,
     140,

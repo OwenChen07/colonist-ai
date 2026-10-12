@@ -316,6 +316,9 @@ def test_incomplete_conversion_fails_the_replay_check(frames):
         {"type": 124, "playerColor": 2},
         # a player starting a vote to disable karma (with a type 51 vote frame)
         {"type": 36, "playerColor": 6},
+        # a bare notice after a pause vote expired and colonist reset the
+        # client (paused false, alone in its update)
+        {"type": 128},
     ],
 )
 def test_timer_playing_for_a_player_is_skipped(frames, notice):
