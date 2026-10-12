@@ -211,6 +211,13 @@ def train_remote(args, argv, data, out, init, n):
         check=True,
         timeout=60,
     )
+    # A long job on the GPU (e.g. growing a bigger net) holds gpu.lock there:
+    # train here rather than share its memory.
+    busy = subprocess.run(
+        D._ssh(host, key, ["test", "-e", f"{root}/gpu.lock"]), timeout=60
+    )
+    if busy.returncode == 0:
+        raise RuntimeError("its GPU is busy (gpu.lock)")
     D._sync_code(host, key, root)
     for folder in sorted(set(data)) + [os.path.dirname(init), out]:
         subprocess.run(D._ssh(host, key, ["mkdir", "-p", remote(folder)]), check=True)

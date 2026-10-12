@@ -327,6 +327,8 @@ def test_the_gpu_host_gets_its_paths_and_settings(tmp_path, monkeypatch):
 
     def run(cmd, **kw):
         commands.append(cmd)
+        if "gpu.lock" in cmd[-1]:
+            return SimpleNamespace(returncode=1)  # not busy
         if "catanatron.colonist.train" in cmd[-1]:
             os.makedirs("runs/g/round_002/train", exist_ok=True)
             open("runs/g/round_002/train/net.npz", "w").close()
@@ -350,3 +352,21 @@ def test_the_gpu_host_gets_its_paths_and_settings(tmp_path, monkeypatch):
         "me@gpu:/home/me/repo/runs/g/round_002/train/",
         "runs/g/round_002/train/",
     )
+
+
+def test_a_busy_gpu_host_is_skipped(tmp_path, monkeypatch):
+    import subprocess
+
+    from catanatron.colonist import distributed as D
+    from catanatron.colonist import loop
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(D, "_sync_code", lambda *a: pytest.fail("synced"))
+    monkeypatch.setattr(
+        subprocess, "run", lambda cmd, **kw: SimpleNamespace(returncode=0)
+    )
+    args = SimpleNamespace(
+        train_host="me@gpu", train_device="cuda", train_max_positions=1
+    )
+    with pytest.raises(RuntimeError, match="busy"):
+        loop.train_remote(args, ["d", "--out", "o"], ["d"], "o", "b.npz", 1)
