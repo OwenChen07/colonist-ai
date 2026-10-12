@@ -319,6 +319,8 @@ def test_incomplete_conversion_fails_the_replay_check(frames):
         # a bare notice after a pause vote expired and colonist reset the
         # client (paused false, alone in its update)
         {"type": 128},
+        # a bare notice after a disable-karma vote expired
+        {"type": 34},
     ],
 )
 def test_timer_playing_for_a_player_is_skipped(frames, notice):

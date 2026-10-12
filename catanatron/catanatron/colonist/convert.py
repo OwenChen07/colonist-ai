@@ -124,13 +124,16 @@ LOG_PIECE_NOTICE = {72, 87}  # before matching setup road / settlement placement
 #: disableKarmaInitiator; it also needs every player's accept, seen live in a
 #: ranked game), and a bare notice with no fields (128) logged alone right
 #: after a pause vote expired and colonist reset the client with paused false
-#: (seen live in a ranked game; it changes nothing).
+#: (seen live in a ranked game; it changes nothing), and a bare notice with
+#: no fields (34) logged right after a disable-karma vote expired (seen live
+#: in a ranked game, in the same update as the next move; it changes nothing).
 LOG_IGNORED = {
     0,
     2,
     22,
     23,
     24,
+    34,
     36,
     44,
     47,
