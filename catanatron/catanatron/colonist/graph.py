@@ -316,6 +316,85 @@ def random_graph_net(hidden=32, glob=64, layers=3, seed=0):
     return GraphNet(params, hidden, glob, layers)
 
 
+def _segments(name, H, G):
+    """What a weight reads (its input's parts, in order) and writes, as kinds:
+    "H" (per-piece features), "G" (global features) or a fixed size."""
+    if name in ("tile_in", "node_in", "edge_in"):
+        return None, "H"
+    if name == "glob_in":
+        return None, "G"
+    if name.startswith("node") and name[4:].isdigit():
+        return ["H", "H", "H", "H", "G"], "H"
+    if name[:4] in ("edge", "tile") and name[4:].isdigit():
+        return ["H", "H", "G"], "H"
+    if name.startswith("glob") and name[4:].isdigit():
+        return ["G", "H", "H", "H"], "G"
+    return {
+        "node_out": (["H"], 2),
+        "edge_out": (["H"], 1),
+        "tile_out": (["H"], 2),
+        "glob_out": (["G"], NUM_OTHER),
+        "value1": (["G"], "G"),
+        "value2": (["G"], 1),
+    }[name]
+
+
+def widen(net, hidden, glob, layers, seed=0, new_layer_scale=1e-3):
+    """A bigger graph net that starts out computing what `net` computes
+    (Net2Net-style growth), so training continues from its strength instead
+    of from scratch.
+
+    Wider: every new feature gets fresh random inputs but zero weight in
+    everything the old features feed (the old net's computation is
+    unchanged); its own outgoing weights start at zero and learn. Deeper: an
+    extra round of message passing is residual (added to the features), with
+    weights `new_layer_scale` times the usual size, so it changes the outputs
+    only slightly (exactly zero would never learn: ReLU passes no gradient at
+    zero)."""
+    oh, og, ol = net.hidden_size, net.glob, net.layers
+    if hidden < oh or glob < og or layers < ol:
+        raise ValueError("widen only grows a net")
+    rng = np.random.default_rng(seed)
+    size = {"H": (oh, hidden), "G": (og, glob)}
+    params = {}
+    for name, (a, b) in shapes(hidden, glob, layers).items():
+        layer = name[4:]
+        fresh = layer.isdigit() and int(layer) >= ol
+        w = np.zeros((a, b), np.float32)
+        bias = np.zeros(b, np.float32)
+        he = (2 / a) ** 0.5
+        if fresh:
+            w[:] = rng.normal(0, he * new_layer_scale, (a, b))
+            params[name] = (w, bias)
+            continue
+        old_w, old_b = net.params[name]
+        ins, out = _segments(name, oh, og)
+        new_out = size[out][1] if out in size else out
+        old_out = size[out][0] if out in size else out
+        assert new_out == b
+        # Rows: where each old input part lands in the new input.
+        if ins is None:
+            rows_old = np.arange(old_w.shape[0])
+            rows_new = rows_old
+        else:
+            rows_old, rows_new, o, n = [], [], 0, 0
+            for part in ins:
+                po, pn = size[part]
+                rows_old.extend(range(o, o + po))
+                rows_new.extend(range(n, n + po))
+                o, n = o + po, n + pn
+            rows_old, rows_new = np.array(rows_old), np.array(rows_new)
+        w[np.ix_(rows_new, np.arange(old_out))] = old_w[
+            np.ix_(rows_old, np.arange(old_out))
+        ]
+        bias[:old_out] = old_b[:old_out]
+        if new_out > old_out:  # new features: random inputs from everything
+            w[:, old_out:] = rng.normal(0, he, (a, new_out - old_out))
+        params[name] = (w, bias)
+    meta = {k: v for k, v in net.meta.items()}
+    return GraphNet(params, hidden, glob, layers, meta)
+
+
 def torch_model(hidden=32, glob=64, layers=3):
     """The same network in PyTorch, for training (weights shaped (in, out),
     as forward() multiplies them)."""
@@ -344,3 +423,30 @@ def torch_model(hidden=32, glob=64, layers=3):
             return forward(self.params(), x, layers, xp=torch)
 
     return GraphModel()
+
+
+def main(argv=None):
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Grow a graph net (widen).")
+    parser.add_argument("net")
+    parser.add_argument("out")
+    parser.add_argument("--graph", required=True, help="new size: hidden,glob,layers")
+    parser.add_argument("--seed", type=int, default=0)
+    args = parser.parse_args(argv)
+    from catanatron.colonist.net import Net
+
+    old = Net.load(args.net)
+    hidden, glob, layers = (int(x) for x in args.graph.split(","))
+    widen(old, hidden, glob, layers, args.seed).save(args.out)
+    print(
+        f"{args.net} ({old.hidden_size},{old.glob},{old.layers}) -> {args.out} "
+        f"({hidden},{glob},{layers})"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+
+    sys.exit(main())

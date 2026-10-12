@@ -107,3 +107,61 @@ def test_train_a_graph_net_and_resume_from_it(tmp_path):
     again += ["--device", "cpu", "--data-device", "cpu", "--val-fraction", "0.5"]
     assert main(again) == 0
     assert isinstance(Net.load(str(tmp_path / "g2" / "net.npz")), G.GraphNet)
+
+
+def _trained_like_net(seed=3):
+    """A small graph net with non-zero biases (as a trained one has)."""
+    net = G.random_graph_net(8, 16, 2, seed=seed)
+    rng = np.random.default_rng(seed)
+    for name, (w, b) in net.params.items():
+        net.params[name] = (w, rng.normal(0, 0.1, b.shape).astype(np.float32))
+    return net
+
+
+def _rows(n=6, seed=0):
+    return np.random.default_rng(seed).random((n, E.INPUT_SIZE)).astype(np.float32)
+
+
+def test_a_widened_net_computes_the_same_moves_and_values():
+    net = _trained_like_net()
+    wide = G.widen(net, 16, 32, 2, seed=1)
+    x = _rows()
+    logits, values = G.forward(net.params, x, 2)
+    wide_logits, wide_values = G.forward(wide.params, x, 2)
+    np.testing.assert_allclose(wide_logits, logits, rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(wide_values, values, rtol=1e-5, atol=1e-6)
+    # Its new features are live (random inputs), but nothing reads them yet.
+    assert np.abs(wide.params["node0"][0][:, 8:]).sum() > 0
+
+
+def test_a_deeper_net_starts_close_and_can_learn(tmp_path):
+    torch = pytest.importorskip("torch")
+    net = _trained_like_net()
+    deep = G.widen(net, 16, 32, 3, seed=1)
+    x = _rows()
+    logits, values = G.forward(net.params, x, 2)
+    deep_logits, deep_values = G.forward(deep.params, x, 3)
+    assert np.abs(deep_logits - logits).max() < 0.05
+    assert np.abs(deep_values - values).max() < 0.01
+
+    # Through the training model, every new weight gets a gradient.
+    from catanatron.colonist.train import load_weights
+
+    path = tmp_path / "deep.npz"
+    deep.save(str(path))
+    model = G.torch_model(16, 32, 3)
+    load_weights(model, str(path))
+    out_logits, out_values = model(torch.from_numpy(x))
+    (out_logits.logsumexp(1).sum() + out_values.sum()).backward()
+    for name in ("node2", "glob2", "node_out", "value2"):
+        assert model.w[name].grad.abs().sum() > 0, name
+
+
+def test_widen_from_the_command_line(tmp_path):
+    src, out = tmp_path / "small.npz", tmp_path / "big.npz"
+    _trained_like_net().save(str(src))
+    assert G.main([str(src), str(out), "--graph", "16,32,3"]) == 0
+    big = Net.load(str(out))
+    assert (big.hidden_size, big.glob, big.layers) == (16, 32, 3)
+    with pytest.raises(ValueError):
+        G.widen(big, 8, 32, 3)
