@@ -165,9 +165,78 @@ def train(run, n, args):
         argv += ["--device", args.device]
     if args.train_sample:
         argv += ["--sample", str(args.train_sample)]
+    if args.train_host:
+        try:
+            train_remote(args, argv, data, run.dir(n, "train"), run.best, n)
+            shutil.copyfile(run.dir(n, "train", "net.npz"), run.net(n))
+            return
+        except Exception as error:
+            say(f"round {n}: training on {args.train_host} failed ({error}); here")
     if T.main(argv) != 0:
         raise SystemExit("training failed")
     shutil.copyfile(run.dir(n, "train", "net.npz"), run.net(n))
+
+
+def train_remote(args, argv, data, out, init, n):
+    """The training step on a GPU machine (--train-host, a self-play worker's
+    setup: same paths under COLONIST_WORKER_ROOT): copy the code, the data
+    folders and the starting net there, train with CUDA, copy the result
+    back. A loaded subset (--train-max-positions) keeps it within the
+    machine's memory. Any failure raises, and training happens here."""
+    import subprocess
+
+    from catanatron.colonist import distributed as D
+
+    key, root = D._settings()
+    host = args.train_host
+
+    def remote(path):
+        rel = os.path.relpath(path)
+        if rel.startswith(".."):
+            raise ValueError(f"{path} is outside this checkout")
+        return f"{root}/{rel}"
+
+    subprocess.run(
+        [
+            "ssh",
+            "-i",
+            key,
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=15",
+            host,
+            "true",
+        ],
+        check=True,
+        timeout=60,
+    )
+    D._sync_code(host, key, root)
+    for folder in sorted(set(data)) + [os.path.dirname(init), out]:
+        subprocess.run(D._ssh(host, key, ["mkdir", "-p", remote(folder)]), check=True)
+    for folder in sorted(set(data)):
+        D._rsync(key, f"{folder}/", f"{host}:{remote(folder)}/")
+    D._rsync(key, init, f"{host}:{remote(init)}")
+    command = [
+        f"{root}/.venv/bin/python",
+        "-m",
+        "catanatron.colonist.train",
+        *[remote(a) if a in data or a in (out, init) else a for a in argv],
+        "--device",
+        args.train_device,
+        "--data-device",
+        "cpu",
+        "--max-positions",
+        str(args.train_max_positions),
+        "--seed",
+        str(n),
+    ]
+    say(f"round {n}: training on {host} ({args.train_device})")
+    inner = f"cd {D._command([root])} && {D._command(command)}"
+    subprocess.run(D._ssh(host, key, ["bash", "-c", inner]), check=True)
+    D._rsync(key, f"{host}:{remote(out)}/", f"{out}/")
+    if not os.path.exists(os.path.join(out, "net.npz")):
+        raise RuntimeError("no net.npz came back")
 
 
 def _round_setup_scale(run, n):
@@ -427,6 +496,19 @@ def main(argv=None):
         type=int,
         default=0,
         help="positions drawn per epoch from the window (default: all of them)",
+    )
+    parser.add_argument(
+        "--train-host",
+        default=os.environ.get("COLONIST_TRAIN_HOST", ""),
+        help="user@host with a GPU to run the training step on (a self-play "
+        "worker's setup); training falls back to here if it fails",
+    )
+    parser.add_argument("--train-device", default="cuda")
+    parser.add_argument(
+        "--train-max-positions",
+        type=int,
+        default=4_000_000,
+        help="positions --train-host loads (its memory limit)",
     )
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--device", default=None)

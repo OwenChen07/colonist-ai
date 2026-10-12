@@ -2,6 +2,7 @@
 
 import csv
 import json
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -263,3 +264,89 @@ def test_a_net_below_the_minimum_score_is_kept(tiny_args, monkeypatch):
     assert loop.main(loose + ["--rounds", "1"]) == 0
     state = json.loads((run / "state.json").read_text())
     assert not state["history"][0]["promoted"] and state["best_round"] == 0
+
+
+def test_a_shard_subset_stays_near_the_position_limit(tmp_path):
+    import numpy as np
+
+    from catanatron.colonist.train import select_shards
+
+    paths = []
+    for i in range(10):
+        path = tmp_path / f"shard_{i}.npz"
+        np.savez(path, game=np.zeros(100, np.int32))
+        paths.append(str(path))
+    chosen = select_shards(paths, 350, seed=1)
+    assert len(chosen) == 4 and set(chosen) <= set(paths)  # 400 >= 350
+    assert select_shards(paths, 350, seed=1) == chosen  # the seed decides
+    assert len(select_shards(paths + paths[:1], 10_000)) == 11  # a repeat counts
+
+
+def test_training_on_a_gpu_host_and_falling_back_here(tiny_args, monkeypatch):
+    pytest.importorskip("torch")
+    import shutil
+
+    from catanatron.colonist import loop
+    from catanatron.colonist import train as T
+
+    run, args, init = tiny_args
+    monkeypatch.setattr(evaluate, "sprt", lambda *a, **k: _fake_result("keep", 0.4))
+    monkeypatch.setattr(evaluate, "match", lambda *a, **k: _fake_result(None, 0.6))
+    local = []
+    real = T.main
+    monkeypatch.setattr(T, "main", lambda argv: local.append(argv) or real(argv))
+
+    # The GPU host trains: its net comes back and nothing trains here.
+    def remote(a, argv, data, out, init_net, n):
+        os.makedirs(out, exist_ok=True)
+        shutil.copyfile(init_net, os.path.join(out, "net.npz"))
+
+    monkeypatch.setattr(loop, "train_remote", remote)
+    extra = ["--train-host", "me@gpu", "--init", init, "--rounds", "1"]
+    assert loop.main(args + extra) == 0
+    assert not local and (run / "nets" / "round_001.npz").exists()
+
+    # It's unreachable: this machine trains instead.
+    def down(*a):
+        raise OSError("no route to host")
+
+    monkeypatch.setattr(loop, "train_remote", down)
+    assert loop.main(args + ["--train-host", "me@gpu", "--rounds", "2"]) == 0
+    assert local and (run / "nets" / "round_002.npz").exists()
+
+
+def test_the_gpu_host_gets_its_paths_and_settings(tmp_path, monkeypatch):
+    from catanatron.colonist import distributed as D
+    from catanatron.colonist import loop
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("COLONIST_WORKER_ROOT", "/home/me/repo")
+    commands, copies = [], []
+    monkeypatch.setattr(D, "_sync_code", lambda *a: None)
+    monkeypatch.setattr(D, "_rsync", lambda key, src, dst: copies.append((src, dst)))
+
+    def run(cmd, **kw):
+        commands.append(cmd)
+        if "catanatron.colonist.train" in cmd[-1]:
+            os.makedirs("runs/g/round_002/train", exist_ok=True)
+            open("runs/g/round_002/train/net.npz", "w").close()
+
+    import subprocess
+
+    monkeypatch.setattr(subprocess, "run", run)
+    args = SimpleNamespace(
+        train_host="me@gpu", train_device="cuda", train_max_positions=4_000_000
+    )
+    data = ["runs/g/round_001/data", "data/human", "data/human"]
+    argv = [*data, "--out", "runs/g/round_002/train", "--init", "runs/g/best.npz"]
+    loop.train_remote(args, argv, data, "runs/g/round_002/train", "runs/g/best.npz", 2)
+    train = commands[-1][-1]
+    assert "/home/me/repo/data/human /home/me/repo/data/human" in train
+    assert "--out /home/me/repo/runs/g/round_002/train" in train
+    assert "--device cuda --data-device cpu --max-positions 4000000" in train
+    assert ("data/human/", "me@gpu:/home/me/repo/data/human/") in copies
+    assert copies.count(("data/human/", "me@gpu:/home/me/repo/data/human/")) == 1
+    assert copies[-1] == (
+        "me@gpu:/home/me/repo/runs/g/round_002/train/",
+        "runs/g/round_002/train/",
+    )

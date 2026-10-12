@@ -25,6 +25,7 @@ import csv
 import glob
 import math
 import os
+import random
 import sys
 import time
 
@@ -133,6 +134,24 @@ def split_by_game(seeds, val_fraction):
     """True for validation games, chosen by seed so the split never changes."""
     h = (seeds * 2654435761) % 1000
     return h < val_fraction * 1000
+
+
+def select_shards(paths, max_positions, seed=0):
+    """A random subset of shard files holding at most about `max_positions`
+    positions (rounded up to a whole shard), for a machine whose memory can't
+    hold every position. Each epoch draws only --sample of them anyway. A
+    path listed twice (a folder given twice, to weigh it more) can be picked
+    twice."""
+    order = list(paths)
+    random.Random(seed).shuffle(order)
+    chosen, total = [], 0
+    for path in order:
+        if total >= max_positions:
+            break
+        with np.load(path) as shard:
+            total += len(shard["game"])
+        chosen.append(path)
+    return sorted(chosen)
 
 
 def load_split(paths, val_fraction, value_mix=0.0):
@@ -409,6 +428,13 @@ def main(argv=None):
         default="32,64,3",
         help="graph net size: per-piece features, global features, rounds",
     )
+    parser.add_argument(
+        "--max-positions",
+        type=int,
+        default=0,
+        help="load a random subset of the shards with about this many positions "
+        "(default: all), when memory can't hold them all",
+    )
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args(argv)
 
@@ -422,6 +448,8 @@ def main(argv=None):
     if not paths:
         print("no shards found", file=sys.stderr)
         return 1
+    if args.max_positions:
+        paths = select_shards(paths, args.max_positions, args.seed)
     static, train_split, val_split, games = load_split(
         paths, args.val_fraction, args.value_mix
     )
