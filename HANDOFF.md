@@ -156,8 +156,9 @@ The VM loop can be stopped and restarted with new flags at any time; it resumes.
 **Human games (from 2026-10-11, round 14 of `runs/g1`):** `human_dataset.py`
 builds `data/human` from every account's captures of games against people
 (846 games at first: 727 train, 119 held out by game id). `train.sh` mixes
-`data/human/train/value` into training as value-only rows (no policy target;
-about 1% of positions) and scores live value error on
+`data/human/train/value` into training as value-only rows (no policy target),
+at their natural share (~0.3%) in round 14 and repeated 10x (`HUMAN_REPEAT`,
+~3%) from round 15 and scores live value error on
 `data/human/holdout/value`, which training never reads (earlier rounds' live
 MSE was on `data/ranked/bot_value`, so the numbers aren't comparable across
 that switch). `scripts/vm/human_dataset.sh` (weekly cron) adds new games. The
