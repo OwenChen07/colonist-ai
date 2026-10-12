@@ -234,6 +234,7 @@ def train_remote(args, argv, data, out, init, n):
     say(f"round {n}: training on {host} ({args.train_device})")
     inner = f"cd {D._command([root])} && {D._command(command)}"
     subprocess.run(D._ssh(host, key, ["bash", "-c", inner]), check=True)
+    os.makedirs(out, exist_ok=True)
     D._rsync(key, f"{host}:{remote(out)}/", f"{out}/")
     if not os.path.exists(os.path.join(out, "net.npz")):
         raise RuntimeError("no net.npz came back")
