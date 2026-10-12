@@ -126,7 +126,10 @@ LOG_PIECE_NOTICE = {72, 87}  # before matching setup road / settlement placement
 #: after a pause vote expired and colonist reset the client with paused false
 #: (seen live in a ranked game; it changes nothing), and a bare notice with
 #: no fields (34) logged right after a disable-karma vote expired (seen live
-#: in a ranked game, in the same update as the next move; it changes nothing).
+#: in a ranked game, in the same update as the next move; it changes nothing),
+#: and a bare notice with no fields (131) logged alone after the game-over
+#: frame (45), when a disable-karma vote had closed as the game ended (seen
+#: live in a ranked game; it changes nothing).
 LOG_IGNORED = {
     0,
     2,
@@ -148,6 +151,7 @@ LOG_IGNORED = {
     124,
     128,
     130,
+    131,
     139,
     140,
 }

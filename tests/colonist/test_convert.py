@@ -321,6 +321,9 @@ def test_incomplete_conversion_fails_the_replay_check(frames):
         {"type": 128},
         # a bare notice after a disable-karma vote expired
         {"type": 34},
+        # a bare notice after the game ended, while a disable-karma vote was
+        # still open (the vote closed and the end-game frame 45 came first)
+        {"type": 131},
     ],
 )
 def test_timer_playing_for_a_player_is_skipped(frames, notice):
