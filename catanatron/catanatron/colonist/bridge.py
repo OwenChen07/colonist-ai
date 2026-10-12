@@ -65,6 +65,43 @@ from catanatron.serialization import action_from_json
 
 HOST, PORT = "127.0.0.1", 8765
 ROOM_JOINED = 1  # message type when joining a game room: carries its serverId
+# Thinking time (bridge.think): colonist's timer gives each decision a
+# deadline. Keep this much of it in reserve (messages, colonist's handling),
+# and spend at most a share of the rest, up to a cap in seconds, with the
+# simulations capped too. Seen live: an opening settlement gets 60 s, its
+# road 15 s, the roll 3 s (8 s holding a card playable before it), the turn's
+# actions 30 s from the roll plus 5 s for every build, buy or trade, a robber
+# move 15 s and a 7's discards 20 s.
+TIME_RESERVE = 2.5
+# prompt: (share of the time left, cap in seconds, simulations cap as a
+# multiple of --simulations; at 2400: 20000, 4000, 800, 4800).
+BUDGETS = {
+    "BUILD_INITIAL_SETTLEMENT": (0.4, 20.0, 25 / 3),
+    "BUILD_INITIAL_ROAD": (0.4, 5.0, 5 / 3),
+    "ROLL": (0.33, 1.0, 1 / 3),
+    "PLAY_TURN": (0.3, 5.0, 2.0),
+    "MOVE_ROBBER": (0.4, 5.0, 2.0),
+    "DISCARD": (0.4, 5.0, 2.0),
+}
+
+
+def think_budget(game, remaining, simulations):
+    """(seconds or None, simulation cap) for the player to move, given the
+    seconds left before colonist's timer acts (None: unknown, so a plain
+    `simulations` search)."""
+    from catanatron.state_functions import player_has_rolled
+
+    state = game.state
+    prompt = state.current_prompt.value
+    if prompt == "PLAY_TURN" and not player_has_rolled(state, state.current_color()):
+        prompt = "ROLL"
+    share, cap, scale = BUDGETS.get(prompt, BUDGETS["PLAY_TURN"])
+    if remaining is None:
+        return None, simulations
+    seconds = max(0.05, min(cap, share * (remaining - TIME_RESERVE)))
+    return seconds, max(1, round(simulations * scale))
+
+
 # Seconds before colonist's timer acts to send a discard planned early (its
 # timer fired 0.3-0.8 s after the deadline in captures).
 EARLY_DISCARD_MARGIN = 3.0
@@ -143,6 +180,9 @@ class Bridge:
         # When colonist's timer acts on the current decision (local clock),
         # from its currentState's startTime and allocatedTime.
         self.deadline = None
+        self.timer_start = self.timer_allocated = None
+        self.budget = (None, None)  # (seconds, simulations) for choose()
+        self.searched = 0  # simulations the last decision ran
         # The bot's discard for a 7, planned while the earlier seat (the
         # opponent) still had to discard first: {turn, plan, seconds, sent}.
         self.early_discard = None
@@ -163,6 +203,7 @@ class Bridge:
         self.sent_raws = []
         self.pending_sends = {}
         self.deadline = self.early_discard = None
+        self.timer_start = self.timer_allocated = None
         return [self.status("waiting", "waiting for a game to start")]
 
     @staticmethod
@@ -659,12 +700,21 @@ class Bridge:
         if not isinstance(current, dict):
             return
         start, allocated = current.get("startTime"), current.get("allocatedTime")
-        if not isinstance(start, (int, float)) or not isinstance(
-            allocated, (int, float)
-        ):
-            return
-        lag = max(0.0, (t - start) / 1000) if t else 0.0
-        self.deadline = time.time() + allocated - lag
+        if isinstance(start, (int, float)):
+            # colonist's clock in ours: now, less how long ago it started.
+            lag = max(0.0, (t - start) / 1000) if t else 0.0
+            self.timer_start = time.time() - lag
+        if isinstance(allocated, (int, float)):
+            # A build, buy or trade adds 5 s to the turn: the allowance grows
+            # with no new start time.
+            self.timer_allocated = allocated
+        if self.timer_start is not None and self.timer_allocated is not None:
+            self.deadline = self.timer_start + self.timer_allocated
+
+    def time_left(self):
+        """Seconds before colonist's timer acts on the current decision, or
+        None before any timer has been seen."""
+        return None if self.deadline is None else self.deadline - time.time()
 
     def waiting_to_discard(self):
         """The bot must discard for a 7, but the simulator wants the earlier
@@ -703,6 +753,7 @@ class Bridge:
             g.execute(actions[int(np.argmax(priors))], validate_action=False)
         if not g.state.is_discarding or g.state.current_color() != live.bot:
             return []
+        self.budget = think_budget(g, self.time_left(), self.simulations)
         plan = [live.describe(a) for a in self.plan_discards(g)]
         seconds = time.time() - start
         self.early_discard = {
@@ -788,6 +839,8 @@ class Bridge:
         self.sent_raws = []
         start = time.time()
         game = live.game
+        self.budget = think_budget(game, self.time_left(), self.simulations)
+        self.searched = 0
         early = (
             self.use_early_discard() if game.state.is_discarding and self.play else None
         )
@@ -820,6 +873,7 @@ class Bridge:
             "options": options,
             "win_chance": round((value + 1) / 2, 3),
             "ms": int((time.time() - start) * 1000),
+            "simulations": self.searched,
             "played": played,
         }
         return [move] + replies
@@ -894,8 +948,12 @@ class Bridge:
             )
         from catanatron.colonist.mcts import Search
 
-        search = Search(self.net, self.simulations, rng=self.rng, noise=False)
-        action, root = search.run(game)
+        seconds, simulations = self.budget
+        search = Search(
+            self.net, simulations or self.simulations, rng=self.rng, noise=False
+        )
+        action, root = search.run(game, time_limit=seconds)
+        self.searched += search.used
         _, value = search.root_targets(root)
         # Show moves by the share of simulations they got: the search's
         # finalists, the move it plays among them.
@@ -907,10 +965,15 @@ class Bridge:
         return move, [(root.actions[i], float(share[i])) for i in order], value
 
     def plan_discards(self, game):
-        """All of the bot's discards for this 7, chosen one by one on a copy."""
+        """All of the bot's discards for this 7, chosen one by one on a copy;
+        a time budget is shared between the cards."""
         g = game.copy()
         color = g.state.current_color()
         plan = []
+        seconds, simulations = self.budget
+        count = g.state.discard_counts[g.state.color_to_index[color]]
+        if seconds is not None and count > 1:
+            self.budget = (seconds / count, simulations)
         while (
             g.state.is_discarding
             and g.state.current_color() == color
@@ -919,6 +982,7 @@ class Bridge:
             move, _, _ = self.choose(g)
             plan.append(move)
             g.execute(move, validate_action=False)
+        self.budget = (seconds, simulations)
         return plan
 
 
@@ -974,7 +1038,8 @@ async def serve_forever(make_bridge, host=HOST, port=PORT, info=None):
                 if reply["kind"] == "move":
                     print(
                         f"  move: {reply['move']['label']} "
-                        f"(win chance {reply['win_chance']:.0%}, {reply['ms']} ms)",
+                        f"(win chance {reply['win_chance']:.0%}, {reply['ms']} ms, "
+                        f"{reply.get('simulations', 0)} sims)",
                         flush=True,
                     )
                 elif reply["kind"] == "status":

@@ -29,6 +29,7 @@ alternate, since a Catan turn is many moves by one player.
 
 import math
 import random
+import time
 from dataclasses import dataclass
 
 import numpy as np
@@ -331,9 +332,13 @@ class Search:
             if isinstance(n, Decision):
                 n.W[k] += value if n.color == root_color else -value
 
-    def run(self, game):
+    def run(self, game, time_limit=None):
         """Search `game` (not modified) for its player to move. Returns
-        (chosen action, root node)."""
+        (chosen action, root node). With `time_limit` (seconds), the search
+        stops early when the time is up and picks the best candidate so far
+        (at least one round of visits always runs); `simulations` stays the
+        cap. self.used is the number of simulations it ran."""
+        self.stop_at = None if time_limit is None else time.monotonic() + time_limit
         steps = self.steps(game)
         try:
             pending = next(steps)
@@ -377,6 +382,8 @@ class Search:
         sims = self.simulations
         phases = max(1, math.ceil(math.log2(m))) if m > 1 else 0
         used = 0
+        stop_at = getattr(self, "stop_at", None)
+        out_of_time = False
         for phase in range(phases):
             per = max(1, (sims - used) // ((phases - phase) * len(candidates)))
             for _ in range(per):
@@ -387,11 +394,17 @@ class Search:
                 for path, leaf in walks:
                     self.backup(path, leaf, root.color)
                 used += len(candidates)
+                if stop_at is not None and time.monotonic() >= stop_at:
+                    out_of_time = True
+                    break
+            if out_of_time:
+                break
             if phase < phases - 1:
                 q = self.completed_q(root)
                 score = gumbel + root.logits + self.sigma(root, q)
                 candidates.sort(key=lambda a: -score[a])
                 candidates = candidates[: max(2, len(candidates) // 2)]
+        self.used = used
         q = self.completed_q(root)
         score = gumbel + root.logits + self.sigma(root, q)
         best = max(candidates, key=lambda a: score[a])

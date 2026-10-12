@@ -1124,3 +1124,89 @@ def test_late_opponent_discard_uses_the_plan_only_without_time(left, searched):
     assert bool(calls) == searched
     if not searched:
         assert move["plan"] == planned
+
+
+def test_colonists_timer_is_tracked_with_its_extensions():
+    bridge = Bridge(random_net(hidden=(8,)), 2)
+    now_ms = time.time() * 1000
+    # The turn's actions: 30 s from the roll, 4 s ago.
+    bridge.note_deadline({"startTime": now_ms - 4000, "allocatedTime": 30}, now_ms)
+    assert 25 < bridge.time_left() <= 26.1
+    # A build adds 5 s to the allowance, without a new start time.
+    bridge.note_deadline({"allocatedTime": 35}, now_ms)
+    assert 30 < bridge.time_left() <= 31.1
+    # A robber move starts a fresh 15 s.
+    bridge.note_deadline({"startTime": now_ms, "allocatedTime": 15}, now_ms)
+    assert 14 < bridge.time_left() <= 15.1
+    bridge.reset()
+    assert bridge.time_left() is None
+
+
+def _position(prompt):
+    from catanatron.game import Game
+    from catanatron.models.enums import ActionPrompt
+    from catanatron.models.player import Color, RandomPlayer
+
+    game = Game([RandomPlayer(Color.RED), RandomPlayer(Color.BLUE)], seed=5)
+    if prompt != "BUILD_INITIAL_SETTLEMENT":
+        while game.state.is_initial_build_phase:
+            game.play_tick()
+    if prompt == "AFTER_ROLL":
+        game.play_tick()  # the roll
+        while game.state.current_prompt != ActionPrompt.PLAY_TURN:
+            game.play_tick()  # a 7's discards and robber, if any
+    return game
+
+
+def test_each_decision_gets_its_share_of_the_time():
+    from catanatron.colonist.bridge import think_budget
+
+    setup = _position("BUILD_INITIAL_SETTLEMENT")
+    assert think_budget(setup, 57.5, 2400) == (20.0, 20000)  # 40% of 55 s, capped
+    assert think_budget(setup, 12.5, 2400) == (4.0, 20000)  # 40% of what's left
+    roll = _position("ROLL")
+    assert think_budget(roll, 3.0, 2400) == (0.165, 800)  # 3 s to roll
+    turn = _position("AFTER_ROLL")
+    seconds, sims = think_budget(turn, 30.0, 2400)
+    assert (seconds, sims) == (5.0, 4800)
+    assert think_budget(turn, 6.0, 2400)[0] == 0.3 * 3.5  # late in the turn
+    assert think_budget(turn, 1.0, 2400)[0] == 0.05  # the floor
+    assert think_budget(turn, None, 2400) == (None, 2400)  # no timer seen
+    assert think_budget(setup, 57.5, 2)[1] == 17  # caps scale with --simulations
+
+
+def test_a_search_stops_when_its_time_is_up():
+    from catanatron.colonist.mcts import Search
+
+    game = _position("BUILD_INITIAL_SETTLEMENT")
+    search = Search(random_net(hidden=(8,)), 100000, noise=False)
+    start = time.monotonic()
+    action, _ = search.run(game, time_limit=0.3)
+    assert time.monotonic() - start < 3
+    assert action in game.playable_actions and 0 < search.used < 100000
+    search.run(game)  # no limit: the full budget
+    assert search.used >= 99000
+
+
+def test_a_discards_budget_is_shared_between_its_cards():
+    bridge = _discard_race(deadline_in=20)
+    seen = []
+    real = bridge.choose
+
+    def choose(game):
+        seen.append(bridge.budget)
+        return real(game)
+
+    bridge.choose = choose
+    bridge.budget = (4.0, 10)
+    game = _bot_to_discard(bridge)
+    count = game.state.discard_counts[game.state.color_to_index[bridge.live.bot]]
+    plan = bridge.plan_discards(game)
+    assert count > 1 and len(plan) == count
+    assert all(b == (4.0 / count, 10) for b in seen)
+    assert bridge.budget == (4.0, 10)  # restored
+
+
+def _bot_to_discard(bridge):
+    _opponent_discards(bridge)
+    return bridge.live.game
