@@ -711,7 +711,7 @@ class Bridge:
             "seconds": seconds,
             "sent": False,
         }
-        cards = ", ".join(m["resource"] for m in plan)
+        cards = ", ".join(m["label"].removeprefix("discard ") for m in plan)
         return [
             self.status(
                 "following",

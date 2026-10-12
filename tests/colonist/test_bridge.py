@@ -1044,10 +1044,12 @@ def _discard_race(deadline_in):
     opponent = game.state.current_color()
     bot = next(c for c in game.state.colors if c != opponent)
 
-    def describe(action):
+    from catanatron.colonist.live import RESOURCE_ID
+
+    def describe(action):  # as LiveGame.describe: colonist's resource ids
         return {
             "type": action.action_type.value,
-            "resource": action.value,
+            "resource": RESOURCE_ID[action.value],
             "label": f"discard {action.value}",
         }
 
