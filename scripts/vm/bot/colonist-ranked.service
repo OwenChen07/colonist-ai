@@ -16,7 +16,7 @@ EnvironmentFile=-/home/ubuntu/colonist-ai/scripts/vm/bot/own_accounts.env
 ExecStart=/home/ubuntu/colonist-ai/.venv/bin/python -m catanatron.colonist.ranked_runner \
     --net /home/ubuntu/colonist-ai/models/ranked/model.npz \
     --promotions /home/ubuntu/colonist-ai/runs/g1 \
-    --games 0 --simulations 800 --viewport 960x540 --max-fps 5
+    --games 0 --simulations 2400 --viewport 960x540 --max-fps 5
 StandardOutput=append:/home/ubuntu/colonist-ai/data/ranked/ranked-run.log
 StandardError=append:/home/ubuntu/colonist-ai/data/ranked/ranked-run.log
 Restart=always
