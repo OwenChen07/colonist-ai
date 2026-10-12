@@ -293,6 +293,26 @@ def net_records(data, names, run="runs/g1"):
     ][-30:]
 
 
+def credits(data):
+    """The cloud credits left (scripts/credits.py on the owner's Mac, passed
+    here by sync_bot.sh), or None."""
+    doc = _read_json(Path(data) / "credits.json")
+    if not isinstance(doc, dict) or not isinstance(doc.get("credits"), list):
+        return None
+    rows = []
+    for row in doc["credits"][:6]:
+        rows.append(
+            {
+                "provider": str(row.get("provider", ""))[:12],
+                "remaining": _number(row.get("remaining")),
+                "total": _number(row.get("total")),
+                "asOf": row.get("asOf") if isinstance(row.get("asOf"), str) else None,
+                "source": "console" if row.get("source") == "console" else "api",
+            }
+        )
+    return rows
+
+
 def snapshot(data, names, source, now=None, run="runs/g1"):
     bots = []
     for folder in sorted(Path(data).iterdir()):
@@ -307,6 +327,7 @@ def snapshot(data, names, source, now=None, run="runs/g1"):
         "bots": bots,
         "training": training(run),
         "netRecords": net_records(data, names, run),
+        "credits": credits(data),
     }
 
 

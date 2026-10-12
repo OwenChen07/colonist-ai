@@ -139,6 +139,23 @@ function renderTraining(training, records) {
   document.getElementById('rounds').replaceChildren(...rows);
 }
 
+function renderCredits(rows) {
+  const box = document.getElementById('credits');
+  if (!rows || !rows.length) { box.hidden = true; return; }
+  box.hidden = false;
+  document.getElementById('creditCards').replaceChildren(...rows.map((c) => {
+    const known = c.remaining != null && c.total;
+    const share = known ? Math.max(0, Math.min(1, c.remaining / c.total)) : 0;
+    const level = share < 0.2 ? 'low' : share < 0.5 ? 'mid' : 'ok';
+    const asOf = c.asOf ? new Date(c.asOf).toLocaleDateString('en-CA', { timeZone: 'America/Toronto', month: 'short', day: 'numeric' }) : null;
+    return el('div', { class: 'credit' },
+      el('div', { class: 'credit-top' }, el('strong', {}, c.provider),
+        el('span', {}, known ? `$${c.remaining.toFixed(2)} of $${c.total.toFixed(0)}` : 'not read yet')),
+      el('div', { class: 'bar' }, el('span', { class: `fill ${level}`, style: `width: ${(100 * share).toFixed(1)}%` })),
+      el('small', {}, asOf ? `as of ${asOf}` : (c.provider === 'GCP' ? 'from the console' : 'needs a sign-in')));
+  }));
+}
+
 async function refresh() {
   const box = document.getElementById('bots');
   try {
@@ -146,6 +163,7 @@ async function refresh() {
     const data = await response.json();
     if (!response.ok || !Array.isArray(data.bots)) throw new Error('bad response');
     renderTraining(data.training, data.netRecords);
+    renderCredits(data.credits);
     box.replaceChildren(...(data.bots.length ? data.bots.map(card) : [el('p', { class: 'empty' }, 'No bots reporting yet.')]));
     document.getElementById('updated').textContent = data.updatedAt
       ? `Updated ${new Date(data.updatedAt).toLocaleTimeString('en-CA', { timeZone: 'America/Toronto', hour: 'numeric', minute: '2-digit' })} Toronto time`

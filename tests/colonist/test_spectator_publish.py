@@ -199,3 +199,39 @@ def test_round_progress_from_the_training_log():
     assert round_progress(LOG, 13, now=early)["selfplay"]["started"].startswith(
         "2026-10-11T18:31"
     )
+
+
+def test_credits_are_published_when_present(tmp_path):
+    assert snapshot(tmp_path, {}, "vm1")["credits"] is None
+    (tmp_path / "credits.json").write_text(
+        json.dumps(
+            {
+                "credits": [
+                    {
+                        "provider": "Azure",
+                        "remaining": 74.314,
+                        "total": 100.0,
+                        "asOf": "2026-10-12T00:53:09+00:00",
+                        "source": "api",
+                        "extra": "x",
+                    },
+                    {
+                        "provider": "GCP",
+                        "remaining": None,
+                        "total": 300,
+                        "asOf": None,
+                        "source": "console",
+                    },
+                ]
+            }
+        )
+    )
+    azure, gcp = snapshot(tmp_path, {}, "vm1")["credits"]
+    assert azure == {
+        "provider": "Azure",
+        "remaining": 74.314,
+        "total": 100.0,
+        "asOf": "2026-10-12T00:53:09+00:00",
+        "source": "api",
+    }
+    assert gcp["remaining"] is None and gcp["source"] == "console"

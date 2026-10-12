@@ -67,10 +67,22 @@ function validNetRecords(rows) {
     exact(row, ['round', 'wins', 'losses']) && count(row.round) && count(row.wins) && count(row.losses));
 }
 
+function money(value) { return value === null || (typeof value === 'number' && value >= 0 && value < 1e5); }
+
+function validCredits(rows) {
+  return rows === null || (Array.isArray(rows) && rows.length <= 6 && rows.every((row) =>
+    exact(row, ['provider', 'remaining', 'total', 'asOf', 'source'])
+    && typeof row.provider === 'string' && /^[A-Za-z]{1,12}$/.test(row.provider)
+    && money(row.remaining) && money(row.total) && (row.asOf === null || iso(row.asOf))
+    && ['api', 'console'].includes(row.source)));
+}
+
 export function validBody(body) {
   const base = ['schema', 'source', 'updatedAt', 'bots'];
-  return (exact(body, base) || (exact(body, [...base, 'training', 'netRecords'])
-      && validTraining(body.training) && validNetRecords(body.netRecords)))
+  const full = [...base, 'training', 'netRecords'];
+  return (exact(body, base)
+      || ((exact(body, full) || (exact(body, [...full, 'credits']) && validCredits(body.credits)))
+        && validTraining(body.training) && validNetRecords(body.netRecords)))
     && body.schema === 2
     && typeof body.source === 'string' && /^[a-z0-9-]{1,32}$/.test(body.source)
     && typeof body.updatedAt === 'string' && !Number.isNaN(Date.parse(body.updatedAt))
