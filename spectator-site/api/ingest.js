@@ -71,7 +71,9 @@ function money(value) { return value === null || (typeof value === 'number' && v
 
 function validCredits(rows) {
   return rows === null || (Array.isArray(rows) && rows.length <= 6 && rows.every((row) =>
-    exact(row, ['provider', 'remaining', 'total', 'asOf', 'source'])
+    (exact(row, ['provider', 'remaining', 'total', 'asOf', 'source'])
+      || (exact(row, ['provider', 'remaining', 'total', 'asOf', 'source', 'currency'])
+        && ['USD', 'CAD'].includes(row.currency)))
     && typeof row.provider === 'string' && /^[A-Za-z]{1,12}$/.test(row.provider)
     && money(row.remaining) && money(row.total) && (row.asOf === null || iso(row.asOf))
     && ['api', 'console'].includes(row.source)));

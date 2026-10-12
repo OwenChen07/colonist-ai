@@ -145,12 +145,13 @@ function renderCredits(rows) {
   box.hidden = false;
   document.getElementById('creditCards').replaceChildren(...rows.map((c) => {
     const known = c.remaining != null && c.total;
+    const sign = c.currency === 'CAD' ? 'CA$' : 'US$';
     const share = known ? Math.max(0, Math.min(1, c.remaining / c.total)) : 0;
     const level = share < 0.2 ? 'low' : share < 0.5 ? 'mid' : 'ok';
     const asOf = c.asOf ? new Date(c.asOf).toLocaleDateString('en-CA', { timeZone: 'America/Toronto', month: 'short', day: 'numeric' }) : null;
     return el('div', { class: 'credit' },
       el('div', { class: 'credit-top' }, el('strong', {}, c.provider),
-        el('span', {}, known ? `$${c.remaining.toFixed(2)} of $${c.total.toFixed(0)}` : 'not read yet')),
+        el('span', {}, known ? `${sign}${c.remaining.toFixed(2)} of ${sign}${c.total.toFixed(0)}` : 'not read yet')),
       el('div', { class: 'bar' }, el('span', { class: `fill ${level}`, style: `width: ${(100 * share).toFixed(1)}%` })),
       el('small', {}, asOf ? `as of ${asOf}` : (c.provider === 'GCP' ? 'from the console' : 'needs a sign-in')));
   }));

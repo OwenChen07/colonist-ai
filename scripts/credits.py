@@ -20,8 +20,9 @@ from pathlib import Path
 OUT = Path(__file__).resolve().parent.parent / "data" / "credits.json"
 COORDINATOR = "owen@34.60.203.129"
 SSH_KEY = "~/.ssh/google_compute_engine"
-# Free credits each platform granted (USD).
-TOTALS = {"GCP": 300.0, "Azure": 100.0, "AWS": 200.0}
+# Free credits each platform granted, in the currency its console shows.
+TOTALS = {"GCP": 425.0, "Azure": 100.0, "AWS": 200.0}
+CURRENCY = {"GCP": "CAD", "Azure": "USD", "AWS": "USD"}
 
 
 def _run(*command):
@@ -95,7 +96,7 @@ def main(argv=None):
         row = previous.get(
             provider, {"provider": provider, "remaining": None, "asOf": None}
         )
-        row = {**row, "total": TOTALS[provider]}
+        row = {**row, "total": TOTALS[provider], "currency": CURRENCY[provider]}
         if provider == "GCP" and args.gcp is not None:
             row.update(remaining=round(args.gcp, 2), asOf=now)
         elif read is not None:
@@ -109,7 +110,10 @@ def main(argv=None):
     OUT.write_text(json.dumps({"updatedAt": now, "credits": rows}, indent=2))
     for row in rows:
         left = "unknown" if row["remaining"] is None else f"${row['remaining']:.2f}"
-        print(f"{row['provider']}: {left} of ${row['total']:.0f} (as of {row['asOf']})")
+        print(
+            f"{row['provider']}: {left} of ${row['total']:.0f} {row['currency']}"
+            f" (as of {row['asOf']})"
+        )
     if args.push:
         subprocess.run(
             [

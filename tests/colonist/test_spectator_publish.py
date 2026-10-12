@@ -218,9 +218,10 @@ def test_credits_are_published_when_present(tmp_path):
                     {
                         "provider": "GCP",
                         "remaining": None,
-                        "total": 300,
+                        "total": 425,
                         "asOf": None,
                         "source": "console",
+                        "currency": "CAD",
                     },
                 ]
             }
@@ -233,5 +234,7 @@ def test_credits_are_published_when_present(tmp_path):
         "total": 100.0,
         "asOf": "2026-10-12T00:53:09+00:00",
         "source": "api",
+        "currency": "USD",
     }
     assert gcp["remaining"] is None and gcp["source"] == "console"
+    assert gcp["currency"] == "CAD"

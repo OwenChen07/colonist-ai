@@ -308,6 +308,7 @@ def credits(data):
                 "total": _number(row.get("total")),
                 "asOf": row.get("asOf") if isinstance(row.get("asOf"), str) else None,
                 "source": "console" if row.get("source") == "console" else "api",
+                "currency": "CAD" if row.get("currency") == "CAD" else "USD",
             }
         )
     return rows
