@@ -59,7 +59,7 @@ if [ "$agent" = claude ]; then
   timeout 3300 claude -p "$prompt" --permission-mode dontAsk --allowedTools "${allowed[@]}" \
     > "$log" 2>&1
   code=$?
-  if grep -qiE "usage limit|limit reached|rate limit|out of (credits|usage)" "$log" \
+  if grep -qiE "usage limit|weekly limit|limit reached|rate limit|out of (credits|usage)" "$log" \
      && command -v codex >/dev/null; then
     echo "$(date -u +%FT%TZ) claude hit its limit; running codex" >> "$D/health.log"
     agent=codex
