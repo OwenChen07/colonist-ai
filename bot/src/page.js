@@ -57,6 +57,7 @@
   // is replaced, so the rest of the message is byte-for-byte unchanged.
   const SEQ_KEY = [0xa8, 0x73, 0x65, 0x71, 0x75, 0x65, 0x6e, 0x63, 0x65];
   let lastSequence = null;
+  let lastClientSequence = null;  // the client's own last number, before renumbering
 
   function findSequence(b) {
     outer: for (let i = 3; i + SEQ_KEY.length < b.length; i++) {
@@ -80,15 +81,23 @@
   }
 
   /** The game message with the next sequence number (or unchanged if it isn't
-   * one). A client message numbered well below the count means the client
-   * started counting again (a new game): follow it. */
+   * one). A client message numbered below the client's own previous one means
+   * the client started counting again (a new game): follow it. The client's
+   * number trails the count by every bot message, so comparing it with the
+   * count instead reset the count mid-game whenever the client sent between
+   * the bot's moves; colonist then resynced the game (bot6, 13 Oct). */
   function renumber(bytes, fromClient) {
     const b = new Uint8Array(bytes);
     if (b.length < 3 || b[0] !== 3 || b[1] !== 1) return bytes;
     const found = findSequence(b);
     if (!found) return bytes;
     const [at, width, value] = found;
-    if (fromClient && lastSequence !== null && value < lastSequence - 1) lastSequence = value - 1;
+    if (fromClient) {
+      if (lastSequence !== null && lastClientSequence !== null && value < lastClientSequence) {
+        lastSequence = value - 1;
+      }
+      lastClientSequence = value;
+    }
     const next = lastSequence === null ? value : lastSequence + 1;
     lastSequence = next;
     if (next === value) return bytes;
@@ -190,6 +199,7 @@
       sendMove(e.data.socket, e.data.b64, e.data.sendId);
     } else if (e.data[TAG] === 'new-game') {
       lastSequence = null;  // the client counts game messages afresh per game
+      lastClientSequence = null;
     }
   });
 

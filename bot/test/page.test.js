@@ -105,6 +105,21 @@ const frame = Uint8Array.from([0x82, 0xa2, 0x69, 0x64, 0xa3, 0x31, 0x33, 0x30]);
   assert.deepStrictEqual(game.sent.map(seqOf), [2, 3, 4, 5], 'bot and client never share a number');
   assert.strictEqual(game.sent[2][13], 9, 'the bot message itself is unchanged apart from its number');
 
+  // The client sends between the bot's moves (bot6's client, every turn): its
+  // number trails the count by every bot message, which is not a new game.
+  fromPage({ [TAG]: 'new-game' });
+  game.sent.length = 0;
+  const botMove = () => fromPage({ [TAG]: 'send', socket: 3, b64: Buffer.from(gameMsg(11, 0)).toString('base64') });
+  game.send(gameMsg(62, 2));
+  botMove();
+  game.send(gameMsg(62, 3));
+  botMove();
+  botMove();
+  game.send(gameMsg(62, 4));
+  botMove();
+  game.send(gameMsg(62, 5));
+  assert.deepStrictEqual(game.sent.map(seqOf), [2, 3, 4, 5, 6, 7, 8, 9], 'a trailing client never reuses a number');
+
   // Crossing 127 -> 128 changes the number's width; the message stays valid.
   fromPage({ [TAG]: 'new-game' });
   game.sent.length = 0;
