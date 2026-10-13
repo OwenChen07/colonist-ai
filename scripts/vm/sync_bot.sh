@@ -15,7 +15,9 @@ R=colonist-ai
 exec 9>/tmp/sync_bot.lock
 flock -n 9 || exit 0
 # The current round's progress for the spectator site: the training log's end.
-tail -n 600 runs/train.log > runs/g1/.train-tail.log 2>/dev/null \
+# Keep the entire current round, including any later fallback allocation.
+# Six hundred lines could drop that marker and make progress exceed 100%.
+tail -n 3000 runs/train.log > runs/g1/.train-tail.log 2>/dev/null \
   && mv runs/g1/.train-tail.log runs/g1/train-tail.log
 # Every bot VM: COLONIST_BOT_HOSTS (space-separated), or the one ranked host.
 for B in ${COLONIST_BOT_HOSTS:-$COLONIST_BOT_HOST}; do

@@ -230,6 +230,27 @@ def test_round_progress_counts_local_fallback_games():
     assert progress["localDone"] == 1836
 
 
+def test_round_progress_counts_unprepared_remote_range():
+    lines = """[16:22:12] round 28: self-play, 3500 games
+[16:22:14]   self-play: 448 games (seeds 3028000832+) on worker-a
+[16:22:33]   self-play: 448 games (seeds 3028001280+) on worker-b
+[16:22:51]   self-play: 192 games (seeds 3028001728+) on worker-c
+[16:22:59]   self-play: 192 games (seeds 3028001920+) on worker-d
+[16:23:06]   self-play: 192 games (seeds 3028002112+) on worker-e
+[16:23:12]   self-play: 192 games (seeds 3028002304+) on worker-f
+[16:25:25]   could not prepare worker-g; its range runs here
+[16:25:25]   self-play: 832 games here
+[16:25:25]   13 shards to play
+[17:09:02]   shard_3028000768_64.npz: 64 games in 1360 s | 832 games, 0.32/s
+[17:09:15]   16 shards to play
+[17:55:15]   shard_3028003264_64.npz: 64 games in 1416 s | 1004 games, 0.36/s
+""".splitlines()
+    now = dt.datetime(2026, 10, 13, 18, 0, tzinfo=dt.timezone.utc).timestamp()
+    progress = round_progress(lines, 28, now=now)["selfplay"]
+    assert progress["localTotal"] == 1836
+    assert progress["localDone"] == 1836
+
+
 def test_credits_are_published_when_present(tmp_path):
     assert snapshot(tmp_path, {}, "vm1")["credits"] is None
     (tmp_path / "credits.json").write_text(

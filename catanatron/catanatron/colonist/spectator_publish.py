@@ -163,12 +163,16 @@ def round_progress(lines, number, epochs=3, now=None):
     progress = {"selfplay": None, "training": None, "match": None}
     stamp = None
     previous_local_done = 0
+    remote_assigned = 0
+    unprepared_remote = False
     for line in lines[first:]:
         if "] round " in line and head not in line:
             break  # the next round
         stamp = _when(line, now) or stamp
         if head + "self-play" in line:
             total = re.search(r"self-play, (\d+) games", line)
+            remote_assigned = 0
+            unprepared_remote = False
             progress["selfplay"] = {
                 "started": stamp.isoformat(),
                 "games": int(total.group(1)) if total else None,
@@ -176,13 +180,30 @@ def round_progress(lines, number, epochs=3, now=None):
                 "localDone": 0,
                 "localTotal": None,
             }
+        elif progress["selfplay"] and "self-play:" in line and " on " in line:
+            remote = re.search(r"self-play: (\d+) games .* on \S+", line)
+            if remote:
+                remote_assigned += int(remote.group(1))
+        elif (
+            progress["selfplay"]
+            and "could not prepare" in line
+            and "range runs here" in line
+        ):
+            unprepared_remote = True
         elif progress["selfplay"] and "additional games here" in line:
             extra = re.search(r"(\d+) additional games here", line)
             previous_local_done = progress["selfplay"]["localDone"]
             progress["selfplay"]["localTotal"] += int(extra.group(1))
         elif progress["selfplay"] and "games here" in line:
             here = re.search(r"(\d+) games here", line)
-            progress["selfplay"]["localTotal"] = int(here.group(1))
+            total = progress["selfplay"]["games"]
+            progress["selfplay"]["localTotal"] = (
+                total - remote_assigned
+                if unprepared_remote and total is not None
+                else int(here.group(1))
+            )
+        elif progress["selfplay"] and "shards to play" in line:
+            previous_local_done = progress["selfplay"]["localDone"]
         elif progress["selfplay"] and LOCAL_SHARD.search(line):
             progress["selfplay"]["localDone"] = previous_local_done + int(
                 LOCAL_SHARD.search(line).group(1)

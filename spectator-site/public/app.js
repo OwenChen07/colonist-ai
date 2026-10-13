@@ -115,12 +115,17 @@ function steps(training) {
     if (m) {
       out.push(['done', 'Training', `${t.total} epochs${quality}`]);
     } else {
-      const spent = t.epochs.reduce((a, e) => a + e.seconds, 0);
-      const each = done ? spent / done : 2800;
-      const eta = Date.parse(t.started) + 1000 * (spent + (t.total - done) * each);
-      out.push(['now', 'Training', `epoch ${done} of ${t.total} done${quality} · done about ${clock(eta)}`]);
+      // CPU and GPU epochs differ by more than tenfold. Wait for a measured
+      // epoch before showing an estimate, especially after a device switch.
+      let estimate = 'estimating after the first epoch';
+      if (done) {
+        const each = t.epochs.reduce((a, e) => a + e.seconds, 0) / done;
+        const eta = Date.parse(t.started) + 1000 * t.total * each;
+        estimate = eta > now ? `done about ${clock(eta)}` : 'finishing; awaiting update';
+      }
+      out.push(['now', 'Training', `epoch ${done} of ${t.total} done${quality} · ${estimate}`]);
     }
-  } else out.push(['next', 'Training', '3 epochs, about 2 h 20 min']);
+  } else out.push(['next', 'Training', '3 epochs; estimate after the first epoch']);
   if (m) {
     const score = m.score != null ? `${(100 * m.score).toFixed(1)}% ± ${(100 * m.margin).toFixed(1)}% after ${m.games.toLocaleString('en-CA')} games` : 'starting';
     out.push(['now', 'Promotion match', `vs round ${training.bestRound}: ${score} (must be clearly better, about 52%, to be promoted; at most ${(m.maxGames || 2000).toLocaleString('en-CA')} games)`]);
