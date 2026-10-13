@@ -36,11 +36,27 @@ people better than the main net does; then play with it:
 
 (or OPPONENT_MODEL and OPPONENT_MIX in the bot's environment file, read by
 ranked_runner.py).
+
+Keep it current as games arrive (human_dataset.sh runs this before every
+training round, in the background):
+
+    python -m catanatron.colonist.opponent_model refresh \
+        data/human/train/opponent --holdout data/human/holdout/opponent \
+        --init runs/g1/best.npz --model models/human/net.npz
+
+trains a fresh model from the current best net on all the people's moves so
+far, scores it and the model in use on the same held-out moves, and replaces
+the model only if the new one predicts them at least as well (cross-entropy
+within --tolerance). The verdict goes to models/human/refresh.json. The
+bots' runners reload a replaced model between games.
 """
 
 import argparse
+import datetime as dt
 import glob
+import json
 import os
+import shutil
 import sys
 
 import numpy as np
@@ -160,6 +176,42 @@ def report(scores):
     return "\n".join(lines)
 
 
+def refresh(data, holdout, init, model, tolerance=0.005, extra=()):
+    """Train a new model and replace `model` with it unless it predicts the
+    held-out moves worse. Returns the verdict (also saved next to `model`)."""
+    from catanatron.colonist.net import Net
+
+    folder = os.path.dirname(os.path.abspath(model))
+    work = os.path.join(folder, "next")
+    shutil.rmtree(work, ignore_errors=True)  # fresh, not resumed
+    if train(data, init, work, extra):
+        raise RuntimeError("training the opponent model failed")
+    candidate = os.path.join(work, "net.npz")
+    paths = shard_paths(holdout)
+    if not paths:
+        raise ValueError("no held-out opponent shards")
+    nets = {"new": Net.load(candidate)}
+    if os.path.exists(model):
+        nets["current"] = Net.load(model)
+    scores = score(paths, nets)
+    new = scores["new"]["cross_entropy"]
+    current = scores.get("current", {}).get("cross_entropy")
+    replace = current is None or new <= current + tolerance
+    if replace:
+        tmp = model + ".tmp.npz"
+        shutil.copyfile(candidate, tmp)
+        os.replace(tmp, model)  # the bots' sync never sees half a file
+    verdict = {
+        "at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+        "init": init,
+        "replaced": replace,
+        "scores": {k: v for k, v in scores.items() if k != "uniform"},
+    }
+    with open(os.path.join(folder, "refresh.json"), "w") as stream:
+        json.dump(verdict, stream, indent=2)
+    return verdict
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -176,6 +228,12 @@ def main(argv=None):
         default="",
         help="comma-separated mixture weights to score too (needs --model)",
     )
+    r = sub.add_parser("refresh", help="retrain; replace the model if not worse")
+    r.add_argument("data", nargs="+", help="opponent shard directories")
+    r.add_argument("--holdout", nargs="+", required=True)
+    r.add_argument("--init", required=True, help="the main net to start from")
+    r.add_argument("--model", required=True, help="the model in use")
+    r.add_argument("--tolerance", type=float, default=0.005)
     argv = list(sys.argv[1:] if argv is None else argv)
     extra = []
     if "--" in argv:
@@ -184,6 +242,21 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.command == "train":
         return train(args.data, args.init, args.out, extra)
+    if args.command == "refresh":
+        verdict = refresh(
+            args.data, args.holdout, args.init, args.model, args.tolerance, extra
+        )
+        new = verdict["scores"]["new"]
+        print(
+            f"{'replaced' if verdict['replaced'] else 'kept'} {args.model}: new "
+            f"top-1 {new['accuracy']:.1%}, cross-entropy {new['cross_entropy']:.3f}"
+            + (
+                f" (in use: {verdict['scores']['current']['cross_entropy']:.3f})"
+                if "current" in verdict["scores"]
+                else ""
+            )
+        )
+        return 0
 
     from catanatron.colonist.net import Net
 

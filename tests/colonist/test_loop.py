@@ -402,3 +402,21 @@ def test_strict_gate_promotes_only_through_the_guardrails(tiny_args, monkeypatch
     assert state["best_round"] == 0 and state["anchor"]["round"] == 0
     anchor_games = [p for p in played if "anchor" in p[1]]
     assert [g for _, _, g in anchor_games] == [4, 4]  # the best once, then round 1
+
+
+def test_the_before_round_command_runs_and_a_failure_is_not_fatal(
+    tiny_args, monkeypatch
+):
+    pytest.importorskip("torch")
+    from catanatron.colonist import loop
+
+    run, args, init = tiny_args
+    monkeypatch.setattr(evaluate, "sprt", lambda *a, **k: _fake_result(None, 0.5))
+    monkeypatch.setattr(evaluate, "match", lambda *a, **k: _fake_result(None, 0.6))
+    marker = run.parent / "refreshed"
+    hook = ["--before-round", f"touch {marker}"]
+    assert loop.main(args + hook + ["--init", init, "--rounds", "1"]) == 0
+    assert marker.exists()
+    failing = ["--before-round", "exit 3"]
+    assert loop.main(args + failing + ["--rounds", "2"]) == 0  # played on
+    assert json.loads((run / "state.json").read_text())["round"] == 3

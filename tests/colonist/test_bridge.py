@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from catanatron.colonist import convert as C
-from catanatron.colonist.bridge import Bridge, serve_forever
+from catanatron.colonist.bridge import MAX_RECONNECT_RETRIES, Bridge, serve_forever
 from catanatron.colonist.capture import load
 from catanatron.colonist.live import LiveGame
 from catanatron.colonist.net import random_net
@@ -504,7 +504,7 @@ def test_timeout_names_what_colonist_sent_instead():
     assert "message types: 999" in replies[-1]["text"]
 
 
-def test_reconnect_retries_unconfirmed_end_turn_on_new_socket_once():
+def test_reconnect_retries_unconfirmed_end_turn_up_to_the_limit():
     import base64
 
     import msgpack
@@ -541,7 +541,13 @@ def test_reconnect_retries_unconfirmed_end_turn_on_new_socket_once():
     replies = bridge.handle(reconnect)
     assert [r["socket"] for r in replies if r["kind"] == "send"] == [2]
     assert bridge.expect is not None and bridge.retry_count == 1
-    replies = bridge.handle({**reconnect, "socket": 3})
+    # A reconnect storm (a new account's session): each snapshot that shows
+    # the move didn't land gets one more resend, up to the limit.
+    for socket in range(3, 2 + MAX_RECONNECT_RETRIES):
+        replies = bridge.handle({**reconnect, "socket": socket})
+        assert [r["socket"] for r in replies if r["kind"] == "send"] == [socket]
+    assert bridge.retry_count == MAX_RECONNECT_RETRIES
+    replies = bridge.handle({**reconnect, "socket": 99})
     assert not [r for r in replies if r["kind"] == "send"]
     assert any(r["kind"] == "status" and r["state"] == "stopped" for r in replies)
 
@@ -1210,3 +1216,65 @@ def test_a_discards_budget_is_shared_between_its_cards():
 def _bot_to_discard(bridge):
     _opponent_discards(bridge)
     return bridge.live.game
+
+
+def test_a_game_first_seen_mid_setup_is_followed_from_its_log():
+    """The page first saw a game after the opening placements began (seen
+    live: Sherie3424, during a reconnect loop). Its snapshot has the whole
+    log, so the bridge starts from an empty board, catches up, and then
+    follows the game exactly as a bridge that saw it from the start."""
+    import base64
+
+    import msgpack
+
+    from catanatron.colonist.bridge import setup_start
+    from catanatron.colonist.capture import decode
+
+    messages = list(_messages("capture_full_game"))
+    start, at = None, None
+    snapshot = None
+    for i, message in enumerate(messages):
+        frame = decode({**message, "seq": 0, "socket": 1})
+        if frame.dir != "in":
+            continue
+        if frame.type == C.GAME_STATE and isinstance(
+            frame.data["data"].get("payload"), dict
+        ):
+            start = frame.data["data"]["payload"]
+            snapshot = copy.deepcopy(start)
+        elif frame.type == C.DIFF and snapshot is not None:
+            diff = frame.data["data"]["payload"].get("diff", {})
+            state = snapshot["gameState"]
+            for part in ("tileCornerStates", "tileEdgeStates"):
+                for k, v in (diff.get("mapState") or {}).get(part, {}).items():
+                    state["mapState"][part].setdefault(k, {}).update(v)
+            state["gameLogState"].update(diff.get("gameLogState") or {})
+            state["currentState"].update(diff.get("currentState") or {})
+            owned = [
+                c
+                for c in state["mapState"]["tileCornerStates"].values()
+                if c.get("owner")
+            ]
+            if len(owned) == 2:  # one settlement each: mid-setup
+                at = i
+                break
+    assert at is not None and setup_start(snapshot) is not None
+    later = copy.deepcopy(snapshot)
+    later["gameState"]["currentState"]["completedTurns"] = 99
+    assert setup_start(later) is None  # past the opening: not recoverable
+
+    seen_all = Bridge(random_net(hidden=(8,)), 2)
+    seen_all.reset()
+    for message in messages:
+        seen_all.handle(message)
+    b64 = base64.b64encode(
+        msgpack.packb({"id": "1", "data": {"type": 4, "payload": snapshot}})
+    ).decode()
+    late = Bridge(random_net(hidden=(8,)), 2)
+    late.reset()
+    replies = late.handle({"kind": "frame", "dir": "in", "b64": b64, "t": 0})
+    assert not any(r.get("state") == "stopped" for r in replies), replies
+    for message in messages[at + 1 :]:
+        late.handle(message)
+    assert late.live.error is None
+    assert late.live.record["log"] == seen_all.live.record["log"]

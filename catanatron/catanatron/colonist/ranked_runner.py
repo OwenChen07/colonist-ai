@@ -115,6 +115,17 @@ def bridge_env():
     return {**os.environ, **ONE_THREAD}
 
 
+def opponent_stamp(model, mix):
+    """When the opponent model file last changed, or None when it's off: a
+    new stamp between games restarts the bridge with the retrained model."""
+    if not opponent_args(model, mix):
+        return None
+    try:
+        return os.stat(model).st_mtime_ns
+    except OSError:
+        return None
+
+
 def opponent_args(model, mix):
     """The bridge's opponent-model flags: none unless both a model and a
     positive mix are set, so the default bridge command is unchanged."""
@@ -477,6 +488,7 @@ async def _run(args):
     games_completed = 0
     deadline = time.monotonic() + args.hours * 3600 if args.hours else None
     promotion_round = None
+    opponent_model_stamp = opponent_stamp(args.opponent_model, args.opponent_mix)
     label = Path(args.net).name if args.net else None
     async with async_playwright() as playwright:
         if not args.login_only and not args.inspect:
@@ -678,31 +690,39 @@ async def _run(args):
                 )
                 if args.games == 0 or game + 1 < args.games:
                     await page.goto(URL)
-                    if args.promotions:
-                        new_round, source = promoted_checkpoint(args.promotions)
-                        # A rollback to an earlier round counts too.
+                    new_round, source = (
+                        promoted_checkpoint(args.promotions)
+                        if args.promotions
+                        else (promotion_round, None)
+                    )
+                    stamp = opponent_stamp(args.opponent_model, args.opponent_mix)
+                    # A rollback to an earlier round counts too; so does a
+                    # retrained opponent model (opponent_model.py refresh).
+                    if new_round != promotion_round or stamp != opponent_model_stamp:
+                        opponent_model_stamp = stamp
+                        process.terminate()
+                        await process.wait()
+                        log.close()
+                        process = log = None
                         if new_round != promotion_round:
-                            process.terminate()
-                            await process.wait()
-                            log.close()
-                            process = log = None
                             install_promoted_model(source, args.net)
                             label = round_label(args.promotions, new_round)
-                            process, log = await _bridge(
-                                args.net,
-                                args.simulations,
-                                captures,
-                                data / "bridge.log",
-                                data / "spectator-state.json",
-                                label,
-                                opponent_args(args.opponent_model, args.opponent_mix),
-                            )
-                            promotion_round = new_round
-                            print(
-                                f"switched to promoted training round {new_round} "
-                                "between games",
-                                flush=True,
-                            )
+                        process, log = await _bridge(
+                            args.net,
+                            args.simulations,
+                            captures,
+                            data / "bridge.log",
+                            data / "spectator-state.json",
+                            label,
+                            opponent_args(args.opponent_model, args.opponent_mix),
+                        )
+                        changed = (
+                            f"promoted training round {new_round}"
+                            if new_round != promotion_round
+                            else "the retrained opponent model"
+                        )
+                        promotion_round = new_round
+                        print(f"switched to {changed} between games", flush=True)
             completed = True
             (data / "runner-status.json").write_text(
                 json.dumps(

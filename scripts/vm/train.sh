@@ -22,6 +22,9 @@
 # From round 23, self-play's full searches get 400 simulations instead of 160
 # (stronger policy targets: at 160 the search barely improved on the net),
 # with 3500 games a round instead of 5000 to keep rounds about as long.
+# From round 24, every round starts by adding the newest games against people
+# (human_dataset.sh: value rows, starting positions, and a background retrain
+# of the human opponent model the A/B bot uses).
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 init=()
@@ -38,5 +41,5 @@ exec .venv/bin/python -m catanatron.colonist.loop runs/g1 "${init[@]}" \
     --reference AB:2,F \
     --extra-data $sp1/round_013/data,$sp1/round_014/data,$sp1/round_015/data,$sp1/round_016/data$human \
     --gauntlet $sp1/nets/round_016.npz,$sp1/nets/round_008.npz \
-    --live-data data/human/holdout/value "${starts[@]}" \
+    --live-data data/human/holdout/value "${starts[@]}" --before-round scripts/vm/human_dataset.sh \
     --workers "${COLONIST_LOCAL_WORKERS:-8}" --train-threads "${COLONIST_TRAIN_THREADS:-8}"

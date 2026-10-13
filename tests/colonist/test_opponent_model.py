@@ -244,3 +244,30 @@ def test_train_args_keep_policy_focused_defaults():
     assert args[args.index("--value-weight") + 1] == "0.1"
     assert args.count("--lr") == 1 and args[args.index("--lr") + 1] == "1e-3"
     assert args[args.index("--init") + 1] == "init.npz"
+
+
+def test_refresh_replaces_the_model_only_when_not_worse(tmp_path):
+    pytest.importorskip("torch")
+    import json
+
+    from catanatron.colonist import opponent_model as O
+    from catanatron.colonist.human_data import export_capture
+
+    data = tmp_path / "opponent"
+    export_capture(FULL_GAME, str(data), 10_000, "opponent_known")
+    init = _saved(tmp_path, "main.npz", random_graph_net(8, 8, 1, seed=3))
+    model = str(tmp_path / "human" / "net.npz")
+    os.makedirs(os.path.dirname(model))
+    extra = ["--epochs", "3", "--lr", "3e-2", "--val-fraction", "0.5"]
+    extra += ["--device", "cpu"]
+    # No model yet: the first one is installed.
+    first = O.refresh([str(data)], [str(data)], init, model, extra=extra)
+    assert first["replaced"] and os.path.exists(model)
+    saved = json.load(open(tmp_path / "human" / "refresh.json"))
+    assert saved["replaced"] and "new" in saved["scores"]
+    # A model in use that predicts the held-out moves far better is kept.
+    good = open(model, "rb").read()
+    second = O.refresh(
+        [str(data)], [str(data)], init, model, tolerance=-10.0, extra=extra
+    )
+    assert not second["replaced"] and open(model, "rb").read() == good

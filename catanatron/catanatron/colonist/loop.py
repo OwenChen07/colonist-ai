@@ -108,11 +108,27 @@ def say(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
+def before_round(n, args):
+    """--before-round's command (e.g. refresh the human-game data), run before
+    each round's self-play. A failure is logged, not fatal: the round plays on
+    with the data it has."""
+    if not args.before_round:
+        return
+    import subprocess
+
+    say(f"round {n}: before the round: {args.before_round}")
+    try:
+        subprocess.run(args.before_round, shell=True, check=True, timeout=3600)
+    except (subprocess.SubprocessError, OSError) as error:
+        say(f"  it failed ({error}); playing on")
+
+
 def play(run, n, args):
     from catanatron.colonist import selfplay
 
     from catanatron.colonist import distributed
 
+    before_round(n, args)
     runner = selfplay.run
     if distributed.worker_hosts():  # read again every round
         runner = distributed.run
@@ -631,6 +647,12 @@ def main(argv=None):
         "--live-data",
         default="",
         help="comma-separated folders of live value shards, to score each net on",
+    )
+    parser.add_argument(
+        "--before-round",
+        default="",
+        help="a shell command run before each round's self-play (failures are "
+        "logged, not fatal), e.g. scripts/vm/human_dataset.sh",
     )
     parser.add_argument(
         "--human-starts",

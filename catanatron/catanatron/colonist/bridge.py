@@ -45,6 +45,7 @@ To the extension:
 import argparse
 import asyncio
 import base64
+import copy
 import hashlib
 import json
 import os
@@ -87,6 +88,10 @@ BUDGETS = {
 }
 
 
+#: Resends of one unconfirmed move, each after a snapshot proves it didn't land.
+MAX_RECONNECT_RETRIES = 3
+
+
 def think_budget(game, remaining, simulations):
     """(seconds or None, simulation cap) for the player to move, given the
     seconds left before colonist's timer acts (None: unknown, so a plain
@@ -119,6 +124,39 @@ def in_progress(payload):
         (board.get("tileEdgeStates") or {}).values()
     )
     return any(p.get("owner") for p in pieces)
+
+
+def setup_start(payload):
+    """For a snapshot of a game still in its opening placements whose log
+    runs from entry 0 (seen live: Sherie3424's page first saw a game after
+    one settlement, during a reconnect loop), the same game with nothing
+    placed yet, or None. Following it from there and then catching up from
+    the snapshot (reconcile) plays the opening moves through, as if the bot
+    had seen them happen."""
+    state = payload.get("gameState") or {}
+    logs = state.get("gameLogState") or {}
+    order = payload.get("playOrder") or []
+    current = state.get("currentState") or {}
+    if "0" not in logs or current.get("completedTurns", 0) >= 2 * len(order):
+        return None
+    start = copy.deepcopy(payload)
+    s = start["gameState"]
+    board = s["mapState"]
+    for corner in board.get("tileCornerStates", {}).values():
+        corner.pop("owner", None)
+        corner.pop("buildingType", None)
+    for edge in board.get("tileEdgeStates", {}).values():
+        edge.pop("owner", None)
+        edge.pop("type", None)
+    s["gameLogState"] = {}
+    s["currentState"] = {
+        **current,
+        "completedTurns": 0,
+        "currentTurnPlayerColor": order[0] if order else None,
+    }
+    for player in (s.get("playerStates") or {}).values():
+        player["victoryPointsState"] = {}
+    return start
 
 
 def game_phase(game):
@@ -194,7 +232,7 @@ class Bridge:
         # The bot's discard for a 7, planned while the earlier seat (the
         # opponent) still had to discard first: {turn, plan, seconds, sent}.
         self.early_discard = None
-        self.retry_count = 0  # a pending end turn may be retried once on reconnect
+        self.retry_count = 0  # resends of the pending move after reconnects
         self.no_effect_retry = False  # retry one acknowledged road with no board effect
         self.sent_raws = []
         self.pending_sends = {}  # sendId -> (reply, last sent, retries)
@@ -371,8 +409,10 @@ class Bridge:
                 # A new game: the previous one's messages go to their own file.
                 self.save()
                 self.frames, self.saved_path = self.frames[-1:], None
-            self.live = LiveGame(payload, frame.t)
-            self.answered, self.expect = None, None
+            opening = setup_start(payload) if in_progress(payload) else None
+            self.live = LiveGame(opening or payload, frame.t)
+            if opening is not None:
+                self.reconcile_snapshot(payload)
             self.pending_sends.clear()
             self.last_log_id = max(
                 (int(k) for k in payload["gameState"].get("gameLogState", {})),
@@ -383,7 +423,7 @@ class Bridge:
             self.sent_raws = []
             self.offers, self.declined = {}, set()
             self.socket = message.get("socket")
-            if not self.live.error and in_progress(payload):
+            if not self.live.error and in_progress(payload) and opening is None:
                 # A game joined midway (e.g. after a page reload) comes as a
                 # snapshot without its history, and the converter can only
                 # follow a game from its start. Playing on it once sent a
@@ -453,10 +493,14 @@ class Bridge:
     def retry_after_reconnect(self, payload):
         """A reconnect while a move was unconfirmed. If the new full snapshot
         shows nothing happened (same turn, no new log entries; for a roll, dice
-        not thrown), resend the move once: it can't happen twice. If the game
-        moved on, catch up from the snapshot, check the move as usual and play
-        on. Reconnects mid-move stopped a casual bot twice in 15 minutes (seen
-        live: a roll, then a road)."""
+        not thrown), resend the move: it can't happen twice. A new account's
+        session can reconnect every few seconds (seen live: hersh3499, 20
+        reconnects in one game, two of them on the same settlement), so a move
+        is resent up to MAX_RECONNECT_RETRIES times, each after a snapshot
+        shows it didn't land. If the game moved on, catch up from the
+        snapshot, check the move as usual and play on. Reconnects mid-move
+        stopped a casual bot twice in 15 minutes (seen live: a roll, then a
+        road)."""
         _, plan, _ = self.expect
         cur = payload["gameState"].get("currentState", {})
         logs = payload["gameState"].get("gameLogState", {})
@@ -494,7 +538,7 @@ class Bridge:
                 self.pending_sends.clear()
                 return [self.status("stopped", self.live.error)]
             return replies + self.think()
-        if self.retry_count:
+        if self.retry_count >= MAX_RECONNECT_RETRIES:
             self.live.error = "reconnected while a move was unconfirmed; stopped safely"
             self.expect = None
             self.pending_sends.clear()

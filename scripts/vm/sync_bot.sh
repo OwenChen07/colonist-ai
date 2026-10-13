@@ -25,6 +25,9 @@ for B in ${COLONIST_BOT_HOSTS:-$COLONIST_BOT_HOST}; do
   rsync -a -e "$SSH" runs/g1/nets/ "$B:$R/runs/g1/nets/"
   rsync -a -e "$SSH" runs/g1/state.json "$B:$R/runs/g1/state.json"
   rsync -a -e "$SSH" runs/g1/train-tail.log "$B:$R/runs/g1/train-tail.log" 2>/dev/null
+  # The human opponent model (opponent_model.py refresh), for bots that use it.
+  [ -e models/human/net.npz ] && $SSH "$B" "mkdir -p $R/models/human" \
+      && rsync -a -e "$SSH" models/human/net.npz "$B:$R/models/human/net.npz"
   # Cloud credits for the site (scripts/credits.py on the owner's Mac).
   [ -e data/credits.json ] && rsync -a -e "$SSH" data/credits.json "$B:$R/data/credits.json"
   # Every account's folders (data/ranked, data/<account>, ...), not the
