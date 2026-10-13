@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# Hourly (cron): a cheap health check of the ranked bot and the training loop.
-# Only when something looks wrong does it start Claude Code to diagnose and
-# fix it, following watchdog.md, with a fixed allowlist of tools: edit files
-# in this checkout, git, the tests, reading logs, and restarting or stopping
-# these services. Nothing else is permitted. One run at a time.
+# Every 15 minutes (cron): a cheap health check of the bots and training loop.
+# Only when something looks wrong does it start an agent to diagnose and fix it.
+# Claude Code uses the fixed allowlist below; Codex is the fallback when Claude
+# reaches its usage limit. One run at a time.
 set -uo pipefail
 export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
 cd "$(dirname "$0")/../.."
@@ -79,6 +78,19 @@ allowed=(
   "Bash(scripts/vm/bot_ctl.sh accounts)" "Bash(scripts/vm/bot_ctl.sh log-account:*)"
   "Bash(scripts/vm/bot_ctl.sh restart-account:*)" "Bash(scripts/vm/bot_ctl.sh stop-account:*)"
 )
+agent=claude
+log="data/watchdog/run-$stamp-claude.log"
 timeout 3000 claude -p "$prompt" --permission-mode dontAsk --allowedTools "${allowed[@]}" \
-  > "data/watchdog/run-$stamp.log" 2>&1
-echo "$(date -u +%FT%TZ) watchdog run finished (exit $?): data/watchdog/run-$stamp.log" >> data/watchdog/health.log
+  > "$log" 2>&1
+code=$?
+if grep -qiE "usage limit|weekly limit|limit reached|rate limit|out of (credits|usage)" "$log" \
+   && command -v codex >/dev/null; then
+  echo "$(date -u +%FT%TZ) claude hit its limit; running codex" >> data/watchdog/health.log
+  agent=codex
+  log="data/watchdog/run-$stamp-codex.log"
+  timeout 3000 codex exec --approve-for-me \
+    -c sandbox_workspace_write.network_access=true \
+    "$prompt" > "$log" 2>&1
+  code=$?
+fi
+echo "$(date -u +%FT%TZ) watchdog run finished ($agent, exit $code): $log" >> data/watchdog/health.log
