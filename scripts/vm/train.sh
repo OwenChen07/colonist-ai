@@ -39,7 +39,7 @@ starts=()
 [ -e data/human/starts.jsonl.gz ] && starts=(--human-starts data/human/starts.jsonl.gz)
 exec .venv/bin/python -m catanatron.colonist.loop runs/g1 "${init[@]}" \
     --rounds 1000 --games "${SELFPLAY_GAMES:-3500}" --window 6 --train-sample 4000000 \
-    --gate strict --anchor runs/g1/nets/round_013.npz --anchor-games 2000 --guard-live 0.01 \
+    --gate strict --min-games 1000 --anchor runs/g1/nets/round_013.npz --anchor-games 2000 --guard-live 0.01 \
     --distribute-eval \
     --simulations "${SELFPLAY_SIMULATIONS:-400}" --full-rate 0.25 --fast-simulations 24 \
     --reference AB:2,F \

@@ -223,6 +223,7 @@ def run(
             log(f"copying shards from {host} failed; finishing its range here")
     for first, size in remote_ranges:
         if size and not _complete(out_dir, first, size):
+            log(f"self-play: {size} additional games here")
             selfplay.run(net_path, out_dir, games=size, seed=first, **options)
     if not _complete(out_dir, seed, games):
         raise RuntimeError("self-play round has missing shards; training cannot start")

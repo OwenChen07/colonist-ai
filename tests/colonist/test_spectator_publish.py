@@ -216,6 +216,20 @@ epoch 2: train policy 0.902 value 0.399 | val policy 0.896 value 0.429 accuracy 
     assert progress["training"]["epochs"][1]["accuracy"] == 0.772
 
 
+def test_round_progress_counts_local_fallback_games():
+    lines = """[16:22:12] round 28: self-play, 3500 games
+[16:25:25]   self-play: 832 games here
+[17:09:02]   shard_3028000768_64.npz: 64 games in 1360 s | 832 games, 0.32/s
+[17:09:15]   self-play: 1004 additional games here
+[17:47:19]   shard_3028003456_44.npz: 44 games in 888 s | 556 games, 0.24/s
+[17:55:15]   shard_3028003264_64.npz: 64 games in 1416 s | 1004 games, 0.36/s
+""".splitlines()
+    now = dt.datetime(2026, 10, 13, 18, 0, tzinfo=dt.timezone.utc).timestamp()
+    progress = round_progress(lines, 28, now=now)["selfplay"]
+    assert progress["localTotal"] == 1836
+    assert progress["localDone"] == 1836
+
+
 def test_credits_are_published_when_present(tmp_path):
     assert snapshot(tmp_path, {}, "vm1")["credits"] is None
     (tmp_path / "credits.json").write_text(

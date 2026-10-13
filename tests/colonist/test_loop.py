@@ -44,6 +44,8 @@ def tiny_args(tmp_path):
             "2",
             "--max-games",
             "2",
+            "--min-games",
+            "2",
             "--batch-pairs",
             "1",
             "--reference",

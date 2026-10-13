@@ -239,11 +239,14 @@ def sprt(
     alpha=0.05,
     beta=0.05,
     max_games=2000,
+    min_games=0,
     batch_pairs=50,
     progress=None,
     hosts=None,
 ) -> MatchResult:
     """Promotion test: does A beat B at p1 or better, rather than p0?"""
+    if not 0 <= min_games <= max_games:
+        raise ValueError("min_games must be between 0 and max_games")
     lower, upper = math.log(beta / (1 - alpha)), math.log((1 - beta) / alpha)
     result = MatchResult(_name(spec_a), _name(spec_b))
     start, next_seed = time.time(), seed
@@ -258,6 +261,8 @@ def sprt(
         result.seconds = time.time() - start
         if progress:
             progress(result)
+        if result.n < min_games:
+            continue
         if llr >= upper:
             result.decision = "promote"
             break

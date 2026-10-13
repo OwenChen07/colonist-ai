@@ -65,3 +65,18 @@ def test_sprt_stops_early_on_a_clear_difference():
     result = sprt("W", "R", workers=1, max_games=400, batch_pairs=10)
     assert result.decision == "promote"
     assert result.n < 400
+
+
+def test_sprt_respects_minimum_games(monkeypatch):
+    from catanatron.colonist import evaluate
+
+    monkeypatch.setattr(
+        evaluate,
+        "_run",
+        lambda tasks, workers, hosts=None: (
+            GameResult(i, True, 1.0, 1) for i, _ in enumerate(tasks)
+        ),
+    )
+    result = sprt("W", "R", workers=1, min_games=1000, max_games=1200)
+    assert result.n == 1000
+    assert result.decision == "promote"

@@ -11,8 +11,9 @@ Each round:
   2. Train: a new net starts from the best one and trains on the last
      --window rounds of self-play data (plus --extra-data, e.g. the bot games
      Phase 2 learned from).
-  3. Promotion match: new net against best, paired boards, at most
-     --max-games games. With --gate strict, an SPRT of 50% against 54% (so
+  3. Promotion match: new net against best, paired boards, at least
+     --min-games (default 1000) and at most --max-games games. With --gate
+     strict, an SPRT of 50% against 54% (so
      52% is the bar): the new net replaces the best only if the test says
      so. With --gate loose (AlphaZero-like: the data keeps moving instead of
      coming from one net for many rounds), an SPRT of 46% against 50%: the
@@ -306,6 +307,7 @@ def match(run, n, args):
         p0=0.46 if loose else 0.50,
         p1=0.50 if loose else 0.54,
         max_games=args.max_games,
+        min_games=args.min_games,
         batch_pairs=args.batch_pairs,
         hosts=_eval_hosts(args),
         progress=lambda r: say(f"  {r.n} games: {r.score:.1%} ± {r.margin:.1%}"),
@@ -589,6 +591,12 @@ def main(argv=None):
     parser.add_argument("--device", default=None)
     parser.add_argument("--match-simulations", type=int, default=100)
     parser.add_argument("--max-games", type=int, default=2000)
+    parser.add_argument(
+        "--min-games",
+        type=int,
+        default=1000,
+        help="minimum games in each promotion match (default: 1000)",
+    )
     parser.add_argument(
         "--distribute-eval",
         action="store_true",

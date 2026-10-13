@@ -162,6 +162,7 @@ def round_progress(lines, number, epochs=3, now=None):
         return None
     progress = {"selfplay": None, "training": None, "match": None}
     stamp = None
+    previous_local_done = 0
     for line in lines[first:]:
         if "] round " in line and head not in line:
             break  # the next round
@@ -175,11 +176,17 @@ def round_progress(lines, number, epochs=3, now=None):
                 "localDone": 0,
                 "localTotal": None,
             }
+        elif progress["selfplay"] and "additional games here" in line:
+            extra = re.search(r"(\d+) additional games here", line)
+            previous_local_done = progress["selfplay"]["localDone"]
+            progress["selfplay"]["localTotal"] += int(extra.group(1))
         elif progress["selfplay"] and "games here" in line:
             here = re.search(r"(\d+) games here", line)
             progress["selfplay"]["localTotal"] = int(here.group(1))
         elif progress["selfplay"] and LOCAL_SHARD.search(line):
-            progress["selfplay"]["localDone"] = int(LOCAL_SHARD.search(line).group(1))
+            progress["selfplay"]["localDone"] = previous_local_done + int(
+                LOCAL_SHARD.search(line).group(1)
+            )
         elif "self-play complete" in line and progress["selfplay"]:
             progress["selfplay"]["done"] = True
         elif head + "training" in line:
