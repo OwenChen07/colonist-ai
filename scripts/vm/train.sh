@@ -25,21 +25,25 @@
 # From round 24, every round starts by adding the newest games against people
 # (human_dataset.sh: value rows, starting positions, and a background retrain
 # of the human opponent model the A/B bot uses).
+# From round 27, a shorter, fresher window: 6 rounds instead of 8, without
+# sp1's old MLP-era data (~28% of games), and the human folder 4 times instead
+# of 10 (still about 3% of positions), so the 400-simulation targets are most
+# of what training sees instead of ~10%.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 init=()
 [ -e runs/g1/state.json ] || init=(--init models/graph1/net.npz)
 sp1=runs/sp1
-human=$(printf ',data/human/train/value%.0s' $(seq "${HUMAN_REPEAT:-10}"))
+human=$(printf ',data/human/train/value%.0s' $(seq "${HUMAN_REPEAT:-4}"))
 starts=()
 [ -e data/human/starts.jsonl.gz ] && starts=(--human-starts data/human/starts.jsonl.gz)
 exec .venv/bin/python -m catanatron.colonist.loop runs/g1 "${init[@]}" \
-    --rounds 1000 --games "${SELFPLAY_GAMES:-3500}" --window 8 --train-sample 4000000 \
+    --rounds 1000 --games "${SELFPLAY_GAMES:-3500}" --window 6 --train-sample 4000000 \
     --gate strict --anchor runs/g1/nets/round_013.npz --anchor-games 2000 --guard-live 0.01 \
     --distribute-eval \
     --simulations "${SELFPLAY_SIMULATIONS:-400}" --full-rate 0.25 --fast-simulations 24 \
     --reference AB:2,F \
-    --extra-data $sp1/round_013/data,$sp1/round_014/data,$sp1/round_015/data,$sp1/round_016/data$human \
+    --extra-data "${human#,}" \
     --gauntlet $sp1/nets/round_016.npz,$sp1/nets/round_008.npz \
     --live-data data/human/holdout/value "${starts[@]}" --before-round scripts/vm/human_dataset.sh \
     --workers "${COLONIST_LOCAL_WORKERS:-8}" --train-threads "${COLONIST_TRAIN_THREADS:-8}"
