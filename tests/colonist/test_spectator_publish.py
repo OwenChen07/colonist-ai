@@ -201,6 +201,21 @@ def test_round_progress_from_the_training_log():
     )
 
 
+def test_round_progress_recognizes_aux_loss_after_cpu_fallback():
+    lines = """[12:44:32] round 27: training on 10 data folders, from the best net
+[12:44:53] round 27: training on a GPU (cuda)
+epoch 1: train policy 0.911 value 0.403 | val policy 0.901 value 0.429 accuracy 76.7% aux 0.324 | 201 s
+[12:53:48] round 27: training on the CPU after GPU timeout
+epoch 1: train policy 0.911 value 0.403 | val policy 0.901 value 0.430 accuracy 76.8% aux 0.323 | 2352 s
+epoch 2: train policy 0.902 value 0.399 | val policy 0.896 value 0.429 accuracy 77.2% aux 0.319 | 2342 s
+""".splitlines()
+    now = dt.datetime(2026, 10, 13, 14, 34, tzinfo=dt.timezone.utc).timestamp()
+    progress = round_progress(lines, 27, now=now)
+    assert progress["training"]["started"] == "2026-10-13T12:53:48+00:00"
+    assert [e["epoch"] for e in progress["training"]["epochs"]] == [1, 2]
+    assert progress["training"]["epochs"][1]["accuracy"] == 0.772
+
+
 def test_credits_are_published_when_present(tmp_path):
     assert snapshot(tmp_path, {}, "vm1")["credits"] is None
     (tmp_path / "credits.json").write_text(

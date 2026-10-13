@@ -132,7 +132,7 @@ def _number(value):
 
 STAMP = re.compile(r"^\[(\d\d):(\d\d):(\d\d)\] ")
 EPOCH = re.compile(
-    r"^epoch (\d+): .*\| val policy [\d.]+ value ([\d.]+) accuracy ([\d.]+)% \| (\d+) s"
+    r"^epoch (\d+): .*\| val policy [\d.]+ value ([\d.]+) accuracy ([\d.]+)%(?: aux [\d.]+)? \| (\d+) s"
 )
 LOCAL_SHARD = re.compile(r"\| (\d+) games, [\d.]+/s$")
 MATCH = re.compile(r"^\[[\d:]+\]\s+(\d+) games: ([\d.]+)% ± ([\d.]+)%")
