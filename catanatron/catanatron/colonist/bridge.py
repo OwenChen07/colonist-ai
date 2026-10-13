@@ -2,6 +2,8 @@
 
     python -m catanatron.colonist.bridge models/ab2/net.npz --simulations 200
     python -m catanatron.colonist.bridge models/ab2/net.npz --play     # plays its moves
+    python -m catanatron.colonist.bridge models/ab2/net.npz --play \
+        --opponent-model models/human/net.npz --opponent-mix 0.5
 
 Runs a small server on this machine (ws://127.0.0.1:8765) that the bot
 extension (bot/) connects to. The extension forwards every message colonist
@@ -143,8 +145,14 @@ class Bridge:
         save_dir=None,
         spectator_state=None,
         bot=None,
+        opponent_model=None,
+        opponent_mix=0.0,
     ):
         self.net = net
+        # A net trained on people's moves (opponent_model.py): the search
+        # mixes it into the opponent's prior, at this weight (0: off).
+        self.opponent_model = opponent_model
+        self.opponent_mix = opponent_mix
         # Which net and search played (net_info), saved with each capture so
         # every live game's data says which version produced it.
         self.bot = bot
@@ -747,10 +755,9 @@ class Bridge:
             and g.winning_color() is None
         ):
             actions = g.playable_actions
-            priors, _ = self.net.evaluate(
-                g, g.state.current_color(), E.legal_indices(actions)
+            g.execute(
+                actions[int(np.argmax(self.opponent_prior(g)))], validate_action=False
             )
-            g.execute(actions[int(np.argmax(priors))], validate_action=False)
         if not g.state.is_discarding or g.state.current_color() != live.bot:
             return []
         self.budget = think_budget(g, self.time_left(), self.simulations)
@@ -769,6 +776,17 @@ class Bridge:
                 f"planned discard {cards} before the opponent's ({seconds:.1f} s)",
             )
         ]
+
+    def opponent_prior(self, game):
+        """The opponent's prior over their legal moves in `game`: the net's,
+        or its mixture with the opponent model, as the search uses."""
+        color = game.state.current_color()
+        legal = E.legal_indices(game.playable_actions)
+        priors, _ = self.net.evaluate(game, color, legal)
+        if self.opponent_model is None or self.opponent_mix <= 0:
+            return priors
+        human, _ = self.opponent_model.evaluate(game, color, legal)
+        return (1 - self.opponent_mix) * priors + self.opponent_mix * human
 
     def early_discard_due(self):
         """Send the planned discard when the opponent hasn't discarded and
@@ -950,7 +968,12 @@ class Bridge:
 
         seconds, simulations = self.budget
         search = Search(
-            self.net, simulations or self.simulations, rng=self.rng, noise=False
+            self.net,
+            simulations or self.simulations,
+            rng=self.rng,
+            noise=False,
+            opponent_model=self.opponent_model if self.opponent_mix > 0 else None,
+            opponent_mix=self.opponent_mix,
         )
         action, root = search.run(game, time_limit=seconds)
         self.searched += search.used
@@ -1058,7 +1081,7 @@ async def serve_forever(make_bridge, host=HOST, port=PORT, info=None):
         await asyncio.Future()
 
 
-def net_info(path, simulations, play, label=None):
+def net_info(path, simulations, play, label=None, opponent_model=None, opponent_mix=0):
     """What the extension's panel shows about the bot: which net file (and the
     training epoch, when the file records it), how much search, which mode.
     Also a hash of the file and an optional label (e.g. the training round),
@@ -1076,6 +1099,16 @@ def net_info(path, simulations, play, label=None):
             info["sha256"] = hashlib.file_digest(f, "sha256").hexdigest()[:16]
     except OSError:
         pass
+    if opponent_model and opponent_mix > 0:
+        # Games played with an opponent model are told apart in captures.
+        info["opponent_model"] = opponent_model
+        info["opponent_mix"] = opponent_mix
+        try:
+            with open(opponent_model, "rb") as f:
+                digest = hashlib.file_digest(f, "sha256").hexdigest()[:16]
+            info["opponent_sha256"] = digest
+        except OSError:
+            pass
     try:
         with np.load(path) as z:
             if "meta_epoch" in z:
@@ -1090,7 +1123,16 @@ def describe_info(info):
     if info.get("label"):
         epoch += f" ({info['label']})"
     mode = "playing" if info.get("play") else "advising"
-    return f"net {info['net']}{epoch}, {info['simulations']} simulations, {mode}"
+    opponent = ""
+    if info.get("opponent_model"):
+        opponent = (
+            f", opponent model {info['opponent_model']} "
+            f"at mix {info['opponent_mix']}"
+        )
+    return (
+        f"net {info['net']}{epoch}, {info['simulations']} simulations{opponent}, "
+        f"{mode}"
+    )
 
 
 def main(argv=None):
@@ -1115,7 +1157,23 @@ def main(argv=None):
         "--spectator-state",
         help="write a redacted live-board snapshot to this local JSON path",
     )
+    parser.add_argument(
+        "--opponent-model",
+        metavar="PATH",
+        help="a net trained on people's moves (opponent_model.py), mixed into "
+        "the search's prior at the opponent's decisions",
+    )
+    parser.add_argument(
+        "--opponent-mix",
+        type=float,
+        default=0.0,
+        help="the opponent model's weight in that prior, 0 to 1 (default 0: off)",
+    )
     args = parser.parse_args(argv)
+    if not 0 <= args.opponent_mix <= 1:
+        parser.error("--opponent-mix must be between 0 and 1")
+    if args.opponent_mix > 0 and not args.opponent_model:
+        parser.error("--opponent-mix needs --opponent-model")
     if (
         not args.spectator_state
         and args.save
@@ -1127,7 +1185,17 @@ def main(argv=None):
     from catanatron.colonist.net import Net
 
     net = Net.load(args.net)
-    info = net_info(args.net, args.simulations, args.play, args.label)
+    opponent_model = None
+    if args.opponent_model and args.opponent_mix > 0:
+        opponent_model = Net.load(args.opponent_model)
+    info = net_info(
+        args.net,
+        args.simulations,
+        args.play,
+        args.label,
+        args.opponent_model,
+        args.opponent_mix,
+    )
     try:
         asyncio.run(
             serve_forever(
@@ -1139,6 +1207,8 @@ def main(argv=None):
                     save_dir=args.save or None,
                     spectator_state=args.spectator_state,
                     bot=info,
+                    opponent_model=opponent_model,
+                    opponent_mix=args.opponent_mix if opponent_model else 0.0,
                 ),
                 port=args.port,
                 info=info,

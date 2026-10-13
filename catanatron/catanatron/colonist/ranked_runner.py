@@ -15,6 +15,10 @@ Then run while the laptop is off:
     python -m catanatron.colonist.ranked_runner --net NET --games 1 \
         --profile PROFILE
 
+With --opponent-model PATH --opponent-mix W (or the OPPONENT_MODEL and
+OPPONENT_MIX environment variables) the bridge's search expects human-like
+replies from the opponent (see opponent_model.py); it is off by default.
+
 With --games 0 it queues games until stopped. Every verified game is listed in
 DATA/games.jsonl with the net that played it (its hash, and the training round
 when following --promotions), and the capture itself records the same.
@@ -111,8 +115,22 @@ def bridge_env():
     return {**os.environ, **ONE_THREAD}
 
 
+def opponent_args(model, mix):
+    """The bridge's opponent-model flags: none unless both a model and a
+    positive mix are set, so the default bridge command is unchanged."""
+    if not model or not mix or float(mix) <= 0:
+        return []
+    return ["--opponent-model", str(model), "--opponent-mix", str(float(mix))]
+
+
 async def _bridge(
-    net, simulations, captures, log_path, spectator_state=None, label=None
+    net,
+    simulations,
+    captures,
+    log_path,
+    spectator_state=None,
+    label=None,
+    opponent=(),
 ):
     try:
         _, writer = await asyncio.open_connection("127.0.0.1", PORT)
@@ -138,6 +156,7 @@ async def _bridge(
         command.extend(("--spectator-state", str(spectator_state)))
     if label:
         command.extend(("--label", label))
+    command.extend(opponent)
     command.extend(("--port", str(PORT)))
     process = await asyncio.create_subprocess_exec(
         *command,
@@ -229,6 +248,7 @@ def record_game(
     account=None,
     queue="ranked",
     own_bot=False,
+    opponent_mix=0.0,
 ):
     """Appends one verified game to DATA/games.jsonl: which net played it and
     how it ended. Names and chat stay in the capture."""
@@ -250,6 +270,9 @@ def record_game(
     }
     if account:
         row["account"] = account
+    if opponent_mix:
+        # Played expecting human-like replies (bridge --opponent-mix).
+        row["opponent_mix"] = opponent_mix
     if own_bot:
         # Against another of our own bots: not a human game, so not training
         # data, and not part of the bot's record against people.
@@ -473,6 +496,7 @@ async def _run(args):
                 data / "bridge.log",
                 data / "spectator-state.json",
                 label,
+                opponent_args(args.opponent_model, args.opponent_mix),
             )
             (data / "runner-status.json").write_text(
                 json.dumps(
@@ -630,6 +654,11 @@ async def _run(args):
                     account=args.account,
                     queue=queue,
                     own_bot=own_bot,
+                    opponent_mix=(
+                        float(args.opponent_mix)
+                        if opponent_args(args.opponent_model, args.opponent_mix)
+                        else 0.0
+                    ),
                 )
                 games_completed += 1
                 (data / "runner-status.json").write_text(
@@ -666,6 +695,7 @@ async def _run(args):
                                 data / "bridge.log",
                                 data / "spectator-state.json",
                                 label,
+                                opponent_args(args.opponent_model, args.opponent_mix),
                             )
                             promotion_round = new_round
                             print(
@@ -755,6 +785,18 @@ def main(argv=None):
     parser.add_argument("--data", default=None)
     parser.add_argument("--simulations", type=int, default=800)
     parser.add_argument(
+        "--opponent-model",
+        default=os.environ.get("OPPONENT_MODEL") or None,
+        help="the bridge's --opponent-model (or OPPONENT_MODEL): a net trained "
+        "on people's moves, for the search's opponent prior",
+    )
+    parser.add_argument(
+        "--opponent-mix",
+        type=float,
+        default=float(os.environ.get("OPPONENT_MIX") or 0),
+        help="the bridge's --opponent-mix (or OPPONENT_MIX), 0 to 1; 0 is off",
+    )
+    parser.add_argument(
         "--games", type=int, default=1, help="games to play; 0 for no limit"
     )
     parser.add_argument(
@@ -792,6 +834,12 @@ def main(argv=None):
         parser.error("--games must be 0 or more and --simulations positive")
     if args.hours is not None and args.hours <= 0:
         parser.error("--hours must be positive")
+    if not 0 <= args.opponent_mix <= 1:
+        parser.error("--opponent-mix must be between 0 and 1")
+    if args.opponent_mix > 0 and not args.opponent_model:
+        parser.error("--opponent-mix needs --opponent-model")
+    if args.opponent_mix > 0 and not Path(args.opponent_model).exists():
+        parser.error("--opponent-model must point to a local trained network")
     try:
         asyncio.run(_run(args))
     except KeyboardInterrupt:

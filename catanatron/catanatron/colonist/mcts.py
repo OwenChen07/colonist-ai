@@ -22,6 +22,11 @@ re-dealt at random from the cards the searcher hasn't seen (the deck plus the
 opponent's hand), so the search can't use them. Within a search the deal is
 fixed (see PLAN.md: the fallback is to re-deal at every chance node).
 
+Opponent model: the search can give the opponent's nodes a prior that mixes
+in a second net trained on people's moves (opponent_model.py), so it expects
+human-like replies instead of the bot's own; the searcher's nodes and every
+value still come from the main net. See mix_logits.
+
 Values are stored from the root player's point of view and flipped for the
 other player's nodes; a node's player is looked up, never assumed to
 alternate, since a Catan turn is many moves by one player.
@@ -127,6 +132,19 @@ def outcomes(game, action):
     return None
 
 
+# ===== opponent model
+def mix_logits(main, human, mix):
+    """log((1 - mix) softmax(main) + mix softmax(human)), over the same legal
+    moves: the prior for an opponent's node. A mixture of probabilities (not
+    of logits) keeps every move the main net likes possible, however sure the
+    human model is, and the reverse."""
+    log_p = main - np.logaddexp.reduce(main)
+    log_q = human - np.logaddexp.reduce(human)
+    if mix >= 1:
+        return log_q
+    return np.logaddexp(math.log1p(-mix) + log_p, math.log(mix) + log_q)
+
+
 # ===== the tree
 class Decision:
     __slots__ = (
@@ -191,6 +209,8 @@ class Search:
         rng=None,
         noise=True,
         setup_noise_scale=1.0,
+        opponent_model=None,
+        opponent_mix=0.0,
     ):
         self.net = net
         self.simulations = simulations
@@ -204,7 +224,16 @@ class Search:
         if not math.isfinite(setup_noise_scale) or setup_noise_scale <= 0:
             raise ValueError("setup_noise_scale must be positive and finite")
         self.setup_noise_scale = setup_noise_scale
+        if not 0.0 <= opponent_mix <= 1.0:
+            raise ValueError("opponent_mix must be between 0 and 1")
+        if opponent_mix > 0 and opponent_model is None:
+            raise ValueError("opponent_mix needs an opponent_model")
+        # With mix 0 the model is never run: the search is exactly as without.
+        self.opponent_model = opponent_model if opponent_mix > 0 else None
+        self.opponent_mix = opponent_mix
+        self.root_color = None  # the searcher, set when a search starts
         self.evaluations = 0
+        self.opponent_evaluations = 0
 
     # ----- building nodes
     def node_after(self, game):
@@ -230,11 +259,23 @@ class Search:
         encoded = [E.encode(n.game, n.color) for n in nodes]
         dynamic = np.stack([d for _, d in encoded])
         logits, values = self.net.forward(encoded[0][0], dynamic)
+        human = {}
+        if self.opponent_model is not None:
+            # The opponent's nodes only, in one more call: the root and the
+            # searcher's own nodes keep the main net's prior.
+            rows = [r for r, n in enumerate(nodes) if n.color != self.root_color]
+            if rows:
+                self.opponent_evaluations += len(rows)
+                h, _ = self.opponent_model.forward(encoded[0][0], dynamic[rows])
+                human = dict(zip(rows, h))
         for row, node in enumerate(nodes):
             legal = E.legal_indices(node.actions)
-            node.set_evaluation(
-                logits[row, legal].astype(np.float64), float(values[row])
-            )
+            prior = logits[row, legal].astype(np.float64)
+            if row in human:
+                prior = mix_logits(
+                    prior, human[row][legal].astype(np.float64), self.opponent_mix
+                )
+            node.set_evaluation(prior, float(values[row]))
 
     def child_of(self, node, i):
         """Builds the node reached by move i of a Decision."""
@@ -364,7 +405,7 @@ class Search:
         calls: it yields lists of new Decisions to evaluate (with
         set_evaluation) before it is resumed, and returns (action, root)."""
         g = game.copy()
-        viewer = g.state.current_color()
+        viewer = self.root_color = g.state.current_color()
         redeal_hidden_cards(g, viewer, self.rng)
         root = self.node_after(g)
         if not isinstance(root, Decision):

@@ -10,6 +10,9 @@ WorkingDirectory=/home/ubuntu/colonist-ai
 Environment=PYTHONUNBUFFERED=1
 Environment=OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
 EnvironmentFile=-/home/ubuntu/colonist-ai/scripts/vm/bot/own_accounts.env
+# Optional: OPPONENT_MODEL and OPPONENT_MIX (a human opponent model for the
+# search, read by ranked_runner; off unless both are set).
+EnvironmentFile=-/home/ubuntu/colonist-ai/scripts/vm/bot/accounts/ranked.env
 # The coordinator's sync_bot.sh keeps runs/g1 (promoted nets) up to date here
 # and copies the games back. A small window and 5 frames a second keep
 # Chromium's software drawing off the bridge's core.
