@@ -125,6 +125,8 @@ def run(
     setup_noise_scale=1.0,
     full_rate=1.0,
     fast_simulations=None,
+    human_starts=None,
+    human_start_rate=0.0,
 ):
     """Generate all shards locally and remotely, then verify the whole round."""
     hosts = worker_hosts()
@@ -150,6 +152,8 @@ def run(
         setup_noise_scale=setup_noise_scale,
         full_rate=full_rate,
         fast_simulations=fast_simulations,
+        human_starts=human_starts,
+        human_start_rate=human_start_rate,
     )
     os.makedirs(out_dir, exist_ok=True)
 
@@ -178,6 +182,15 @@ def run(
             ]
             if fast_simulations:
                 argv += ["--fast-simulations", fast_simulations]
+            if human_starts and human_start_rate > 0:
+                remote_starts = remote_nets / "starts.jsonl.gz"
+                _rsync(key, human_starts, f"{host}:{remote_starts}")
+                argv += [
+                    "--human-starts",
+                    remote_starts,
+                    "--human-start-rate",
+                    human_start_rate,
+                ]
         except subprocess.CalledProcessError:
             log(f"could not prepare {host}; its range runs here")
             continue

@@ -355,7 +355,8 @@ def test_compact_training_data_matches_the_dense_layout(tmp_path):
     ):
         data = Data(static, split, "cpu")
         assert data.n == len(rows)
-        x, legal, action, pi, value = data.batch(torch.arange(data.n))
+        x, legal, action, pi, value, aux = data.batch(torch.arange(data.n))
+        assert aux.shape == (data.n, 4)  # NaN for the bot shards, which have none
         expect_x = np.concatenate(
             [d["static"][d["game"][rows]], d["dynamic"][rows].astype(np.float32)], 1
         )
@@ -370,5 +371,5 @@ def test_compact_training_data_matches_the_dense_layout(tmp_path):
         assert np.array_equal(pi.numpy(), expect_pi)
         # any batch order gives the same rows
         idx = torch.randperm(data.n)[:7]
-        _, _, _, pi7, _ = data.batch(idx)
+        _, _, _, pi7, _, _ = data.batch(idx)
         assert np.array_equal(pi7.numpy(), expect_pi[idx.numpy()])

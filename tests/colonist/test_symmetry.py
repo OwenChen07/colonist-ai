@@ -162,7 +162,7 @@ def test_training_augmentation_keeps_targets_legal(positions):
     action = torch.tensor(actions)
     pi = torch.nn.functional.one_hot(action, E.NUM_ACTIONS).float()
     augment = Augment("cpu", torch.Generator().manual_seed(0))
-    x2, legal2, action2, pi2, _ = augment(x, legal, action, pi, None)
+    x2, legal2, action2, pi2, _, _ = augment(x, legal, action, pi, None)
     assert legal2[torch.arange(len(action2)), action2].all()
     assert (pi2.argmax(1) == action2).all()
     assert torch.equal(legal2.sum(1), legal.sum(1))

@@ -32,6 +32,7 @@ import time
 import numpy as np
 
 from catanatron.colonist import encode as E
+from catanatron.colonist.graph import AUX_TARGETS
 
 
 def build_model(hidden):
@@ -201,6 +202,7 @@ def load_split(paths, val_fraction, value_mix=0.0):
             "soft": np.empty(n, bool),
             "pi_start": np.empty(n, np.int64),
             "pi": np.empty(n_pi, np.float16),
+            "aux": np.full((n, AUX_TARGETS), np.nan, np.float16),
         }
     at = {False: [0, 0], True: [0, 0]}
     offset = 0
@@ -225,6 +227,8 @@ def load_split(paths, val_fraction, value_mix=0.0):
             split["action"][r:end] = d["action"][rows]
             split["value"][r:end] = value[rows]
             split["soft"][r:end] = soft[rows]
+            if "aux" in d:
+                split["aux"][r:end] = d["aux"][rows]
             counts = count[rows]
             split["pi_start"][r:end] = q + np.cumsum(counts) - counts
             soft_rows = rows[soft[rows]]
@@ -251,6 +255,7 @@ class Data:
         self.n = 0 if split is None else len(split["value"])
         self.static = t(static)
         self.has_soft = bool(self.n) and bool(split["soft"].any())
+        self.has_aux = False
         if not self.n:
             self.value = torch.zeros(0, device=device)
             return
@@ -262,6 +267,8 @@ class Data:
         self.soft = t(split["soft"])
         self.pi_start = t(split["pi_start"])
         self.pi = t(split["pi"])
+        self.aux = t(split["aux"])
+        self.has_aux = bool(np.isfinite(split["aux"][:, 0]).any())
         self.shifts = torch.arange(7, -1, -1, device=device, dtype=torch.uint8)
 
     def batch(self, idx):
@@ -285,7 +292,8 @@ class Data:
                 block = torch.zeros(len(mask), E.NUM_ACTIONS, device=x.device)
                 block[mask] = self.pi[flat + within].float()
                 pi[soft] = block
-        return x, legal, self.action[idx], pi, self.value[idx]
+        aux = self.aux[idx].float() if self.has_aux else None
+        return x, legal, self.action[idx], pi, self.value[idx], aux
 
 
 class Augment:
@@ -304,7 +312,7 @@ class Augment:
         )
         self.generator = generator
 
-    def __call__(self, x, legal, action, pi, value):
+    def __call__(self, x, legal, action, pi, value, aux=None):
         import torch
 
         sym = torch.randint(0, len(self.inputs), (len(x),), generator=self.generator)
@@ -316,15 +324,22 @@ class Augment:
             pi = torch.gather(pi, 1, moves)
         mapped = self.move_image[sym, action.clamp(min=0)]
         action = torch.where(action >= 0, mapped, action)
-        return x, legal, action, pi, value
+        return x, legal, action, pi, value, aux  # aux: the same in every symmetry
 
 
-def losses(model, x, legal, action, pi, value, value_weight):
+def losses(model, x, legal, action, pi, value, aux, value_weight, aux_weight=0.0):
     """Returns (total, policy loss, value loss, correct top moves, number of
-    policy targets)."""
+    policy targets, auxiliary loss). The auxiliary loss is over the rows that
+    have auxiliary targets (NaN where a shard had none), and only for a graph
+    net, whose auxiliary head nothing else uses."""
+    import torch
     import torch.nn.functional as F
 
-    logits, v = model(x)
+    use_aux = aux is not None and hasattr(model, "config")
+    if use_aux:
+        logits, v, predicted = model(x, aux=True)
+    else:
+        logits, v = model(x)
     logits = logits.masked_fill(~legal, -1e9)
     log_p = F.log_softmax(logits, dim=1)
     hard = action >= 0
@@ -338,7 +353,13 @@ def losses(model, x, legal, action, pi, value, value_weight):
     correct = ((logits.argmax(1) == target.argmax(1)) & has_target).sum()
     value_loss = F.mse_loss(v, value)
     total = policy_loss + value_weight * value_loss
-    return total, policy_loss, value_loss, correct, n_target
+    aux_loss = torch.zeros((), device=x.device)
+    if use_aux:
+        known = torch.isfinite(aux[:, 0])
+        if known.any():
+            aux_loss = F.mse_loss(predicted[known], aux[known])
+            total = total + aux_weight * aux_loss
+    return total, policy_loss, value_loss, correct, n_target, aux_loss
 
 
 def model_device(model):
@@ -351,28 +372,35 @@ def _to(batch, device):
 
 
 def evaluate(model, data, batch_size, value_weight):
+    """(policy loss, value loss, accuracy, auxiliary loss) on `data`."""
     import torch
 
     model.eval()
-    sums = np.zeros(4)
+    sums = np.zeros(6)
     with torch.no_grad():
         for start in range(0, data.n, batch_size):
             idx = torch.arange(
                 start, min(start + batch_size, data.n), device=data.value.device
             )
             batch = _to(data.batch(idx), model_device(model))
-            _, pl, vl, correct, nt = losses(model, *batch, value_weight)
+            _, pl, vl, correct, nt, al = losses(model, *batch, value_weight)
+            known = 0
+            if batch[5] is not None:
+                known = int(torch.isfinite(batch[5][:, 0]).sum())
             sums += [
                 pl.item() * nt.item(),
                 vl.item() * len(idx),
                 correct.item(),
                 nt.item(),
+                al.item() * known,
+                known,
             ]
     model.train()
     return (
         sums[0] / max(sums[3], 1),
         sums[1] / max(data.n, 1),
         sums[2] / max(sums[3], 1),
+        sums[4] / sums[5] if sums[5] else float("nan"),
     )
 
 
@@ -396,6 +424,13 @@ def main(argv=None):
         type=float,
         default=0.5,
         help="weight of the search's value in the value target (self-play rows)",
+    )
+    parser.add_argument(
+        "--aux-weight",
+        type=float,
+        default=0.1,
+        help="weight of the auxiliary targets (longest road, largest army, "
+        "final points) in the loss, for a graph net and shards that have them",
     )
     parser.add_argument("--val-fraction", type=float, default=0.05)
     parser.add_argument(
@@ -543,18 +578,22 @@ def main(argv=None):
             batch = _to(train.batch(idx), device)
             if augment:
                 batch = augment(*batch)
-            total, pl, vl, _, _ = losses(model, *batch, args.value_weight)
+            total, pl, vl, _, _, _ = losses(
+                model, *batch, args.value_weight, args.aux_weight
+            )
             opt.zero_grad(set_to_none=True)
             total.backward()
             opt.step()
             sched.step()
             sums += [pl.item(), vl.item(), 1]
-        vp, vv, va = evaluate(model, val, args.batch * 4, args.value_weight)
+        vp, vv, va, vaux = evaluate(model, val, args.batch * 4, args.value_weight)
         secs = time.time() - start
         row = [epoch + 1, sums[0] / sums[2], sums[1] / sums[2], vp, vv, va, secs]
         print(
             f"epoch {epoch + 1}: train policy {row[1]:.3f} value {row[2]:.3f} | "
-            f"val policy {vp:.3f} value {vv:.3f} accuracy {va:.1%} | {secs:.0f} s",
+            f"val policy {vp:.3f} value {vv:.3f} accuracy {va:.1%}"
+            + ("" if math.isnan(vaux) else f" aux {vaux:.3f}")
+            + f" | {secs:.0f} s",
             flush=True,
         )
         with open(log_path, "a", newline="") as f:

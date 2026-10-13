@@ -117,6 +117,15 @@ def topology():
 
 
 NUM_OTHER = 95
+#: Auxiliary targets, from the end of the game, for the player to move:
+#: longest road and largest army (+1 theirs, -1 the opponent's, 0 nobody's)
+#: and both players' final points / 15. Training only: play never reads them.
+AUX_TARGETS = 4
+
+
+def aux_shapes(glob=64):
+    """The auxiliary head's weights (training only; a net may lack them)."""
+    return {"aux1": (glob, glob), "aux2": (glob, AUX_TARGETS)}
 
 
 def shapes(hidden=32, glob=64, layers=3):
@@ -147,11 +156,11 @@ def shapes(hidden=32, glob=64, layers=3):
     return s
 
 
-def forward(params, x, layers, xp=np):
+def forward(params, x, layers, xp=np, aux=False):
     """Logits (batch, 313) and values (batch,) for inputs x (batch, 1297).
     params: name -> (W (in, out), b (out,)). `xp` is numpy or torch (whose
     functions this uses are named alike), so play and training share one
-    definition."""
+    definition. With `aux`, also the auxiliary predictions (batch, 4)."""
     topo = _topology(xp, x)
     b = x.shape[0]
 
@@ -230,7 +239,10 @@ def forward(params, x, layers, xp=np):
     logits[:, topo["other"]] = other
     v = relu(g @ params["value1"][0] + params["value1"][1])
     values = xp.tanh(v @ params["value2"][0] + params["value2"][1])[:, 0]
-    return logits, values
+    if not aux:
+        return logits, values
+    a = relu(g @ params["aux1"][0] + params["aux1"][1])
+    return logits, values, a @ params["aux2"][0] + params["aux2"][1]
 
 
 def _topology(xp, x):
@@ -264,10 +276,9 @@ class GraphNet:
     def load(z):
         """From an opened npz with arch == "graph"."""
         hidden, glob, layers = (int(z[k]) for k in ("g_hidden", "g_glob", "g_layers"))
-        params = {
-            name: (z[f"w_{name}"], z[f"b_{name}"])
-            for name in shapes(hidden, glob, layers)
-        }
+        names = list(shapes(hidden, glob, layers))
+        names += [n for n in aux_shapes(glob) if f"w_{n}" in z.files]
+        params = {name: (z[f"w_{name}"], z[f"b_{name}"]) for name in names}
         meta = {k: z[k] for k in z.files if k.startswith("meta_")}
         return GraphNet(params, hidden, glob, layers, meta)
 
@@ -407,10 +418,13 @@ def torch_model(hidden=32, glob=64, layers=3):
             self.config = (hidden, glob, layers)
             self.w = nn.ParameterDict()
             self.b = nn.ParameterDict()
-            for name, (a, b) in shapes(hidden, glob, layers).items():
+            for name, (a, b) in {
+                **shapes(hidden, glob, layers),
+                **aux_shapes(glob),
+            }.items():
                 std = (
                     0.01
-                    if name.endswith("_out") or name == "value2"
+                    if name.endswith("_out") or name in ("value2", "aux2")
                     else (2 / a) ** 0.5
                 )
                 self.w[name] = nn.Parameter(torch.randn(a, b) * std)
@@ -419,8 +433,8 @@ def torch_model(hidden=32, glob=64, layers=3):
         def params(self):
             return {k: (self.w[k], self.b[k]) for k in self.w}
 
-        def forward(self, x):
-            return forward(self.params(), x, layers, xp=torch)
+        def forward(self, x, aux=False):
+            return forward(self.params(), x, layers, xp=torch, aux=aux)
 
     return GraphModel()
 

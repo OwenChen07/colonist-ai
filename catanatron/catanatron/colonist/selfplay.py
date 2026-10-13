@@ -18,6 +18,15 @@ the moves (`pi`) and its value (`v`) as training targets, and the game result
 (`z`) once the game ends. Shards are written and resumed as in datagen.py, in
 the same format plus `pi` (float16, over the 313 moves), `v` and `full`.
 
+Human starts (--human-starts, a starts.py file): a --human-start-rate share
+of games start from a position of a real game against a person instead of
+an empty board, and are played out as usual.
+
+Each recorded position also gets auxiliary targets from the end of its game
+(`aux`, graph.AUX_TARGETS): for the player to move, who holds longest road
+and largest army (+1 they do, -1 the opponent, 0 nobody) and both players'
+final points over 15. Training learns them alongside (train.py --aux-weight).
+
 Playout cap randomization (KataGo, --full-rate below 1): only a random
 --full-rate share of moves get the full search, and only those are policy
 targets (`full`); the rest get a quick search of --fast-simulations without
@@ -40,6 +49,7 @@ import numpy as np
 
 from catanatron.colonist import encode as E
 from catanatron.colonist.datagen import shard_path
+from catanatron.colonist.graph import AUX_TARGETS
 from catanatron.colonist.mcts import TURNS_LIMIT, Search
 
 
@@ -57,14 +67,10 @@ class _Game:
     """One game in progress and its records. `seats` maps each color to what
     plays it: the main Net, another Net, or a bot spec string."""
 
-    def __init__(self, seed, search_args, seats, main):
-        from catanatron.colonist.rules import new_game
-        from catanatron.models.player import Color, Player
-
+    def __init__(self, seed, search_args, seats, main, game=None):
         self.seed = seed
-        players = [Player(Color.RED), Player(Color.BLUE)]  # moves come from here
-        self.game = new_game(players, seed=seed)
-        self.game.random.seed(seed * 2 + 1)
+        self.game = game if game is not None else fresh_game(seed)
+        self.human_start = game is not None
         self.rng = random.Random(seed)
         self.search_args = search_args
         self.main = main
@@ -157,27 +163,85 @@ class _Game:
         )
 
 
-def seat_plan(seed, net, opponents, opponent_rate):
+def fresh_game(seed):
+    """A new game on a random board, fixed by the seed."""
+    from catanatron.colonist.rules import new_game
+    from catanatron.models.player import Color, Player
+
+    players = [Player(Color.RED), Player(Color.BLUE)]  # moves come from here
+    game = new_game(players, seed=seed)
+    game.random.seed(seed * 2 + 1)
+    return game
+
+
+def seat_plan(seed, net, opponents, opponent_rate, colors=None):
     """Who plays each color in game `seed`: the main net in both seats, or,
     at `opponent_rate`, one seat to a random opponent. Fixed by the seed."""
     from catanatron.models.player import Color
 
+    first, second = colors or (Color.RED, Color.BLUE)
     rng = random.Random(seed ^ 0x0FF0)
     if opponents and rng.random() < opponent_rate:
         other = opponents[rng.randrange(len(opponents))]
         if rng.random() < 0.5:
-            return {Color.RED: net, Color.BLUE: other}
-        return {Color.RED: other, Color.BLUE: net}
-    return {Color.RED: net, Color.BLUE: net}
+            return {first: net, second: other}
+        return {first: other, second: net}
+    return {first: net, second: net}
 
 
-def play_games(net, seeds, search_args, opponents=(), opponent_rate=0.0):
+def human_start(seed, starts, rate):
+    """A game from a human start for game `seed`, at `rate`, or None. Fixed
+    by the seed."""
+    if not starts or rate <= 0:
+        return None
+    rng = random.Random(seed ^ 0x57A27)
+    if rng.random() >= rate:
+        return None
+    from catanatron.colonist.starts import start_game
+
+    return start_game(starts[rng.randrange(len(starts))], seed)
+
+
+def aux_targets(state, color):
+    """graph.AUX_TARGETS for `color` at the end of a game."""
+    from catanatron.state_functions import (
+        get_largest_army,
+        get_longest_road_color,
+        player_key,
+    )
+
+    def owner(holder):
+        return 0.0 if holder is None else (1.0 if holder == color else -1.0)
+
+    other = next(c for c in state.colors if c != color)
+    points = [
+        state.player_state[f"{player_key(state, c)}_ACTUAL_VICTORY_POINTS"] / 15
+        for c in (color, other)
+    ]
+    return [
+        owner(get_longest_road_color(state)),
+        owner(get_largest_army(state)[0]),
+        *points,
+    ]
+
+
+def play_games(
+    net,
+    seeds,
+    search_args,
+    opponents=(),
+    opponent_rate=0.0,
+    starts=None,
+    start_rate=0.0,
+):
     """Plays the games together, one network call per net per step. Returns
     the finished _Games and the number of network calls."""
-    games = [
-        _Game(s, search_args, seat_plan(s, net, list(opponents), opponent_rate), net)
-        for s in seeds
-    ]
+    games = []
+    for s in seeds:
+        game = human_start(s, starts, start_rate)
+        colors = None if game is None else game.state.colors
+        seats = seat_plan(s, net, list(opponents), opponent_rate, colors)
+        games.append(_Game(s, search_args, seats, net, game))
     pending = {}
     for g in games:
         step = g.advance()
@@ -210,25 +274,35 @@ def play_games(net, seeds, search_args, opponents=(), opponent_rate=0.0):
 
 def run_shard(task):
     out_dir, net_path, first, count, search_args, *rest = task
-    opponent_specs, opponent_rate = rest if rest else ((), 0.0)
+    rest = list(rest) + [(), 0.0, None, 0.0][len(rest) :]
+    opponent_specs, opponent_rate, starts_path, start_rate = rest
     from catanatron.colonist.net import Net
+    from catanatron.colonist.starts import load as load_starts
 
     os.makedirs(out_dir, exist_ok=True)
     path = shard_path(out_dir, first, count)
     net = Net.load(net_path)
     opponents = [load_opponent(o) for o in opponent_specs]
+    starts = load_starts(starts_path) if starts_path and start_rate > 0 else None
     start = time.time()
     games, calls = play_games(
-        net, range(first, first + count), search_args, opponents, opponent_rate
+        net,
+        range(first, first + count),
+        search_args,
+        opponents,
+        opponent_rate,
+        starts,
+        start_rate,
     )
-    statics, seeds, cols = [], [], {k: [] for k in "dmpvztf"}
+    statics, seeds, cols = [], [], {k: [] for k in "dmpvztfa"}
     gidx = []
     for i, g in enumerate(games):
         statics.append(E.encode_static(g.game.state.board.map))
         seeds.append(g.seed)
         winner = g.game.winning_color()
+        aux = {c: aux_targets(g.game.state, c) for c in g.game.state.colors}
         for d, m, p, v, color, turn, full in g.rows:
-            for k, x in zip("dmpvtf", (d, m, p, v, turn, full)):
+            for k, x in zip("dmpvtfa", (d, m, p, v, turn, full, aux[color])):
                 cols[k].append(x)
             cols["z"].append(0 if winner is None else (1 if color == winner else -1))
             gidx.append(i)
@@ -246,6 +320,8 @@ def run_shard(task):
         z=np.asarray(cols["z"], np.int8),
         turn=np.asarray(cols["t"], np.int16),
         full=np.asarray(cols["f"], bool),
+        aux=np.asarray(cols["a"], np.float16).reshape(-1, AUX_TARGETS),
+        human_start=np.asarray([g.human_start for g in games], bool),
     )
     os.replace(tmp, path)
     searches = sum(g.searches for g in games)
@@ -266,8 +342,14 @@ def run(
     setup_noise_scale=1.0,
     full_rate=1.0,
     fast_simulations=None,
+    human_starts=None,
+    human_start_rate=0.0,
 ):
     """Plays the shards of out_dir that aren't on disk yet."""
+    if not 0 <= human_start_rate <= 1:
+        raise ValueError("human_start_rate must be in [0, 1]")
+    if human_start_rate > 0 and not (human_starts and os.path.isfile(human_starts)):
+        raise ValueError(f"human starts file {human_starts!r} not found")
     if not math.isfinite(setup_noise_scale) or setup_noise_scale <= 0:
         raise ValueError("setup_noise_scale must be positive and finite")
     if not 0 < full_rate <= 1:
@@ -318,6 +400,8 @@ def run(
                     search_args,
                     tuple(opponents),
                     opponent_rate,
+                    human_starts,
+                    human_start_rate,
                 )
             )
     log(f"{len(tasks)} shards to play")
@@ -326,6 +410,8 @@ def run(
             f"playout cap randomization: {full_rate:.0%} of moves get {simulations} "
             f"simulations, the rest {fast_simulations}"
         )
+    if human_start_rate > 0:
+        log(f"human starts: {human_start_rate:.0%} of games, from {human_starts}")
     if not tasks:
         return
     start, played = time.time(), 0
@@ -375,6 +461,17 @@ def main(argv=None):
         default=None,
         help="simulations for the other moves, with --full-rate below 1",
     )
+    parser.add_argument(
+        "--human-starts",
+        default=None,
+        help="a starts.py file: start some games from real games' positions",
+    )
+    parser.add_argument(
+        "--human-start-rate",
+        type=float,
+        default=0.0,
+        help="share of games that start from --human-starts",
+    )
     parser.add_argument("--workers", type=int, default=None)
     parser.add_argument(
         "--opponents",
@@ -404,6 +501,8 @@ def main(argv=None):
         setup_noise_scale=args.setup_noise_scale,
         full_rate=args.full_rate,
         fast_simulations=args.fast_simulations,
+        human_starts=args.human_starts,
+        human_start_rate=args.human_start_rate,
     )
     return 0
 

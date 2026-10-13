@@ -133,6 +133,8 @@ def play(run, n, args):
         setup_noise_scale=args.setup_noise_scale,
         full_rate=args.full_rate,
         fast_simulations=args.fast_simulations,
+        human_starts=args.human_starts or None,
+        human_start_rate=args.human_start_rate if args.human_starts else 0.0,
         log=lambda m: say("  " + m),
     )
 
@@ -568,9 +570,22 @@ def main(argv=None):
         default="",
         help="comma-separated folders of live value shards, to score each net on",
     )
+    parser.add_argument(
+        "--human-starts",
+        default="",
+        help="a starts.py file: some self-play games start from real games",
+    )
+    parser.add_argument(
+        "--human-start-rate",
+        type=float,
+        default=0.25,
+        help="share of self-play games from --human-starts",
+    )
     parser.add_argument("--seed", type=int, default=3_000_000_000)
     parser.add_argument("--workers", type=int, default=None)
     args = parser.parse_args(argv)
+    if not 0 <= args.human_start_rate <= 1:
+        parser.error("--human-start-rate must be in [0, 1]")
     if not math.isfinite(args.setup_noise_scale) or args.setup_noise_scale <= 0:
         parser.error("--setup-noise-scale must be positive and finite")
     if not 0 < args.full_rate <= 1:
