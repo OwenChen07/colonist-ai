@@ -68,7 +68,8 @@ if [ "$agent" = claude ]; then
 fi
 if [ "$agent" = codex ]; then
   if command -v codex >/dev/null; then
-    timeout 3300 codex exec --full-auto -c sandbox_workspace_write.network_access=true \
+    timeout 3300 codex exec --sandbox workspace-write --approve-for-me \
+      -c sandbox_workspace_write.network_access=true \
       "$prompt" > "$log" 2>&1
     code=$?
   else
