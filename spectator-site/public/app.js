@@ -3,6 +3,7 @@ const STATUS = {
   searching: 'Looking for a game',
   paused: 'Paused',
   offline: 'Offline',
+  retired: 'Retired',
 };
 
 function el(tag, attrs = {}, ...children) {
@@ -48,6 +49,7 @@ function lastTen(recent = '') {
 
 function card(bot) {
   const name = encodeURIComponent(bot.name);
+  if (bot.status === 'retired') return retiredCard(bot, name);
   const watch = bot.status === 'playing' && bot.gameId
     ? el('a', { class: 'watch', href: `https://colonist.io/#${encodeURIComponent(bot.gameId)}`, target: '_blank', rel: 'noopener' }, 'Watch live ↗')
     : el('span', { class: 'watch disabled' }, bot.status === 'searching' ? 'Waiting for a game' : 'Not playing');
@@ -62,6 +64,19 @@ function card(bot) {
       el('dt', {}, 'Net'), el('dd', {}, bot.net || '—')),
     lastTen(bot.recent),
     watch);
+}
+
+// A retired account: its final standing and record, nothing live.
+function retiredCard(bot, name) {
+  return el('article', { class: 'bot retired' },
+    el('div', { class: 'top' },
+      el('a', { class: 'name', href: `https://colonist.io/profile/${name}`, target: '_blank', rel: 'noopener' }, bot.name),
+      el('span', { class: 'status' }, el('span', { class: 'dot' }), STATUS.retired)),
+    standing(bot.rank),
+    el('dl', {},
+      el('dt', {}, 'Ranked win rate'), el('dd', {}, winRate(bot)),
+      el('dt', {}, 'Last net'), el('dd', {}, bot.net || '—')),
+    lastTen(bot.recent));
 }
 
 const pct = (x) => (x == null ? '—' : `${(100 * x).toFixed(1)}%`);
@@ -108,7 +123,7 @@ function steps(training) {
   } else out.push(['next', 'Training', '3 epochs, about 2 h 20 min']);
   if (m) {
     const score = m.score != null ? `${(100 * m.score).toFixed(1)}% ± ${(100 * m.margin).toFixed(1)}% after ${m.games.toLocaleString('en-CA')} games` : 'starting';
-    out.push(['now', 'Promotion match', `vs round ${training.bestRound}: ${score} (needs 50% to be promoted; at most ${(m.maxGames || 2000).toLocaleString('en-CA')} games)`]);
+    out.push(['now', 'Promotion match', `vs round ${training.bestRound}: ${score} (must be clearly better, about 52%, to be promoted; at most ${(m.maxGames || 2000).toLocaleString('en-CA')} games)`]);
   } else out.push(['next', 'Promotion match', `vs round ${training.bestRound}, the best net`]);
   return out;
 }
@@ -165,7 +180,11 @@ async function refresh() {
     if (!response.ok || !Array.isArray(data.bots)) throw new Error('bad response');
     renderTraining(data.training, data.netRecords);
     renderCredits(data.credits);
-    box.replaceChildren(...(data.bots.length ? data.bots.map(card) : [el('p', { class: 'empty' }, 'No bots reporting yet.')]));
+    const active = data.bots.filter((b) => b.status !== 'retired');
+    const retired = data.bots.filter((b) => b.status === 'retired');
+    box.replaceChildren(...(active.length ? active.map(card) : [el('p', { class: 'empty' }, 'No bots reporting yet.')]));
+    document.getElementById('retired').hidden = !retired.length;
+    document.getElementById('retiredBots').replaceChildren(...retired.map(card));
     document.getElementById('updated').textContent = data.updatedAt
       ? `Updated ${new Date(data.updatedAt).toLocaleTimeString('en-CA', { timeZone: 'America/Toronto', hour: 'numeric', minute: '2-digit' })} Toronto time`
       : '';

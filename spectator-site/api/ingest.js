@@ -2,7 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { KEY, redis } from './_store.js';
 
 // Each bot VM posts its bots' status. Only these fields are accepted.
-const STATUSES = new Set(['playing', 'searching', 'paused', 'offline']);
+const STATUSES = new Set(['playing', 'searching', 'paused', 'offline', 'retired']);
 
 function exact(value, keys) {
   return value && typeof value === 'object' && !Array.isArray(value)

@@ -238,3 +238,20 @@ def test_credits_are_published_when_present(tmp_path):
     }
     assert gcp["remaining"] is None and gcp["source"] == "console"
     assert gcp["currency"] == "CAD"
+
+
+def test_retired_accounts_keep_their_record_and_show_nothing_live(tmp_path):
+    now = time.time()
+    games = [{"winner": "BLUE", "bot_color": "BLUE", "queue": "ranked", "at": now}]
+    live = {"schema": 1, "live": {"phase": "live"}, "colonistGame": "city871"}
+    _account(tmp_path / "ranked", os.getpid(), games, live)
+    (tmp_path / "ranked" / "NEEDS_OWNER.md").write_text("can't queue")
+    _account(tmp_path / "bot5", os.getpid())
+    body = snapshot(
+        tmp_path, {"bot5": "P"}, "vm1", retired={"ranked": "A", "bot2": "gone"}
+    )
+    bots = {b["name"]: b for b in body["bots"]}
+    assert set(bots) == {"A", "P"}  # no folder, no card
+    assert bots["A"]["status"] == "retired" and bots["A"]["gameId"] is None
+    assert bots["A"]["ranked"] == {"wins": 1, "losses": 0}
+    assert bots["A"]["recent"] == "W" and bots["A"]["net"] == "g1 round 11"

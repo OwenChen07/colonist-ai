@@ -16,6 +16,11 @@
       <section id="bots" class="bots" aria-live="polite">
         <p class="empty">Loading…</p>
       </section>
+      <section class="retired-section" id="retired" hidden>
+        <h2>Retired accounts</h2>
+        <div id="retiredBots" class="bots"></div>
+        <p class="note">Accounts that stopped playing (colonist stopped offering them ranked 1v1). Their record stays here.</p>
+      </section>
       <section class="training" id="training" hidden>
         <h2>Training</h2>
         <p id="trainingNow" class="now"></p>
@@ -35,7 +40,7 @@
             <tbody id="rounds"></tbody>
           </table>
         </div>
-        <p class="note">Each round plays self-play games, trains a new net on them, then matches it against the best net so far. It is promoted (and the bots switch to it) if it scores at least 50% there.</p>
+        <p class="note">Each round plays self-play games, trains a new net on them, then matches it against the best net so far. It is promoted (and the bots switch to it) only if it is clearly better there (about 52%), and isn't worse against a fixed older net, the AlphaBeta bot, or at judging real games.</p>
       </section>
       <section class="credits" id="credits" hidden>
         <h2>Cloud credits</h2>

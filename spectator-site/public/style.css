@@ -69,6 +69,9 @@ footer p + p { margin-top: 4px; }
 .playing .dot { background: var(--live); }
 .searching .dot { background: var(--wait); }
 .paused .dot { background: var(--bad); }
+.bot.retired { opacity: 0.75; }
+.retired .dot { background: var(--muted); }
+.retired-section { margin-top: 2rem; }
 
 dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; font-size: 0.9rem; }
 dt { color: var(--muted); }

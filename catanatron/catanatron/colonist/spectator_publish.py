@@ -314,20 +314,39 @@ def credits(data):
     return rows
 
 
-def snapshot(data, names, source, now=None, run="runs/g1"):
+def retired_status(folder, name, now=None):
+    """A retired account: its record, kept on the site, and no live state."""
+    now = time.time() if now is None else now
+    runner = _read_json(folder / "runner-status.json") or {}
+    counts, queue = record(folder, now)
+    return {
+        "name": name,
+        "status": "retired",
+        "queue": queue if queue in ("ranked", "casual") else None,
+        "net": runner.get("label") if isinstance(runner.get("label"), str) else None,
+        "gameId": None,
+        **counts,
+    }
+
+
+def snapshot(data, names, source, now=None, run="runs/g1", retired=None):
+    """This VM's bots, then its retired accounts (whose games stay in their
+    folders), with the training run and credits."""
+    retired = retired or {}
     bots = []
     for folder in sorted(Path(data).iterdir()):
         if folder.is_dir() and (folder / "runner-status.json").exists():
-            name = names.get(folder.name)
-            if name:
-                bots.append(bot_status(folder, name, now))
+            if folder.name in retired:
+                bots.append(retired_status(folder, retired[folder.name], now))
+            elif names.get(folder.name):
+                bots.append(bot_status(folder, names[folder.name], now))
     return {
         "schema": 2,
         "source": source,
         "updatedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
         "bots": bots,
         "training": training(run),
-        "netRecords": net_records(data, names, run),
+        "netRecords": net_records(data, {**names, **retired}, run),
         "credits": credits(data),
     }
 
@@ -357,15 +376,21 @@ def main(argv=None):
         default=os.environ.get("COLONIST_BOT_NAMES", ""),
         help="account=colonist name, comma-separated; other accounts aren't shown",
     )
+    parser.add_argument(
+        "--retired",
+        default=os.environ.get("COLONIST_RETIRED_NAMES", ""),
+        help="account=colonist name of retired accounts, shown with their record",
+    )
     parser.add_argument("--run", default="runs/g1", help="the self-play run shown")
     parser.add_argument("--interval", type=int, default=30)
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args(argv)
     key = Path(args.key_file).read_text().strip()
     names = parse_names(args.names)
+    retired = parse_names(args.retired)
     source = re.sub(r"[^a-z0-9-]", "-", args.source.lower())[:32]
     while True:
-        body = snapshot(args.data, names, source, run=args.run)
+        body = snapshot(args.data, names, source, run=args.run, retired=retired)
         try:
             publish(args.site, key, body)
             playing = sum(b["status"] == "playing" for b in body["bots"])

@@ -187,6 +187,14 @@ ends with 2.79 dead roads against 1.19. Next (step 2): an opponent model from
   bot VM, through an SSH tunnel to port 6080 (noVNC). The owner signs in;
   never type passwords for them.
 
+**CatBot77 (ranked) retired (12 Oct, 9:19 pm Toronto):** like Ericha8499, its
+Ranked 1v1 "Start Game" went missing or disabled; colonist-ranked is stopped
+and disabled. **bot6** (hersh3499, port 8767, casual first, then ranked) took
+its place on bot VM 1. The site shows retired accounts' records from
+`COLONIST_RETIRED_NAMES` (`ranked=CatBot77,bot2=Ericha8499` on bot VM 1).
+**Petra4620 (bot5)** runs the human opponent model A/B (`OPPONENT_MODEL`,
+`OPPONENT_MIX=0.5` in its env file; `models/human/net.npz`).
+
 **bot2 retired (12 Oct):** colonist showed Ericha8499's 1v1 Start buttons as
 "Unavailable" from 07:01Z with no notice (karma 20/20). Its settings moved to
 `scripts/vm/bot/accounts-retired/`; **bot5** (Petra4620, port 8766, 5 casual
