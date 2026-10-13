@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Hourly (cron on the coordinator): the orchestrator. Builds the context
+# Cron calls this hourly, but the full orchestrator runs only around 9:10 am
+# and 9:10 pm Toronto time. The cheap watchdog and sync jobs run separately.
+# The orchestrator builds the context
 # report, then runs a coding agent with ORCHESTRATOR.md (its standing brief)
 # to interpret training and live results and research, implement and deploy
 # improvements toward rank 1; it reports to the owner on the spectator site
@@ -20,6 +22,14 @@
 set -uo pipefail
 export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
 cd "$(dirname "$0")/../../.."
+# Using Toronto's clock here keeps both reports at the same local time across
+# daylight saving changes, without relying on cron's timezone support.
+if [ "${ORCHESTRATOR_FORCE:-0}" != 1 ]; then
+  case "$(TZ=America/Toronto date +%H)" in
+    09|21) ;;
+    *) exit 0 ;;
+  esac
+fi
 D=data/orchestrator
 mkdir -p "$D/runs" "$D/jobs"
 touch "$D/journal.md"

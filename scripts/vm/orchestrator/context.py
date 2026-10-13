@@ -1,4 +1,4 @@
-"""The orchestrator's context report: everything an hourly run should know,
+"""The orchestrator's context report: everything a twice-daily run should know,
 gathered cheaply on the coordinator (no agent needed), as Markdown on stdout.
 
     .venv/bin/python scripts/vm/orchestrator/context.py
