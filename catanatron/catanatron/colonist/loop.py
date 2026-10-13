@@ -16,8 +16,12 @@ Each round:
      52% is the bar): the new net replaces the best only if the test says
      so. With --gate loose (AlphaZero-like: the data keeps moving instead of
      coming from one net for many rounds), an SPRT of 46% against 50%: the
-     new net passes unless it is clearly worse, and is promoted in step 4
-     only if its guardrails hold.
+     new net passes unless it is clearly worse. Either way, a net that
+     passes is promoted in step 4 only if its guardrails hold: its
+     benchmark and its live value error (--live-data) are not clearly worse
+     than the best's, and, with --anchor, its score against that fixed net
+     isn't either (a match against last round's net can't see a slow slide,
+     or tell 1% gains from noise; the same anchor every round can).
   4. When the best net changed (or, with --gate loose, before a net that
      passed is promoted), it plays --benchmark (default AlphaBeta) on
      a fixed set of boards, to track progress toward the 65% gate, and each
@@ -303,30 +307,29 @@ def match(run, n, args):
         "score": round(result.score, 4),
         "decision": result.decision or "undecided",
         "gate": args.gate,
-        "promoted": passed and not loose,
+        "promoted": False,
         "setup_noise_scale": _round_setup_scale(run, n),
     }
-    if passed and loose:
+    if passed:
         # Promoted in the benchmark step if the guardrails hold, so nothing
         # (such as the ranked bot) switches to a net that is then undone.
         record["passed"] = True
-        say(f"  passed: round {n} is not clearly worse; checking its guardrails")
+        what = "is not clearly worse" if loose else "is better"
+        say(f"  passed: round {n} {what}; checking its guardrails")
         run.state["history"].append(record)
         return
-    if record["promoted"]:
-        shutil.copyfile(run.net(n), run.best)
-        run.state["best_round"] = n
-        run.state["since_promotion"] = 0
-        say(f"  promoted: round {n} is the new best")
-    else:
-        run.state["since_promotion"] += 1
-        say(f"  kept round {run.state['best_round']} as best")
-        if run.state["since_promotion"] >= STALL_ROUNDS:
-            say(
-                f"  WARNING: no promotion for {run.state['since_promotion']} rounds; "
-                "PLAN.md's fallbacks: more simulations, more opponents, a bigger net"
-            )
+    run.state["since_promotion"] += 1
+    say(f"  kept round {run.state['best_round']} as best")
+    _stall_warning(run)
     run.state["history"].append(record)
+
+
+def _stall_warning(run):
+    if run.state["since_promotion"] >= STALL_ROUNDS:
+        say(
+            f"  WARNING: no promotion for {run.state['since_promotion']} rounds; "
+            "PLAN.md's fallbacks: more simulations, more opponents, a bigger net"
+        )
 
 
 def live_calibration(run, n, args):
@@ -371,10 +374,49 @@ def _reference(run, key):
     return rows[-1][key] if rows else None
 
 
+def _anchor_match(run, net, args):
+    from catanatron.colonist.evaluate import match as play_match
+
+    result = play_match(
+        f"Z:{net}:{args.match_simulations}",
+        f"Z:{args.anchor}:{args.match_simulations}",
+        games=args.anchor_games,
+        seed=args.seed + 700_000_000,  # the same boards every time
+        workers=args.workers,
+        hosts=_eval_hosts(args),
+    )
+    say(f"  anchor: {result.summary()}")
+    return round(result.score, 4)
+
+
+def anchor_reference(run, args):
+    """The current best net's score against --anchor, played once per best
+    net (and again if the anchor changes)."""
+    best = run.state["best_round"]
+    known = run.state.get("anchor") or {}
+    if known.get("round") != best or known.get("net") != args.anchor:
+        say(f"  anchor: scoring the best net (round {best}) first")
+        known = {
+            "round": best,
+            "net": args.anchor,
+            "score": _anchor_match(run, run.net(best), args),
+        }
+        run.state["anchor"] = known
+        run.save()
+    return known["score"]
+
+
 def guardrails(run, n, args, record):
-    """For a net that passed a loose gate: (ok, reasons). Its benchmark and its
-    live value error must not be clearly worse than the current best's."""
+    """For a net that passed its match: (ok, reasons). Its benchmark, its
+    live value error and its score against --anchor must not be clearly
+    worse than the current best's."""
     reasons = []
+    if args.anchor:
+        reference = anchor_reference(run, args)
+        record["anchor"] = _anchor_match(run, run.net(n), args)
+        record["best_anchor"] = reference
+        if record["anchor"] < reference - args.guard_anchor:
+            reasons.append(f"anchor {record['anchor']} vs best's {reference}")
     bench = _reference(run, "benchmark")
     if args.benchmark and bench and record.get("benchmark"):
         if float(record["benchmark"]) < float(bench) - args.guard_benchmark:
@@ -417,6 +459,12 @@ def benchmark(run, n, args):
             run.state["best_round"] = n
             run.state["since_promotion"] = 0
             record["promoted"] = True
+            if "anchor" in record:
+                run.state["anchor"] = {
+                    "round": n,
+                    "net": args.anchor,
+                    "score": record["anchor"],
+                }
             say(f"  promoted: round {n} is the new best (guardrails held)")
         else:
             record["guardrails"] = reasons
@@ -424,6 +472,7 @@ def benchmark(run, n, args):
             say(
                 f"  kept round {run.state['best_round']} as best: " + "; ".join(reasons)
             )
+            _stall_warning(run)
     if record["promoted"] and args.gauntlet:
         gauntlet(run, n, args)
 
@@ -547,13 +596,26 @@ def main(argv=None):
         "--guard-benchmark",
         type=float,
         default=0.03,
-        help="loose gate: largest benchmark drop allowed below the best's",
+        help="largest benchmark drop allowed below the best's",
     )
     parser.add_argument(
         "--guard-live",
         type=float,
         default=0.02,
-        help="loose gate: largest live value MSE rise allowed over the best's",
+        help="largest live value MSE rise allowed over the best's",
+    )
+    parser.add_argument(
+        "--anchor",
+        default="",
+        help="a fixed net (.npz) every net that passes its match also plays; "
+        "it must not score clearly worse against it than the best did",
+    )
+    parser.add_argument("--anchor-games", type=int, default=2000)
+    parser.add_argument(
+        "--guard-anchor",
+        type=float,
+        default=0.02,
+        help="largest drop allowed below the best's score against --anchor",
     )
     parser.add_argument("--batch-pairs", type=int, default=50)
     parser.add_argument("--benchmark", default="AB:2")

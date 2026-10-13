@@ -370,3 +370,35 @@ def test_a_busy_gpu_host_is_skipped(tmp_path, monkeypatch):
     )
     with pytest.raises(RuntimeError, match="busy"):
         loop.train_remote(args, ["d", "--out", "o"], ["d"], "o", "b.npz", 1)
+
+
+def test_strict_gate_promotes_only_through_the_guardrails(tiny_args, monkeypatch):
+    """A clearly better net (strict gate) still has to hold its guardrails:
+    here it beats last round's net but slides against the fixed anchor."""
+    pytest.importorskip("torch")
+    from catanatron.colonist import loop
+
+    run, args, init = tiny_args
+    monkeypatch.setattr(evaluate, "sprt", lambda *a, **k: _fake_result("promote", 0.6))
+    played = []
+
+    def fake_match(new, opponent, **k):
+        played.append((new, opponent, k["games"]))
+        if "anchor" not in opponent:
+            return _fake_result(None, 0.9)  # benchmark and gauntlet
+        return _fake_result(None, 0.6 if "round_000" in new else 0.55)
+
+    monkeypatch.setattr(evaluate, "match", fake_match)
+    anchor = str(run.parent / "anchor.npz")
+    with open(init, "rb") as source, open(anchor, "wb") as copy:
+        copy.write(source.read())
+    strict = args + ["--anchor", anchor, "--anchor-games", "4"]
+    assert loop.main(strict + ["--init", init, "--rounds", "1"]) == 0
+    state = json.loads((run / "state.json").read_text())
+    record = state["history"][0]
+    assert record["passed"] and not record["promoted"]
+    assert record["anchor"] == 0.55 and record["best_anchor"] == 0.6
+    assert "anchor 0.55 vs best's 0.6" in record["guardrails"][0]
+    assert state["best_round"] == 0 and state["anchor"]["round"] == 0
+    anchor_games = [p for p in played if "anchor" in p[1]]
+    assert [g for _, _, g in anchor_games] == [4, 4]  # the best once, then round 1

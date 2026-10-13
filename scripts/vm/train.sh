@@ -14,6 +14,14 @@
 # games (starts.py; the loop's --human-start-rate), and every self-play
 # position also has auxiliary targets (longest road, largest army, final
 # points), which training learns at --aux-weight 0.1 (train.py's default).
+# From round 22's match, the gate is strict (SPRT 50% vs 54%: clearly better
+# than the best), and a net that passes must also hold its guardrails: no
+# clear drop against the fixed anchor (round 13, 2000 games on the same
+# boards), on the benchmark, or in live value error (0.01). Rounds 16-21 were
+# all promoted at 49-52%, coin flips the loose gate let through.
+# From round 23, self-play's full searches get 400 simulations instead of 160
+# (stronger policy targets: at 160 the search barely improved on the net),
+# with 3500 games a round instead of 5000 to keep rounds about as long.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 init=()
@@ -23,9 +31,10 @@ human=$(printf ',data/human/train/value%.0s' $(seq "${HUMAN_REPEAT:-10}"))
 starts=()
 [ -e data/human/starts.jsonl.gz ] && starts=(--human-starts data/human/starts.jsonl.gz)
 exec .venv/bin/python -m catanatron.colonist.loop runs/g1 "${init[@]}" \
-    --rounds 1000 --games 5000 --window 8 --train-sample 4000000 --gate loose --min-score 0.5 \
+    --rounds 1000 --games "${SELFPLAY_GAMES:-3500}" --window 8 --train-sample 4000000 \
+    --gate strict --anchor runs/g1/nets/round_013.npz --anchor-games 2000 --guard-live 0.01 \
     --distribute-eval \
-    --simulations 160 --full-rate 0.25 --fast-simulations 24 \
+    --simulations "${SELFPLAY_SIMULATIONS:-400}" --full-rate 0.25 --fast-simulations 24 \
     --reference AB:2,F \
     --extra-data $sp1/round_013/data,$sp1/round_014/data,$sp1/round_015/data,$sp1/round_016/data$human \
     --gauntlet $sp1/nets/round_016.npz,$sp1/nets/round_008.npz \
