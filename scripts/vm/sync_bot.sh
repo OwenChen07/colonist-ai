@@ -28,6 +28,8 @@ for B in ${COLONIST_BOT_HOSTS:-$COLONIST_BOT_HOST}; do
   # The human opponent model (opponent_model.py refresh), for bots that use it.
   [ -e models/human/net.npz ] && $SSH "$B" "mkdir -p $R/models/human" \
       && rsync -a -e "$SSH" models/human/net.npz "$B:$R/models/human/net.npz"
+  # The orchestrator's latest report for the site (scripts/vm/orchestrator).
+  [ -e data/orchestrator/site.json ] && rsync -a -e "$SSH" data/orchestrator/site.json "$B:$R/data/orchestrator.json"
   # Cloud credits for the site (scripts/credits.py on the owner's Mac).
   [ -e data/credits.json ] && rsync -a -e "$SSH" data/credits.json "$B:$R/data/credits.json"
   # Every account's folders (data/ranked, data/<account>, ...), not the

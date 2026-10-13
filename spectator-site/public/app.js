@@ -172,6 +172,62 @@ function renderCredits(rows) {
   }));
 }
 
+// ----- the orchestrator's hourly report and the owner's replies
+const KEY_STORE = 'orchestratorReplyKey';
+function replyKey() {
+  const input = document.getElementById('replyKey');
+  if (input.value) {
+    try { localStorage.setItem(KEY_STORE, input.value); } catch { /* not kept */ }
+    return input.value;
+  }
+  try { return localStorage.getItem(KEY_STORE) || ''; } catch { return ''; }
+}
+
+async function sendReply(questionId, textarea, status) {
+  const text = textarea.value.trim();
+  if (!text) return;
+  status.textContent = 'Sending…';
+  try {
+    const response = await fetch('/api/answer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ questionId, text, key: replyKey() }),
+    });
+    if (response.status === 401) { status.textContent = 'Wrong or missing reply key (below).'; return; }
+    if (!response.ok) throw new Error();
+    textarea.value = '';
+    status.textContent = 'Sent. The next hourly run reads it.';
+  } catch {
+    status.textContent = 'Not sent; try again.';
+  }
+}
+
+// Questions keep their typed answers across refreshes.
+let shownQuestions = '';
+function renderOrchestrator(o) {
+  const box = document.getElementById('orchestrator');
+  if (!o) { box.hidden = true; return; }
+  box.hidden = false;
+  document.getElementById('orchestratorAt').textContent = `Last report ${new Date(o.at).toLocaleString('en-CA', { timeZone: 'America/Toronto', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} Toronto time`;
+  document.getElementById('orchestratorSummary').textContent = o.summary;
+  const signature = JSON.stringify(o.questions);
+  if (signature === shownQuestions) return;
+  shownQuestions = signature;
+  document.getElementById('orchestratorQuestions').replaceChildren(...o.questions.map((q) => {
+    const textarea = el('textarea', { rows: '2', maxlength: '4000', 'aria-label': `Answer: ${q.text}` });
+    const status = el('span', { class: 'sent', 'aria-live': 'polite' });
+    const form = el('form', { class: 'reply question' },
+      el('p', {}, q.text), textarea, el('button', { type: 'submit' }, 'Answer'), status);
+    form.addEventListener('submit', (event) => { event.preventDefault(); sendReply(q.id, textarea, status); });
+    return form;
+  }));
+}
+
+document.getElementById('replyGeneral').addEventListener('submit', (event) => {
+  event.preventDefault();
+  sendReply('general', document.getElementById('generalText'), event.target.querySelector('.sent'));
+});
+
 async function refresh() {
   const box = document.getElementById('bots');
   try {
@@ -180,6 +236,7 @@ async function refresh() {
     if (!response.ok || !Array.isArray(data.bots)) throw new Error('bad response');
     renderTraining(data.training, data.netRecords);
     renderCredits(data.credits);
+    renderOrchestrator(data.orchestrator);
     const active = data.bots.filter((b) => b.status !== 'retired');
     const retired = data.bots.filter((b) => b.status === 'retired');
     box.replaceChildren(...(active.length ? active.map(card) : [el('p', { class: 'empty' }, 'No bots reporting yet.')]));

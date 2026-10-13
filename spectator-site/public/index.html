@@ -16,6 +16,22 @@
       <section id="bots" class="bots" aria-live="polite">
         <p class="empty">Loading…</p>
       </section>
+      <section class="orchestrator" id="orchestrator" hidden>
+        <h2>Orchestrator</h2>
+        <p class="note" id="orchestratorAt"></p>
+        <div id="orchestratorSummary" class="summary"></div>
+        <div id="orchestratorQuestions" class="questions"></div>
+        <form id="replyGeneral" class="reply">
+          <label for="generalText">Message to the orchestrator</label>
+          <textarea id="generalText" rows="2" maxlength="4000" placeholder="Anything it should know or do next"></textarea>
+          <button type="submit">Send</button>
+          <span class="sent" aria-live="polite"></span>
+        </form>
+        <details class="reply-key">
+          <summary>Reply key</summary>
+          <input id="replyKey" type="password" autocomplete="off" placeholder="Paste the reply key once; this browser remembers it" />
+        </details>
+      </section>
       <section class="retired-section" id="retired" hidden>
         <h2>Retired accounts</h2>
         <div id="retiredBots" class="bots"></div>

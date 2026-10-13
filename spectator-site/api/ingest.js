@@ -79,19 +79,34 @@ function validCredits(rows) {
     && ['api', 'console'].includes(row.source)));
 }
 
+// The orchestrator's latest hourly report (scripts/vm/orchestrator): plain
+// text, shown as text, never as HTML.
+function validOrchestrator(o) {
+  return o === null || (exact(o, ['at', 'summary', 'questions']) && iso(o.at)
+    && typeof o.summary === 'string' && o.summary.length <= 8000
+    && Array.isArray(o.questions) && o.questions.length <= 10
+    && o.questions.every((q) => exact(q, ['id', 'text'])
+      && typeof q.id === 'string' && /^[a-z0-9-]{1,40}$/.test(q.id)
+      && typeof q.text === 'string' && q.text.length <= 1000));
+}
+
 export function validBody(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return false;
   const base = ['schema', 'source', 'updatedAt', 'bots'];
-  const full = [...base, 'training', 'netRecords'];
-  return (exact(body, base)
-      || ((exact(body, full) || (exact(body, [...full, 'credits']) && validCredits(body.credits)))
-        && validTraining(body.training) && validNetRecords(body.netRecords)))
+  const allowed = [...base, 'training', 'netRecords', 'credits', 'orchestrator'];
+  const keys = Object.keys(body);
+  return base.every((k) => keys.includes(k)) && keys.every((k) => allowed.includes(k))
+    && ('training' in body) === ('netRecords' in body)
+    && (!('training' in body) || (validTraining(body.training) && validNetRecords(body.netRecords)))
+    && (!('credits' in body) || validCredits(body.credits))
+    && (!('orchestrator' in body) || validOrchestrator(body.orchestrator))
     && body.schema === 2
     && typeof body.source === 'string' && /^[a-z0-9-]{1,32}$/.test(body.source)
     && typeof body.updatedAt === 'string' && !Number.isNaN(Date.parse(body.updatedAt))
     && Array.isArray(body.bots) && body.bots.length <= 8 && body.bots.every(validBot);
 }
 
-function authorized(request) {
+export function authorized(request) {
   const secret = process.env.SPECTATOR_INGEST_KEY;
   const supplied = request.headers.authorization?.replace(/^Bearer\s+/i, '') || '';
   if (!secret || !supplied) return false;
