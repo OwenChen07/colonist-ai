@@ -10,8 +10,9 @@
 # round 15 their folder is listed HUMAN_REPEAT times (the loader keeps
 # duplicates), about 3% of positions at 10 instead of 0.3%. Live value error
 # is scored on the held-out 15% of those games, which training never reads.
-# From round 22, a quarter of self-play games start from a turn of one of those
-# games (starts.py; the loop's --human-start-rate), and every self-play
+# From round 22, self-play games can start from a turn of one of those games
+# (starts.py; the loop's --human-start-rate). The launch rate is 35% from
+# round 32; round 31 was already running at 25%. Every self-play
 # position also has auxiliary targets (longest road, largest army, final
 # points), which training learns at --aux-weight 0.1 (train.py's default).
 # From round 22's match, the gate is strict (SPRT 50% vs 54%: clearly better
@@ -27,7 +28,7 @@
 # of the human opponent model the A/B bot uses).
 # From round 27, a shorter, fresher window: 6 rounds instead of 8, without
 # sp1's old MLP-era data (~28% of games), and the human folder 4 times instead
-# of 10 (still about 3% of positions), so the 400-simulation targets are most
+# of 10 (8.2% of round 30's loaded positions), so the 400-simulation targets are most
 # of what training sees instead of ~10%.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -45,5 +46,5 @@ exec .venv/bin/python -m catanatron.colonist.loop runs/g1 "${init[@]}" \
     --reference AB:2,F \
     --extra-data "${human#,}" \
     --gauntlet $sp1/nets/round_016.npz,$sp1/nets/round_008.npz \
-    --live-data data/human/holdout/value "${starts[@]}" --before-round scripts/vm/human_dataset.sh \
+    --live-data data/human/holdout/value "${starts[@]}" --human-start-rate "${HUMAN_START_RATE:-0.35}" --before-round scripts/vm/human_dataset.sh \
     --workers "${COLONIST_LOCAL_WORKERS:-8}" --train-threads "${COLONIST_TRAIN_THREADS:-8}"
