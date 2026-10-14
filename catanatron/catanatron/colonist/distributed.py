@@ -94,16 +94,51 @@ def worker_hosts(environ=os.environ):
     return hosts
 
 
-def split(games, seed, local_processes, hosts):
+def selfplay_capacities(local_processes, hosts, environ=os.environ):
+    """Measured games/second in hundredths, keyed by host rather than worker
+    order. Without a calibration, retain the old process-based allocation."""
+    spec = environ.get("COLONIST_SELFPLAY_CAPACITIES", "")
+    path = environ.get("COLONIST_WORKERS_FILE")
+    if path and os.path.isfile(path):
+        with open(path) as stream:
+            for line in stream:
+                name, _, value = line.strip().partition("=")
+                if name == "COLONIST_SELFPLAY_CAPACITIES":
+                    spec = value
+    if not spec:
+        return [local_processes] + [p for _, p in hosts]
+    capacity = {}
+    for item in spec.split(","):
+        host, sep, rate = item.strip().rpartition(":")
+        if not sep or not host or not rate.isdigit() or int(rate) < 1:
+            raise ValueError(f"invalid self-play capacity {item!r}")
+        capacity[host] = int(rate)
+    # New workers without a measured rate get a conservative cloud-core estimate.
+    return [capacity.get("local", 4 * local_processes)] + [
+        capacity.get(host, 4 * p) for host, p in hosts
+    ]
+
+
+def split(games, seed, local_processes, hosts, weights=None):
     """Shard-aligned (seed, games) ranges: the coordinator's first, then one
-    per host, in proportion to processes. Every range but the last is whole
-    shards, so no seed is played twice."""
+    per host, in proportion to measured capacity (or processes by default).
+    Every range but the last is whole shards, so no seed is played twice."""
     shards = (games + SHARD_SIZE - 1) // SHARD_SIZE
-    weights = [local_processes] + [p for _, p in hosts]
+    if weights is None:
+        weights = [local_processes] + [p for _, p in hosts]
+    if len(weights) != len(hosts) + 1 or any(w <= 0 for w in weights):
+        raise ValueError("self-play weights must be positive for every worker")
     total = sum(weights)
     counts = [shards * w // total for w in weights]
-    for i in range(shards - sum(counts)):  # the remainder, coordinator first
-        counts[i % len(counts)] += 1
+    # Give spare shards to the largest fractional quotas. Round-robin from the
+    # coordinator can put a full extra shard on an already slow machine.
+    order = sorted(
+        range(len(weights)),
+        key=lambda i: (shards * weights[i] % total, -i),
+        reverse=True,
+    )
+    for i in order[: shards - sum(counts)]:
+        counts[i] += 1
     ranges, first = [], seed
     for count in counts:
         size = min(count * SHARD_SIZE, seed + games - first)
@@ -137,7 +172,9 @@ def run(
     if not hosts:
         raise ValueError("distributed self-play needs COLONIST_WORKER_HOSTS")
     local_processes = workers or os.cpu_count() or 1
-    ranges = split(games, seed, local_processes, hosts)
+    weights = selfplay_capacities(local_processes, hosts)
+    ranges = split(games, seed, local_processes, hosts, weights)
+    log(f"self-play allocation weights: {weights} (local, then configured hosts)")
     (local_seed, local_games), remote_ranges = ranges[0], ranges[1:]
     round_name = Path(out_dir).parent.name
     run_name = Path(out_dir).parent.parent.name

@@ -2,7 +2,12 @@ import os
 
 import pytest
 
-from catanatron.colonist.distributed import SHARD_SIZE, split, worker_hosts
+from catanatron.colonist.distributed import (
+    SHARD_SIZE,
+    selfplay_capacities,
+    split,
+    worker_hosts,
+)
 
 
 def test_worker_hosts_from_the_environment():
@@ -28,6 +33,33 @@ def test_split_covers_every_seed_once_in_whole_shards(games):
 def test_split_is_proportional_to_processes():
     (_, here), (_, a), (_, b) = split(64 * 16, 0, 8, [("a", 4), ("b", 4)])
     assert (here, a, b) == (64 * 8, 64 * 4, 64 * 4)
+
+
+def test_calibrated_split_balances_slow_pc_without_changing_processes():
+    hosts = [
+        ("gcp-a", 4),
+        ("gcp-b", 4),
+        *[(f"small-{i}", 2) for i in range(4)],
+        ("pc", 10),
+    ]
+    weights = [31, 18, 18, 9, 9, 9, 9, 19]
+    ranges = split(3500, 1000, 8, hosts, weights)
+    assert [size for _, size in ranges] == [896, 512, 512, 256, 256, 256, 256, 556]
+    assert [
+        seed for first, size in ranges for seed in range(first, first + size)
+    ] == list(range(1000, 4500))
+
+
+def test_capacities_are_keyed_by_host_and_read_each_round(tmp_path):
+    path = tmp_path / "workers.env"
+    hosts = [("gcp", 4), ("pc", 10)]
+    env = {"COLONIST_WORKERS_FILE": str(path)}
+    assert selfplay_capacities(8, hosts, env) == [8, 4, 10]
+    path.write_text("COLONIST_SELFPLAY_CAPACITIES=local:31,pc:19,gcp:18\n")
+    assert selfplay_capacities(8, hosts, env) == [31, 18, 19]
+    assert selfplay_capacities(8, list(reversed(hosts)), env) == [31, 19, 18]
+    with pytest.raises(ValueError, match="invalid self-play capacity"):
+        selfplay_capacities(8, hosts, {"COLONIST_SELFPLAY_CAPACITIES": "pc:0"})
 
 
 def test_workers_file_is_read_each_time(tmp_path):
