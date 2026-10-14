@@ -51,10 +51,21 @@ if [ "$agent" = claude ]; then
     "Bash(git status:*)" "Bash(git diff:*)" "Bash(git log:*)" "Bash(git show:*)"
     "Bash(git add:*)" "Bash(git commit:*)" "Bash(git pull --rebase:*)"
     "Bash(git push origin main-9mnmbh:*)"
+    "Bash(git push origin main-9mnmbh:main)"
     "Bash(.venv/bin/python -m pytest:*)" "Bash(.venv/bin/python -m black:*)"
-    "Bash(.venv/bin/python -m catanatron.colonist:*)"
-    "Bash(nohup .venv/bin/python -m catanatron.colonist:*)"
-    "Bash(.venv/bin/python scripts/:*)"
+    # Explicit entry points: directory/package prefixes do not match children.
+  )
+  for module in loss_report calibrate diagnostics evaluate selfplay train loop \
+      human_dataset human_data opponent_model starts; do
+    allowed+=("Bash(.venv/bin/python -m catanatron.colonist.$module:*)")
+    allowed+=("Bash(nohup .venv/bin/python -m catanatron.colonist.$module:*)")
+  done
+  for script in scripts/vm/orchestrator/context.py \
+      scripts/handoff_distributed_training.py scripts/credits.py; do
+    allowed+=("Bash(.venv/bin/python $script:*)")
+    allowed+=("Bash(nohup .venv/bin/python $script:*)")
+  done
+  allowed+=(
     "Bash(ssh -i ~/.ssh/colonist_worker_ed25519:*)"
     "Bash(scp -i ~/.ssh/colonist_worker_ed25519:*)"
     "Bash(rsync:*)"
