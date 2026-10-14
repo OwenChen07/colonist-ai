@@ -1278,3 +1278,47 @@ def test_a_game_first_seen_mid_setup_is_followed_from_its_log():
         late.handle(message)
     assert late.live.error is None
     assert late.live.record["log"] == seen_all.live.record["log"]
+
+
+@pytest.mark.parametrize("wrong", [False, True])
+def test_confirms_earlier_seats_discards_inserted_before_the_opponents(wrong):
+    """bot3's 2026-10-14 capture: seven opponent discards arrived first,
+    then the bot's eight were inserted before them by the converter."""
+    from catanatron.models.player import Color
+    from catanatron.colonist.live import RESOURCE_ID
+
+    conv = C._Converter.__new__(C._Converter)
+    conv.play_order = [1, 2]
+    conv.seat = {1: "RED", 2: "BLUE"}
+    conv.record = {"seats": ["RED", "BLUE"], "checks": []}
+    conv.log = [[["RED", "ROLL", [3, 4]], [3, 4]]]
+    conv.record["log"] = conv.log
+    conv.discard_phase = None
+    conv.discards = [(2, "WOOD")] * 7
+    conv._flush_discards()
+    before = len(conv.log)
+    cards = ["SHEEP"] * 3 + ["ORE", "ORE", "SHEEP", "SHEEP", "WHEAT"]
+    plan = [{"type": "DISCARD_RESOURCE", "resource": RESOURCE_ID[c]} for c in cards]
+    if wrong:
+        plan[0] = {"type": "DISCARD_RESOURCE", "resource": RESOURCE_ID["WOOD"]}
+    bridge = Bridge(random_net(hidden=(8,)), 2)
+    bridge.live = SimpleNamespace(
+        conv=conv,
+        record=conv.record,
+        bot=Color.RED,
+        error=None,
+        position_key=before,
+        describe=lambda a: {"resource": RESOURCE_ID[a.value]},
+    )
+    bridge.expect = (before, plan, time.time())
+    conv.discards = [(1, c) for c in cards]
+    conv._flush_discards()
+    bridge.live.position_key = len(conv.log)
+    replies = bridge.check_played(before)
+    if wrong:
+        assert replies[0]["state"] == "stopped"
+        assert "colonist recorded discards" in bridge.live.error
+    else:
+        assert replies == []
+        assert bridge.live.error is None
+    assert bridge.expect is None

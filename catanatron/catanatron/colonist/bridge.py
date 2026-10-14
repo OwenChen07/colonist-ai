@@ -640,6 +640,12 @@ class Bridge:
         self.expect = None
         self.pending_sends.clear()
         self.sent_raws = []
+        if expected["type"] == "DISCARD_RESOURCE":
+            # Earlier-seat discards can be inserted before the opponent's
+            # already-recorded discards, so the old log length misses them.
+            phase = self.live.conv.discard_phase
+            if phase is not None:
+                before = min(before, phase)
         mine = [
             action_from_json(entry[0])
             for entry in self.live.record["log"][before:]
