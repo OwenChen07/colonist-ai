@@ -63,6 +63,55 @@ def test_reports_out_of_sync_and_stops():
     assert not live.bot_to_move
 
 
+def test_ignores_transient_wrong_players_first_setup_placement():
+    """A reconnect can briefly assign log 2 to the wrong opening player."""
+    import msgpack
+    from catanatron.colonist.capture import decode
+
+    messages = _messages("capture_full_game")
+    start = next(
+        i
+        for i, message in enumerate(messages)
+        if (frame := decode({**message, "seq": i, "socket": 1})).type == C.GAME_STATE
+        and "gameState" in frame.data["data"].get("payload", {})
+    )
+    first = next(
+        i
+        for i in range(start + 1, len(messages))
+        if decode({**messages[i], "seq": i, "socket": 1}).type == C.DIFF
+    )
+    bridge = Bridge(random_net(hidden=(8,)), simulations=2)
+    bridge.reset()
+    bridge.handle(messages[start])
+    expected = bridge.live.conv.current
+    wrong = next(color for color in bridge.live.conv.play_order if color != expected)
+    wire = msgpack.unpackb(base64.b64decode(messages[first]["b64"]), raw=False)
+    entry = next(
+        entry
+        for entry in wire["data"]["payload"]["diff"]["gameLogState"].values()
+        if entry["text"]["type"] == C.LOG_PLACED_SETUP
+    )
+    entry["text"]["playerColor"] = wrong
+    transient = {
+        **messages[first],
+        "b64": base64.b64encode(msgpack.packb(wire)).decode(),
+    }
+
+    replies = bridge.handle(transient)
+    assert replies[-1]["state"] == "following"
+    assert bridge.live.error is None
+    assert bridge.live.record["log"] == []
+    wire["data"]["payload"]["diff"]["currentState"][
+        "currentTurnPlayerColor"
+    ] = 4  # A reconnect also delivered turns from a different game.
+    foreign = {**messages[first], "b64": base64.b64encode(msgpack.packb(wire)).decode()}
+    assert bridge.handle(foreign)[-1]["state"] == "following"
+    assert bridge.live.record["log"] == []
+    bridge.handle(messages[first])
+    assert bridge.live.error is None
+    assert bridge.live.record["log"][0][0][0] == bridge.live.conv.seat[expected]
+
+
 def test_bridge_suggests_legal_moves_only_on_the_bots_turn():
     bridge = Bridge(random_net(hidden=(16, 16)), simulations=4)
     bridge.reset()

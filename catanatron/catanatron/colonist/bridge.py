@@ -451,6 +451,40 @@ class Bridge:
         if frame.type == C.DIFF:
             diff = (frame.data["data"].get("payload") or {}).get("diff", {})
             logs = diff.get("gameLogState", {})
+            foreign_log_player = any(
+                (entry.get("text") or {}).get("playerColor") not in self.live.conv.seat
+                for entry in logs.values()
+                if (entry.get("text") or {}).get("playerColor") is not None
+                and (entry.get("text") or {}).get("type") not in C.LOG_IGNORED
+            )
+            foreign_state_player = any(
+                int(color) not in self.live.conv.seat
+                for color in diff.get("playerStates", {})
+            )
+            turn_color = (diff.get("currentState") or {}).get("currentTurnPlayerColor")
+            foreign_turn = (
+                turn_color is not None and turn_color not in self.live.conv.seat
+            )
+            if foreign_log_player or foreign_state_player or foreign_turn:
+                # Reconnecting sessions have sent diffs for a player not in
+                # this match. A later full snapshot restores the real log.
+                return declines + [
+                    self.status("following", "waiting for game snapshot")
+                ]
+            if self.live.game.state.is_initial_build_phase and any(
+                entry.get("text", {}).get("type") == C.LOG_PLACED_SETUP
+                for entry in logs.values()
+            ):
+                # During a reconnect, Colonist briefly sent setup placements
+                # that its next full snapshot contradicted (first BLUE on
+                # RED's turn, then BLUE at the wrong corner). Keep the last
+                # verified position and log cursor until a coherent update.
+                probe = copy.deepcopy(self.live)
+                probe.apply(frame)
+                if probe.error:
+                    return declines + [
+                        self.status("following", "waiting for setup snapshot")
+                    ]
             if not replaying:
                 self.note_deadline(diff.get("currentState"), frame.t)
             self.last_log_id = max([self.last_log_id, *(int(k) for k in logs)])
