@@ -288,6 +288,18 @@ def _dice_block(v, dice, me, them):
         v += _PLAIN_ODDS
         v += _PLAIN_ODDS
         return
+    # The block only changes when the dice do (a roll), but search encodes
+    # many positions per roll: keep it in the dice's own cache, which every
+    # change to the dice clears and copies of the game share.
+    key = ("encoded", me, them)
+    cached = dice._cache.get(key)
+    if cached is None:
+        cached = dice._cache[key] = _dice_features(dice, me, them)
+    v += cached
+
+
+def _dice_features(dice, me, them):
+    v = []
     v.append(float(dice.mode == "balanced"))
     v.append(dice.cards_left / 36)
     v.append(float(dice.cards_left < MIN_CARDS_BEFORE_RESHUFFLE))
@@ -303,6 +315,7 @@ def _dice_block(v, dice, me, them):
     v.append(dice.streak_count / 3)
     v += [x * 6 for x in dice.odds(me)]
     v += [x * 6 for x in dice.odds(them)]
+    return v
 
 
 DICE_SIZE = 96
