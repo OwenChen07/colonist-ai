@@ -132,6 +132,93 @@ def before_round(n, args):
         say(f"  it failed ({error}); playing on")
 
 
+# ----- prefetch: the next round's self-play while this one trains and plays
+# its match. It uses the best net of the moment (if this round's net is then
+# promoted, the next round's early games come from the previous best, as in
+# asynchronous AlphaZero). Shards on disk are skipped, so when the next
+# round's own self-play step comes, it waits for the prefetch and plays only
+# what is missing; a prefetch killed by a restart costs only its unfinished
+# shards.
+def _prefetch_path(run):
+    return os.path.join(run.root, "prefetch.json")
+
+
+def _prefetch_alive(info):
+    try:
+        os.kill(int(info["pid"]), 0)
+        return True
+    except (OSError, KeyError, TypeError, ValueError):
+        return False
+
+
+def ensure_prefetch(run, n, args):
+    """Start round n's self-play in the background, unless it is running or
+    has finished."""
+    if not getattr(args, "prefetch", False) or getattr(args, "prefetch_round", 0):
+        return
+    try:
+        with open(_prefetch_path(run)) as stream:
+            info = json.load(stream)
+    except (OSError, ValueError):
+        info = {}
+    if info.get("round") == n and (info.get("done") or _prefetch_alive(info)):
+        return
+    import subprocess
+
+    os.makedirs(run.dir(n), exist_ok=True)
+    log = open(run.dir(n, "prefetch.log"), "a")
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "catanatron.colonist.loop",
+            *args.argv,
+            "--prefetch-round",
+            str(n),
+        ],
+        stdout=log,
+        stderr=subprocess.STDOUT,
+    )
+    with open(_prefetch_path(run), "w") as stream:
+        json.dump({"round": n, "pid": process.pid}, stream)
+    say(f"round {n}: self-play started early, alongside round {n - 1}")
+
+
+def wait_prefetch(run, n):
+    """Wait for round n's background self-play, if it is still running."""
+    try:
+        with open(_prefetch_path(run)) as stream:
+            info = json.load(stream)
+    except (OSError, ValueError):
+        return
+    if info.get("round") != n or info.get("done") or not _prefetch_alive(info):
+        return
+    say(f"round {n}: waiting for its early self-play to finish")
+    while _prefetch_alive(info):
+        try:
+            with open(_prefetch_path(run)) as stream:
+                if json.load(stream).get("done"):
+                    break
+        except (OSError, ValueError):
+            pass
+        try:  # our own child: reap it, or it never stops looking alive
+            if os.waitpid(int(info["pid"]), os.WNOHANG)[0]:
+                break
+        except ChildProcessError:
+            pass
+        time.sleep(10)
+
+
+def prefetch_only(run, n, args):
+    """--prefetch-round: play round n's self-play and record that it's done."""
+    say(
+        f"round {n}: early self-play with the best net (round {run.state['best_round']})"
+    )
+    play(run, n, args)
+    with open(_prefetch_path(run), "w") as stream:
+        json.dump({"round": n, "pid": os.getpid(), "done": True}, stream)
+
+
 def play(run, n, args):
     from catanatron.colonist import selfplay
 
@@ -337,9 +424,10 @@ def match(run, n, args):
         "progress": lambda r: say(f"  {r.n} games: {r.score:.1%} ± {r.margin:.1%}"),
     }
     if args.gate == "confidence":
-        result = fixed_match(new, best, games=args.max_games, **match_options)
+        result = _fixed_match(new, best, args, match_options)
         if (
-            getattr(args, "extend_games", 0)
+            result.n >= args.max_games  # not stopped early
+            and getattr(args, "extend_games", 0)
             and result.score - result.margin < 0.50
             and result.score >= args.extend_below
         ):
@@ -350,8 +438,12 @@ def match(run, n, args):
         passed = lower >= 0.50
         say(f"  unrounded 95% lower bound: {lower:.5%} (need at least 50%)")
     elif args.gate == "progress":
-        result = fixed_match(new, best, games=args.max_games, **match_options)
-        if args.extend_games and args.extend_below <= result.score < args.extend_above:
+        result = _fixed_match(new, best, args, match_options)
+        if (
+            result.n >= args.max_games
+            and args.extend_games
+            and args.extend_below <= result.score < args.extend_above
+        ):
             _extend(result, new, best, args, match_options)
         passed = result.score >= args.promote_at
         say(
@@ -404,6 +496,34 @@ def match(run, n, args):
     say(f"  kept round {run.state['best_round']} as best")
     _stall_warning(run)
     run.state["history"].append(record)
+
+
+def _fixed_match(new, best, args, match_options):
+    """The fixed --max-games match, stopped after --futility-games when even
+    the top of its 95% interval is below --futility-below: such a net can't
+    pass, or reach the near-miss extension, so the remaining games would only
+    cost time. Boards are seeds seed, seed+1, ..., so the two halves are
+    exactly the boards of the one long match."""
+    from catanatron.colonist.evaluate import match as fixed_match
+
+    first_games = getattr(args, "futility_games", 0)
+    if not 0 < first_games < args.max_games:
+        return fixed_match(new, best, games=args.max_games, **match_options)
+    result = fixed_match(new, best, games=first_games, **match_options)
+    if result.score + result.margin < args.futility_below:
+        say(
+            f"  stopped after {result.n} games: {result.score:.1%} ± "
+            f"{result.margin:.1%} can't reach {args.futility_below:.1%}"
+        )
+        return result
+    rest = fixed_match(
+        new,
+        best,
+        games=args.max_games - result.n,
+        **{**match_options, "seed": match_options["seed"] + result.n // 2},
+    )
+    result.games.extend(rest.games)
+    return result
 
 
 def _extend(result, new, best, args, match_options):
@@ -808,6 +928,26 @@ def main(argv=None):
         help="progress gate: extra games for a near miss (0: none)",
     )
     parser.add_argument("--extend-below", type=float, default=0.505)
+    parser.add_argument(
+        "--prefetch",
+        action="store_true",
+        help="start the next round's self-play while this round trains and "
+        "plays its match",
+    )
+    parser.add_argument("--prefetch-round", type=int, default=0, help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--futility-games",
+        type=int,
+        default=0,
+        help="confidence/progress gates: check after this many games and "
+        "stop if the net clearly can't pass (0: always play --max-games)",
+    )
+    parser.add_argument(
+        "--futility-below",
+        type=float,
+        default=0.505,
+        help="stop early when the top of the 95%% interval is below this",
+    )
     parser.add_argument("--extend-above", type=float, default=0.525)
     parser.add_argument(
         "--train-from",
@@ -957,6 +1097,11 @@ def main(argv=None):
             f"best from round {s['best_round']}"
         )
 
+    args.argv = list(sys.argv[1:] if argv is None else argv)
+    if args.prefetch_round:
+        prefetch_only(run, args.prefetch_round, args)
+        return 0
+
     if args.gate == "confidence" and "human_confirmation_after_ns" not in run.state:
         # Start a prospective set at rollout. Existing games have already
         # influenced past model selection and cannot serve as fresh evidence.
@@ -990,6 +1135,10 @@ def main(argv=None):
             run.state["step"] = "selfplay"
             run.save()
             continue
+        if step == "selfplay":
+            wait_prefetch(run, n)
+        else:  # train, match, benchmark: the next round can start playing
+            ensure_prefetch(run, n + 1, args)
         actions[step](run, n, args)
         run.state["step"] = STEPS[STEPS.index(step) + 1]
         run.save()

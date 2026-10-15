@@ -708,3 +708,88 @@ def test_confidence_gate_plays_no_extra_games_for_a_clear_miss(tiny_args, monkey
     calls, record = _confidence_match(tiny_args, monkeypatch, 0.49)
     assert calls == [2000] and record["games"] == 2000
     assert record["decision"] == "keep"
+
+
+def test_a_clearly_losing_match_stops_early_on_the_same_boards(tmp_path, monkeypatch):
+    """With --futility-games, a match whose 95% interval can't reach the bar
+    stops; otherwise the rest is played on the next seeds, so the boards are
+    exactly the long match's."""
+    from catanatron.colonist import loop
+
+    calls = []
+
+    def fake_match(new, best, games, seed, **k):
+        calls.append((games, seed))
+        return _match_result(score, games, seed)
+
+    monkeypatch.setattr(evaluate, "match", fake_match)
+    args = SimpleNamespace(max_games=2000, futility_games=1000, futility_below=0.505)
+    score = 0.44  # clearly losing: stops
+    result = loop._fixed_match("a", "b", args, {"seed": 100})
+    assert calls == [(1000, 100)] and result.n == 1000
+    calls.clear()
+    score = 0.5  # could still pass: the rest, on the following boards
+    result = loop._fixed_match("a", "b", args, {"seed": 100})
+    assert calls == [(1000, 100), (1000, 600)] and result.n == 2000
+    calls.clear()
+    args.futility_games = 0  # off: one match
+    loop._fixed_match("a", "b", args, {"seed": 100})
+    assert calls == [(2000, 100)]
+
+
+def test_prefetch_starts_the_next_round_once_and_records_when_done(
+    tmp_path, monkeypatch
+):
+    import subprocess
+
+    from catanatron.colonist import loop
+
+    run = loop.Run(str(tmp_path / "run"))
+    init = tmp_path / "init.npz"
+    random_net(hidden=(8,)).save(str(init))
+    run.start(str(init))
+    started = []
+
+    class FakeProcess:
+        pid = os.getpid()  # "alive"
+
+    monkeypatch.setattr(
+        subprocess, "Popen", lambda argv, **k: started.append(argv) or FakeProcess()
+    )
+    args = SimpleNamespace(prefetch=True, prefetch_round=0, argv=[run.root, "--x"])
+    loop.ensure_prefetch(run, 5, args)
+    loop.ensure_prefetch(run, 5, args)  # running: not again
+    assert len(started) == 1 and started[0][-2:] == ["--prefetch-round", "5"]
+    assert started[0][3:5] == [run.root, "--x"]
+    # The early self-play itself: plays round 5 and records it's done.
+    played = []
+    monkeypatch.setattr(loop, "play", lambda run, n, args: played.append(n))
+    loop.prefetch_only(run, 5, args)
+    assert played == [5]
+    info = json.load(open(os.path.join(run.root, "prefetch.json")))
+    assert info["round"] == 5 and info["done"]
+    FakeProcess.pid = 2**22 + 12345  # gone: but round 5 is done, so not again
+    loop.ensure_prefetch(run, 5, args)
+    assert len(started) == 1
+    loop.wait_prefetch(run, 5)  # nothing running: returns at once
+    off = SimpleNamespace(prefetch=False, prefetch_round=0, argv=[])
+    loop.ensure_prefetch(run, 6, off)
+    assert len(started) == 1
+
+
+def test_the_loop_starts_prefetch_after_self_play_and_waits_before_it(
+    tiny_args, monkeypatch
+):
+    pytest.importorskip("torch")
+    from catanatron.colonist import loop
+
+    run, args, init = tiny_args
+    calls = []
+    monkeypatch.setattr(
+        loop, "ensure_prefetch", lambda run, n, args: calls.append(("start", n))
+    )
+    monkeypatch.setattr(loop, "wait_prefetch", lambda run, n: calls.append(("wait", n)))
+    monkeypatch.setattr(evaluate, "sprt", lambda *a, **k: _fake_result("keep", 0.4))
+    monkeypatch.setattr(evaluate, "match", lambda *a, **k: _fake_result(None, 0.6))
+    assert loop.main(args + ["--prefetch", "--init", init, "--rounds", "1"]) == 0
+    assert calls[0] == ("wait", 1) and ("start", 2) in calls
