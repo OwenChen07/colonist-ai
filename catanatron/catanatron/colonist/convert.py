@@ -110,8 +110,10 @@ LOG_PIECE_NOTICE = {72, 87}  # before matching setup road / settlement placement
 #: (58; the move itself follows as 11), "move the robber" prompts (60),
 #: colonist's timer choosing a player's discards (64; the discard follows as 55),
 #: longest road / largest army
-#: changing hands or being lost (66, 67, 68), which Catanatron works out itself, trade offers
-#: between players (118: an offer alone changes nothing; an accepted trade
+#: changing hands or being lost (66, 67, 68), which Catanatron works out itself,
+#: embargo notices (113: tradeState.embargoState only restricts player trades,
+#: which the bot never accepts), and trade offers between players
+#: (118: an offer alone changes nothing; an accepted trade
 #: logs its own entry, which is not mapped yet and so stops the record), and
 #: a pre-game counter (130), and how many players the robber can steal
 #: from (139, logged with the robber move; the steal itself may follow in a
@@ -147,6 +149,7 @@ LOG_IGNORED = {
     66,
     67,
     68,
+    113,
     118,
     124,
     128,

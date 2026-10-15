@@ -99,6 +99,20 @@ def test_unknown_log_entry_stops_the_record(frames):
     assert replay(conv.record).applied == len(conv.record["log"])
 
 
+def test_trade_embargo_notice_does_not_change_record(frames):
+    # bot5 bridge-20261015-084653: this log accompanies only embargoState.
+    notice = {"type": 113, "playerColor": 5, "embargoedPlayerColor": 1}
+    changed = with_extra_log_entry(frames, notice)
+    diff = next(f for f in changed if f.type == 91)
+    diff.data["data"]["payload"]["diff"]["tradeState"] = {
+        "embargoState": {"5": {"activeEmbargosAgainst": [1]}}
+    }
+    conv = convert(changed)
+    assert not conv.unsupported
+    assert conv.record == convert(frames).record
+    assert replay(conv.record).ok
+
+
 def test_bank_shortage_notice_does_not_stop_conversion(frames):
     notice = {
         "type": 146,
