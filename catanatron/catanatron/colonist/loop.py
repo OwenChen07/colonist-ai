@@ -18,8 +18,9 @@ Each round:
      near miss (--extend-below/--extend-above) plays --extend-games more on
      other boards and is judged on all of them. With --gate
      confidence, play a fixed --max-games games and require the unrounded
-     95% lower score bound to reach 50%, plus paired game-level human and
-     tactical checks. With --gate strict, play at least
+     95% lower score bound to reach 50% (a near miss scoring at least
+     --extend-below plays --extend-games more and is judged on all of them),
+     plus paired game-level human and tactical checks. With --gate strict, play at least
      --min-games (default 1000) and at most --max-games in an SPRT of 50%
      against 54%. With --gate loose (AlphaZero-like: the data keeps moving instead of
      coming from one net for many rounds), an SPRT of 46% against 50%: the
@@ -337,25 +338,21 @@ def match(run, n, args):
     }
     if args.gate == "confidence":
         result = fixed_match(new, best, games=args.max_games, **match_options)
+        if (
+            getattr(args, "extend_games", 0)
+            and result.score - result.margin < 0.50
+            and result.score >= args.extend_below
+        ):
+            # A near miss: a real 1.5-2% gain can't clear the bound in 2000
+            # games (it needs about 52.2%) but can in 4000 (about 51.6%).
+            _extend(result, new, best, args, match_options)
         lower = result.score - result.margin
         passed = lower >= 0.50
         say(f"  unrounded 95% lower bound: {lower:.5%} (need at least 50%)")
     elif args.gate == "progress":
         result = fixed_match(new, best, games=args.max_games, **match_options)
         if args.extend_games and args.extend_below <= result.score < args.extend_above:
-            # A near miss: settle it on more boards rather than one 2000-game
-            # coin. The extra games use other seeds, so no board repeats.
-            say(
-                f"  {result.score:.1%} after {result.n} games is a near miss; "
-                f"playing {args.extend_games} more"
-            )
-            more = fixed_match(
-                new,
-                best,
-                games=args.extend_games,
-                **{**match_options, "seed": match_options["seed"] + 250_000},
-            )
-            result.games.extend(more.games)
+            _extend(result, new, best, args, match_options)
         passed = result.score >= args.promote_at
         say(
             f"  {result.score:.2%} ± {result.margin:.2%} over {result.n} games "
@@ -407,6 +404,25 @@ def match(run, n, args):
     say(f"  kept round {run.state['best_round']} as best")
     _stall_warning(run)
     run.state["history"].append(record)
+
+
+def _extend(result, new, best, args, match_options):
+    """Settle a near miss on more boards rather than one 2000-game coin:
+    --extend-games more games on other seeds (no board repeats), added to
+    `result`, which is then judged on all of them."""
+    from catanatron.colonist.evaluate import match as fixed_match
+
+    say(
+        f"  {result.score:.1%} after {result.n} games is a near miss; "
+        f"playing {args.extend_games} more"
+    )
+    more = fixed_match(
+        new,
+        best,
+        games=args.extend_games,
+        **{**match_options, "seed": match_options["seed"] + 250_000},
+    )
+    result.games.extend(more.games)
 
 
 def _stall_warning(run):

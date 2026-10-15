@@ -671,3 +671,40 @@ def test_training_continues_from_the_previous_round_unless_it_was_clearly_worse(
     best_args = SimpleNamespace(train_from="best", reset_below=0.48)
     run.state["history"][-1]["score"] = 0.55
     assert loop.train_init(run, 4, best_args)[0] == run.best
+
+
+def _confidence_match(tiny_args, monkeypatch, first, second=0.5):
+    """Round 1's confidence-gate match with the given scores; returns the
+    match calls (games) and the round's record."""
+    from catanatron.colonist import loop
+
+    run, args, init = tiny_args
+    calls = []
+
+    def fake_match(new, opponent, games, seed, **k):
+        if "round_" not in opponent:
+            return _match_result(0.6, 4, seed)  # benchmark
+        calls.append(games)
+        return _match_result(first if len(calls) == 1 else second, games, seed)
+
+    monkeypatch.setattr(evaluate, "match", fake_match)
+    gate = ["--gate", "confidence", "--max-games", "2000", "--extend-games", "2000"]
+    assert loop.main(args + gate + ["--init", init, "--rounds", "1"]) == 0
+    return calls, json.loads((run / "state.json").read_text())["history"][0]
+
+
+def test_confidence_gate_extends_a_near_miss_and_judges_all_games(
+    tiny_args, monkeypatch
+):
+    pytest.importorskip("torch")
+    calls, record = _confidence_match(tiny_args, monkeypatch, 0.51, 0.52)
+    assert calls == [2000, 2000]
+    assert record["games"] == 4000 and record["score"] == 0.515
+    assert record["lower_bound"] == pytest.approx(0.515 - record["margin"])
+
+
+def test_confidence_gate_plays_no_extra_games_for_a_clear_miss(tiny_args, monkeypatch):
+    pytest.importorskip("torch")
+    calls, record = _confidence_match(tiny_args, monkeypatch, 0.49)
+    assert calls == [2000] and record["games"] == 2000
+    assert record["decision"] == "keep"
