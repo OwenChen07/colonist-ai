@@ -168,3 +168,7 @@ td small { color: var(--muted); font-weight: 400; }
 .orchestrator button { justify-self: start; font: inherit; padding: 0.35rem 0.9rem; border-radius: 8px; border: 1px solid currentColor; background: transparent; color: inherit; cursor: pointer; }
 .orchestrator .sent { color: var(--muted); font-size: 0.9em; }
 .orchestrator .reply-key { margin-top: 0.9rem; color: var(--muted); }
+
+/* About 20 rounds tall; older rounds scroll. */
+.rounds-wrap { max-height: 46rem; overflow-y: auto; }
+.rounds-wrap thead th { position: sticky; top: 0; background: var(--card); z-index: 1; }

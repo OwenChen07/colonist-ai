@@ -245,9 +245,10 @@ def round_progress(lines, number, epochs=3, now=None):
     return progress
 
 
-def training(run, limit=20, now=None):
+def training(run, limit=200, now=None):
     """The self-play run's progress, from its state.json: the current round
-    and step, and each round's results."""
+    and step, and each round's results. The epochs per round come from
+    train-config.json (sync_bot.sh writes it from the loop's settings)."""
     path = Path(run) / "state.json"
     state = _read_json(path)
     if not isinstance(state, dict):
@@ -272,10 +273,13 @@ def training(run, limit=20, now=None):
             }
         )
     current = int(state.get("round", 0))
+    config = _read_json(Path(run) / "train-config.json") or {}
+    epochs = config.get("epochs")
+    epochs = epochs if isinstance(epochs, int) and 0 < epochs < 100 else 3
     progress = None
     try:
         tail = (Path(run) / "train-tail.log").read_text(errors="replace")
-        progress = round_progress(tail.splitlines(), current, now=now)
+        progress = round_progress(tail.splitlines(), current, epochs, now=now)
     except OSError:
         pass
     return {
@@ -287,6 +291,7 @@ def training(run, limit=20, now=None):
             path.stat().st_mtime, dt.timezone.utc
         ).isoformat(),
         "rounds": rounds,
+        "epochs": epochs,
     }
 
 

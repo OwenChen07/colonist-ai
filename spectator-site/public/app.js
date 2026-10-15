@@ -125,7 +125,7 @@ function steps(training) {
       }
       out.push(['now', 'Training', `epoch ${done} of ${t.total} done${quality} · ${estimate}`]);
     }
-  } else out.push(['next', 'Training', '3 epochs; estimate after the first epoch']);
+  } else out.push(['next', 'Training', `${training.epochs || 3} epochs; estimate after the first epoch`]);
   if (m) {
     const score = m.score != null ? `${(100 * m.score).toFixed(1)}% ± ${(100 * m.margin).toFixed(1)}% after ${m.games.toLocaleString('en-CA')} games` : 'starting';
     out.push(['now', 'Promotion match', `vs round ${training.bestRound}: ${score} (must be clearly better, about 52%, to be promoted; at most ${(m.maxGames || 2000).toLocaleString('en-CA')} games)`]);

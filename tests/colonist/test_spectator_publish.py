@@ -330,3 +330,19 @@ def test_orchestrator_report_is_published_as_plain_fields(tmp_path):
         {"id": "gpu-hours", "text": "OK to run the PC overnight?"}
     ]
     assert set(report) == {"at", "summary", "questions"}
+
+
+def test_training_shows_the_configured_epochs_and_every_round(tmp_path):
+    history = [{"round": r, "games": 1000, "score": 0.5} for r in range(1, 58)]
+    (tmp_path / "state.json").write_text(
+        json.dumps({"round": 58, "step": "train", "best_round": 40, "history": history})
+    )
+    assert training(tmp_path)["epochs"] == 3  # no config yet: train.sh's default
+    (tmp_path / "train-config.json").write_text('{"epochs": 4, "games": 5000}')
+    t = training(tmp_path)
+    assert t["epochs"] == 4 and len(t["rounds"]) == 57
+    (tmp_path / "train-tail.log").write_text(
+        "[20:00:00] round 58: training on 10 data folders, from the best net\n"
+        "epoch 1: train policy 0.9 value 0.4 | val policy 0.9 value 0.4 accuracy 77.0% | 200 s\n"
+    )
+    assert training(tmp_path)["progress"]["training"]["total"] == 4

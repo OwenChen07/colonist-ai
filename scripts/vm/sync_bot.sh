@@ -19,6 +19,11 @@ flock -n 9 || exit 0
 # Six hundred lines could drop that marker and make progress exceed 100%.
 tail -n 3000 runs/train.log > runs/g1/.train-tail.log 2>/dev/null \
   && mv runs/g1/.train-tail.log runs/g1/train-tail.log
+# The loop's per-round settings for the site (train.sh reads them from
+# workers.env, with these defaults).
+epochs=$(sed -n 's/^TRAIN_EPOCHS=\([0-9]*\).*/\1/p' scripts/vm/workers.env 2>/dev/null | tail -1)
+games=$(sed -n 's/^SELFPLAY_GAMES=\([0-9]*\).*/\1/p' scripts/vm/workers.env 2>/dev/null | tail -1)
+printf '{"epochs": %s, "games": %s}\n' "${epochs:-3}" "${games:-3500}" > runs/g1/train-config.json
 # Every bot VM: COLONIST_BOT_HOSTS (space-separated), or the one ranked host.
 for B in ${COLONIST_BOT_HOSTS:-$COLONIST_BOT_HOST}; do
   rsync -a --exclude "*.egg-info" --exclude __pycache__ -e "$SSH" \
@@ -27,6 +32,7 @@ for B in ${COLONIST_BOT_HOSTS:-$COLONIST_BOT_HOST}; do
   rsync -a -e "$SSH" runs/g1/nets/ "$B:$R/runs/g1/nets/"
   rsync -a -e "$SSH" runs/g1/state.json "$B:$R/runs/g1/state.json"
   rsync -a -e "$SSH" runs/g1/train-tail.log "$B:$R/runs/g1/train-tail.log" 2>/dev/null
+  rsync -a -e "$SSH" runs/g1/train-config.json "$B:$R/runs/g1/train-config.json" 2>/dev/null
   # The human opponent model (opponent_model.py refresh), for bots that use it.
   [ -e models/human/net.npz ] && $SSH "$B" "mkdir -p $R/models/human" \
       && rsync -a -e "$SSH" models/human/net.npz "$B:$R/models/human/net.npz"

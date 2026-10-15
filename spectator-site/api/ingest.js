@@ -56,14 +56,18 @@ function validProgress(p) {
 
 function validTraining(t) {
   const keys = ['round', 'step', 'bestRound', 'since', 'rounds'];
-  return t === null || ((exact(t, keys) || (exact(t, [...keys, 'progress']) && validProgress(t.progress)))
+  const extra = Object.keys(t || {}).filter((k) => !keys.includes(k));
+  return t === null || (keys.every((k) => k in t)
+    && extra.every((k) => ['progress', 'epochs'].includes(k))
+    && (!('progress' in t) || validProgress(t.progress))
+    && (!('epochs' in t) || (Number.isInteger(t.epochs) && t.epochs > 0 && t.epochs < 100))
     && count(t.round) && count(t.bestRound) && iso(t.since)
     && typeof t.step === 'string' && /^[a-z_]{0,20}$/.test(t.step)
-    && Array.isArray(t.rounds) && t.rounds.length <= 20 && t.rounds.every(validRound));
+    && Array.isArray(t.rounds) && t.rounds.length <= 200 && t.rounds.every(validRound));
 }
 
 function validNetRecords(rows) {
-  return Array.isArray(rows) && rows.length <= 30 && rows.every((row) =>
+  return Array.isArray(rows) && rows.length <= 200 && rows.every((row) =>
     exact(row, ['round', 'wins', 'losses']) && count(row.round) && count(row.wins) && count(row.losses));
 }
 
