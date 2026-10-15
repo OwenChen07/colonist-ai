@@ -35,7 +35,12 @@
 # net (--train-from latest; back to the best after a round below 48%), and
 # the progress gate promotes at 51% against the best, playing 2000 more games
 # for a near miss (50.5-52.5%); the anchor, benchmark and live-error
-# guardrails still apply. PROMOTION_GATE=confidence restores the old gate.
+# guardrails still apply.
+# Oct 15: the default is back to the confidence gate (a fixed 2000-game match
+# whose 95% lower bound must reach 50%, plus anchor, benchmark and tactical
+# checks); its held-out human-game check now asks only that a net is not
+# clearly worse (loop.py). Warm starts stay. PROMOTION_GATE=progress uses the
+# 51% gate instead.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 init=()
@@ -46,7 +51,7 @@ starts=()
 [ -e data/human/starts.jsonl.gz ] && starts=(--human-starts data/human/starts.jsonl.gz)
 exec .venv/bin/python -m catanatron.colonist.loop runs/g1 "${init[@]}" \
     --rounds 1000 --games "${SELFPLAY_GAMES:-3500}" --epochs "${TRAIN_EPOCHS:-3}" --window 6 --train-sample 4000000 \
-    --gate "${PROMOTION_GATE:-progress}" --promote-at 0.51 --extend-games 2000 --train-from latest --min-games 1000 --anchor runs/g1/nets/round_013.npz --anchor-games 2000 --guard-live 0.01 \
+    --gate "${PROMOTION_GATE:-confidence}" --promote-at 0.51 --extend-games 2000 --train-from latest --min-games 1000 --anchor runs/g1/nets/round_013.npz --anchor-games 2000 --guard-live 0.01 \
     --distribute-eval \
     --simulations "${SELFPLAY_SIMULATIONS:-400}" --full-rate 0.25 --fast-simulations 24 \
     --reference AB:2,F \
