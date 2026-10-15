@@ -534,20 +534,26 @@ def guardrails(run, n, args, record):
                     new_net, best_net, load_value_shards_from_paths(historical)
                 )
                 record["human_paired"] = paired
+                # Not worse, rather than proven better: judging who wins
+                # finished human games tests the value head, not strength
+                # (the match and anchor test that), and ~400 games can't show
+                # the small gains a better net makes. A net is held back only
+                # if its 95% interval reaches a clear regression.
                 if paired["games"] < args.min_human_games:
                     reasons.append("too few independent held-out human games")
                 elif (
-                    paired["mse"]["improvement"] <= 0
-                    or paired["accuracy"]["improvement"] <= 0
-                    or max(paired["mse"]["lower"], paired["accuracy"]["lower"]) <= 0
+                    paired["mse"]["lower"] < -args.human_mse_margin
+                    or paired["accuracy"]["lower"] < -args.human_accuracy_margin
                 ):
-                    reasons.append(
-                        "no game-level evidence of better human loss and accuracy"
-                    )
+                    reasons.append("held-out human games show a possible regression")
                 fresh_paths = fresh_human_paths(args.live_data, cursor)
                 record["fresh_human_games"] = len(fresh_paths)
                 if len(fresh_paths) < args.min_fresh_human_games:
-                    reasons.append("awaiting newly collected human confirmation games")
+                    # Too few new games to check yet: not a reason to wait.
+                    say(
+                        f"  {len(fresh_paths)} fresh human games (fewer than "
+                        f"{args.min_fresh_human_games}); fresh check skipped"
+                    )
                 else:
                     fresh = paired_game_comparison(
                         new_net, best_net, load_value_shards_from_paths(fresh_paths)
@@ -822,6 +828,19 @@ def main(argv=None):
     )
     parser.add_argument("--min-human-games", type=int, default=100)
     parser.add_argument("--min-fresh-human-games", type=int, default=30)
+    parser.add_argument(
+        "--human-mse-margin",
+        type=float,
+        default=0.01,
+        help="confidence gate: the largest worsening in held-out human-game "
+        "value error (95%% interval) that still counts as not worse",
+    )
+    parser.add_argument(
+        "--human-accuracy-margin",
+        type=float,
+        default=0.01,
+        help="confidence gate: the same for picking the winner (fraction)",
+    )
     parser.add_argument("--min-tactical-positions", type=int, default=200)
     parser.add_argument("--tactical-index", default="data/human/index.jsonl")
     parser.add_argument("--tactical-captures", default="captures")

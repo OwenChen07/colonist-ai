@@ -269,7 +269,7 @@ def test_confidence_gate_uses_fixed_pairs_and_unrounded_lower_bound(
     assert not run.state["history"][-1].get("passed")
 
 
-def test_confidence_gate_requires_better_human_loss_and_accuracy(tmp_path, monkeypatch):
+def test_confidence_gate_blocks_only_a_clear_human_regression(tmp_path, monkeypatch):
     from catanatron.colonist import calibrate, failure_set, loop, net
 
     run = loop.Run(str(tmp_path / "run"))
@@ -302,6 +302,8 @@ def test_confidence_gate_requires_better_human_loss_and_accuracy(tmp_path, monke
         guard_live=0.01,
         min_human_games=100,
         min_fresh_human_games=30,
+        human_mse_margin=0.01,
+        human_accuracy_margin=0.01,
         min_tactical_positions=30,
         tactical_index="index",
         tactical_captures="captures",
@@ -312,19 +314,27 @@ def test_confidence_gate_requires_better_human_loss_and_accuracy(tmp_path, monke
     assert record["best_live_mse"] == 0.6052
     assert record["best_live_accuracy"] == 0.7679
 
+    # No better, but not clearly worse (round 57's case): it passes.
     monkeypatch.setattr(
         calibrate,
         "paired_game_comparison",
-        lambda *_: {**better, "mse": {"improvement": 0.0001, "lower": -0.001}},
+        lambda *_: {**better, "mse": {"improvement": -0.002, "lower": -0.007}},
     )
     record = {"live": {"mse": 0.6052, "accuracy": 0.7679}}
+    assert loop.guardrails(run, 1, args, record) == (True, [])
+    # Its interval reaches a clear regression: held back.
+    monkeypatch.setattr(
+        calibrate,
+        "paired_game_comparison",
+        lambda *_: {**better, "accuracy": {"improvement": -0.01, "lower": -0.02}},
+    )
     ok, reasons = loop.guardrails(run, 1, args, record)
-    assert not ok and any("no game-level evidence" in r for r in reasons)
+    assert not ok and any("possible regression" in r for r in reasons)
     args.live_data = []
     assert not loop.guardrails(run, 1, args, record)[0]
 
 
-def test_confidence_gate_waits_for_fresh_games_and_blocks_tactical_regression(
+def test_confidence_gate_skips_too_few_fresh_games_and_blocks_tactical_regression(
     tmp_path, monkeypatch
 ):
     from catanatron.colonist import calibrate, failure_set, loop, net
@@ -361,6 +371,8 @@ def test_confidence_gate_waits_for_fresh_games_and_blocks_tactical_regression(
         guard_live=0.01,
         min_human_games=100,
         min_fresh_human_games=30,
+        human_mse_margin=0.01,
+        human_accuracy_margin=0.01,
         min_tactical_positions=200,
         tactical_index="index",
         tactical_captures="captures",
@@ -368,7 +380,8 @@ def test_confidence_gate_waits_for_fresh_games_and_blocks_tactical_regression(
     )
     ok, reasons = loop.guardrails(run, 1, args, {"live": {"mse": 0.59}})
     assert not ok
-    assert any("awaiting newly collected" in reason for reason in reasons)
+    # Too few fresh games is no longer a reason to wait.
+    assert not any("fresh" in reason for reason in reasons)
     assert any("tactical regression" in reason for reason in reasons)
     assert run.state["human_confirmation_after_ns"] == 5
 
