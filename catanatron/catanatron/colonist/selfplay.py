@@ -134,7 +134,12 @@ class _Game:
         args = dict(self.search_args)
         full_rate = args.pop("full_rate", 1.0)
         fast = args.pop("fast_simulations", None)
-        if full_rate >= 1 or self.game.state.is_initial_build_phase:
+        setup_simulations = args.pop("setup_simulations", None)
+        if self.game.state.is_initial_build_phase:
+            if setup_simulations is not None:
+                args["simulations"] = setup_simulations
+            return True, args
+        if full_rate >= 1:
             return True, args
         if self.rng.random() < full_rate:
             return True, args
@@ -344,6 +349,7 @@ def run(
     fast_simulations=None,
     human_starts=None,
     human_start_rate=0.0,
+    setup_simulations=None,
 ):
     """Plays the shards of out_dir that aren't on disk yet."""
     if not 0 <= human_start_rate <= 1:
@@ -356,6 +362,8 @@ def run(
         raise ValueError("full_rate must be in (0, 1]")
     if full_rate < 1 and not (fast_simulations and fast_simulations > 0):
         raise ValueError("playout cap randomization needs fast_simulations")
+    if setup_simulations is not None and setup_simulations <= 0:
+        raise ValueError("setup_simulations must be positive")
     os.makedirs(out_dir, exist_ok=True)
     config_path = os.path.join(out_dir, "setup-exploration.json")
     if os.path.exists(config_path):
@@ -384,6 +392,8 @@ def run(
         "simulations": simulations,
         "setup_noise_scale": setup_noise_scale,
     }
+    if setup_simulations is not None:
+        search_args["setup_simulations"] = setup_simulations
     if full_rate < 1:
         search_args["full_rate"] = full_rate
         search_args["fast_simulations"] = fast_simulations
@@ -437,6 +447,12 @@ def main(argv=None):
     parser.add_argument("--games", type=int, default=5000)
     parser.add_argument("--seed", type=int, default=2_000_000, help="first game seed")
     parser.add_argument("--simulations", type=int, default=50)
+    parser.add_argument(
+        "--setup-simulations",
+        type=int,
+        default=None,
+        help="search simulations for initial placements (default: --simulations)",
+    )
     parser.add_argument(
         "--setup-noise-scale",
         type=float,
@@ -503,6 +519,7 @@ def main(argv=None):
         fast_simulations=args.fast_simulations,
         human_starts=args.human_starts,
         human_start_rate=args.human_start_rate,
+        setup_simulations=args.setup_simulations,
     )
     return 0
 

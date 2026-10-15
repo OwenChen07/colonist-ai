@@ -8,14 +8,20 @@ Each round:
   1. Self-play: the current best net plays --games games against itself
      (and, in --opponent-rate of them, against an older version or a
      reference bot), recording its search's move odds and value.
-  2. Train: a new net starts from the best one and trains on the last
+  2. Train: a new net starts from the best one (or, with --train-from
+     latest, from the previous round's new net, so small gains that no single
+     match can prove still add up round after round) and trains on the last
      --window rounds of self-play data (plus --extra-data, e.g. the bot games
      Phase 2 learned from).
-  3. Promotion match: new net against best, paired boards, at least
-     --min-games (default 1000) and at most --max-games games. With --gate
-     strict, an SPRT of 50% against 54% (so
-     52% is the bar): the new net replaces the best only if the test says
-     so. With --gate loose (AlphaZero-like: the data keeps moving instead of
+  3. Promotion match: new net against best on paired boards. With --gate
+     progress, play --max-games games and pass at --promote-at (e.g. 51%); a
+     near miss (--extend-below/--extend-above) plays --extend-games more on
+     other boards and is judged on all of them. With --gate
+     confidence, play a fixed --max-games games and require the unrounded
+     95% lower score bound to reach 50%, plus paired game-level human and
+     tactical checks. With --gate strict, play at least
+     --min-games (default 1000) and at most --max-games in an SPRT of 50%
+     against 54%. With --gate loose (AlphaZero-like: the data keeps moving instead of
      coming from one net for many rounds), an SPRT of 46% against 50%: the
      new net passes unless it is clearly worse. Either way, a net that
      passes is promoted in step 4 only if its guardrails hold: its
@@ -47,6 +53,7 @@ sign that self-play has stalled).
 
 import argparse
 import csv
+import glob
 import json
 import math
 import os
@@ -172,13 +179,14 @@ def train(run, n, args):
 
     data = [run.dir(k, "data") for k in range(max(1, n - args.window + 1), n + 1)]
     data = [d for d in data if os.path.isdir(d)] + args.extra_data
-    say(f"round {n}: training on {len(data)} data folders, from the best net")
+    init, source = train_init(run, n, args)
+    say(f"round {n}: training on {len(data)} data folders, from {source}")
     argv = [
         *data,
         "--out",
         run.dir(n, "train"),
         "--init",
-        run.best,
+        init,
         "--epochs",
         str(args.epochs),
         "--lr",
@@ -190,7 +198,7 @@ def train(run, n, args):
         argv += ["--sample", str(args.train_sample)]
     if args.train_host:
         try:
-            train_remote(args, argv, data, run.dir(n, "train"), run.best, n)
+            train_remote(args, argv, data, run.dir(n, "train"), init, n)
             shutil.copyfile(run.dir(n, "train", "net.npz"), run.net(n))
             return
         except Exception as error:
@@ -287,8 +295,30 @@ def _eval_hosts(args):
     return distributed.worker_hosts() or None
 
 
+def train_init(run, n, args):
+    """(net file, description) to start round n's training from: the best
+    net, or with --train-from latest the previous round's new net, unless it
+    was clearly worse than the best (below --reset-below in its match) or is
+    missing, so a bad round can't drag the next ones down with it."""
+    if getattr(args, "train_from", "best") == "latest" and n > 1:
+        previous = run.net(n - 1)
+        record = next(
+            (r for r in reversed(run.state["history"]) if r.get("round") == n - 1),
+            None,
+        )
+        score = record.get("score") if record else None
+        if os.path.exists(previous) and score is not None:
+            if score >= args.reset_below:
+                return previous, f"round {n - 1}'s net (it scored {score:.1%})"
+            say(
+                f"  round {n - 1} scored {score:.1%} (below {args.reset_below:.0%}); "
+                "training from the best net instead"
+            )
+    return run.best, "the best net"
+
+
 def match(run, n, args):
-    from catanatron.colonist.evaluate import sprt
+    from catanatron.colonist.evaluate import match as fixed_match, sprt
 
     # The best round's own file, not best.npz: rerunning this step after a
     # crash then still compares against the same net.
@@ -299,20 +329,50 @@ def match(run, n, args):
         f"round {n}: promotion match ({args.gate} gate), new vs best "
         f"(at most {args.max_games} games)"
     )
-    result = sprt(
-        new,
-        best,
-        seed=args.seed + n * 1_000_000 + 500_000,
-        workers=args.workers,
-        p0=0.46 if loose else 0.50,
-        p1=0.50 if loose else 0.54,
-        max_games=args.max_games,
-        min_games=args.min_games,
-        batch_pairs=args.batch_pairs,
-        hosts=_eval_hosts(args),
-        progress=lambda r: say(f"  {r.n} games: {r.score:.1%} ± {r.margin:.1%}"),
-    )
-    passed = result.decision != "keep" if loose else result.decision == "promote"
+    match_options = {
+        "seed": args.seed + n * 1_000_000 + 500_000,
+        "workers": args.workers,
+        "hosts": _eval_hosts(args),
+        "progress": lambda r: say(f"  {r.n} games: {r.score:.1%} ± {r.margin:.1%}"),
+    }
+    if args.gate == "confidence":
+        result = fixed_match(new, best, games=args.max_games, **match_options)
+        lower = result.score - result.margin
+        passed = lower >= 0.50
+        say(f"  unrounded 95% lower bound: {lower:.5%} (need at least 50%)")
+    elif args.gate == "progress":
+        result = fixed_match(new, best, games=args.max_games, **match_options)
+        if args.extend_games and args.extend_below <= result.score < args.extend_above:
+            # A near miss: settle it on more boards rather than one 2000-game
+            # coin. The extra games use other seeds, so no board repeats.
+            say(
+                f"  {result.score:.1%} after {result.n} games is a near miss; "
+                f"playing {args.extend_games} more"
+            )
+            more = fixed_match(
+                new,
+                best,
+                games=args.extend_games,
+                **{**match_options, "seed": match_options["seed"] + 250_000},
+            )
+            result.games.extend(more.games)
+        passed = result.score >= args.promote_at
+        say(
+            f"  {result.score:.2%} ± {result.margin:.2%} over {result.n} games "
+            f"(passes at {args.promote_at:.0%})"
+        )
+    else:
+        result = sprt(
+            new,
+            best,
+            p0=0.46 if loose else 0.50,
+            p1=0.50 if loose else 0.54,
+            max_games=args.max_games,
+            min_games=args.min_games,
+            batch_pairs=args.batch_pairs,
+            **match_options,
+        )
+        passed = result.decision != "keep" if loose else result.decision == "promote"
     if passed and result.score < args.min_score:
         # Not "clearly worse" yet below the bar: e.g. 47.95% over 2000 games
         # ended undecided and was promoted, and the run slipped back.
@@ -323,16 +383,23 @@ def match(run, n, args):
         "round": n,
         "games": result.n,
         "score": round(result.score, 4),
-        "decision": result.decision or "undecided",
+        "decision": (
+            ("promote" if passed else "keep")
+            if args.gate in ("confidence", "progress")
+            else (result.decision or "undecided")
+        ),
         "gate": args.gate,
         "promoted": False,
         "setup_noise_scale": _round_setup_scale(run, n),
     }
+    if args.gate == "confidence":
+        record["margin"] = result.margin
+        record["lower_bound"] = lower
     if passed:
         # Promoted in the benchmark step if the guardrails hold, so nothing
         # (such as the ranked bot) switches to a net that is then undone.
         record["passed"] = True
-        what = "is not clearly worse" if loose else "is better"
+        what = "is not clearly worse" if loose else "met the match gate"
         say(f"  passed: round {n} {what}; checking its guardrails")
         run.state["history"].append(record)
         return
@@ -436,25 +503,140 @@ def guardrails(run, n, args, record):
         if record["anchor"] < reference - args.guard_anchor:
             reasons.append(f"anchor {record['anchor']} vs best's {reference}")
     bench = _reference(run, "benchmark")
+    if args.gate == "confidence" and args.benchmark and bench is None:
+        reasons.append("best model's benchmark reference unavailable")
     if args.benchmark and bench and record.get("benchmark"):
         if float(record["benchmark"]) < float(bench) - args.guard_benchmark:
             reasons.append(f"benchmark {record['benchmark']} vs best's {bench}")
-    if args.live_data and record.get("live", {}).get("mse") is not None:
+    if args.gate == "confidence" and not args.live_data:
+        reasons.append("held-out human games are required for the confidence gate")
+    if args.live_data:
         from catanatron.colonist.calibrate import calibrate, load_value_shards
         from catanatron.colonist.net import Net
 
-        best = calibrate(
-            Net.load(run.net(run.state["best_round"])),
-            load_value_shards(args.live_data),
-        )
-        record["best_live_mse"] = best.get("mse")
-        if best.get("mse") is not None and (
-            record["live"]["mse"] > best["mse"] + args.guard_live
-        ):
-            reasons.append(
-                f"live value MSE {record['live']['mse']} vs best's {best['mse']}"
+        data = load_value_shards(args.live_data)
+        if data and record.get("live", {}).get("mse") is not None:
+            best = calibrate(Net.load(run.net(run.state["best_round"])), data)
+            record["best_live_mse"] = best.get("mse")
+            record["best_live_accuracy"] = best.get("accuracy")
+            if args.gate == "confidence":
+                from catanatron.colonist.calibrate import paired_game_comparison
+
+                new_net = Net.load(run.net(n))
+                best_net = Net.load(run.net(run.state["best_round"]))
+                cursor = run.state["human_confirmation_after_ns"]
+                historical = [
+                    path
+                    for path in human_value_paths(args.live_data)
+                    if os.stat(path).st_mtime_ns <= cursor
+                ]
+                paired = paired_game_comparison(
+                    new_net, best_net, load_value_shards_from_paths(historical)
+                )
+                record["human_paired"] = paired
+                if paired["games"] < args.min_human_games:
+                    reasons.append("too few independent held-out human games")
+                elif (
+                    paired["mse"]["improvement"] <= 0
+                    or paired["accuracy"]["improvement"] <= 0
+                    or max(paired["mse"]["lower"], paired["accuracy"]["lower"]) <= 0
+                ):
+                    reasons.append(
+                        "no game-level evidence of better human loss and accuracy"
+                    )
+                fresh_paths = fresh_human_paths(args.live_data, cursor)
+                record["fresh_human_games"] = len(fresh_paths)
+                if len(fresh_paths) < args.min_fresh_human_games:
+                    reasons.append("awaiting newly collected human confirmation games")
+                else:
+                    fresh = paired_game_comparison(
+                        new_net, best_net, load_value_shards_from_paths(fresh_paths)
+                    )
+                    record["fresh_human_paired"] = fresh
+                    # Consume this prospective set once: later candidates
+                    # need newly arriving games, not the same confirmation.
+                    run.state["human_confirmation_after_ns"] = max(
+                        os.stat(path).st_mtime_ns for path in fresh_paths
+                    )
+                    if (
+                        fresh["mse"]["lower"] < -0.01
+                        or fresh["accuracy"]["lower"] < -0.03
+                    ):
+                        reasons.append("fresh human games show a possible regression")
+            elif record["live"]["mse"] > best["mse"] + args.guard_live:
+                reasons.append(
+                    f"live value MSE {record['live']['mse']} vs best's {best['mse']}"
+                )
+        elif args.gate == "confidence":
+            reasons.append("held-out human scores are unavailable")
+    if args.gate == "confidence":
+        if args.anchor and "anchor" not in record:
+            reasons.append("anchor score unavailable")
+        if args.benchmark and not record.get("benchmark"):
+            reasons.append("benchmark score unavailable")
+        from catanatron.colonist.bonus_audit import indexed_paths
+        from catanatron.colonist.failure_set import compare
+
+        if not os.path.isfile(args.tactical_index):
+            reasons.append("private tactical index unavailable")
+        else:
+            paths = indexed_paths(
+                args.tactical_index, args.tactical_captures, "holdout", 400
             )
+            tactical = compare(
+                run.net(run.state["best_round"]),
+                run.net(n),
+                paths,
+                simulations=args.match_simulations,
+                max_positions=700,
+            )
+            record["tactical"] = tactical
+            if tactical.get("positions", 0) < args.min_tactical_positions:
+                reasons.append("too few verified tactical decisions")
+            for key in ("immediate_win_missed", "last_road_no_immediate_gain_chosen"):
+                if tactical.get("candidate_" + key, 0) > tactical.get(
+                    "baseline_" + key, 0
+                ):
+                    reasons.append("tactical regression: " + key)
     return not reasons, reasons
+
+
+def fresh_human_paths(folders, after_ns):
+    """Human value shards exported after this gate was enabled/last checked."""
+    return [
+        path
+        for path in human_value_paths(folders)
+        if os.stat(path).st_mtime_ns > after_ns
+    ]
+
+
+def human_value_paths(folders):
+    return sorted(
+        path for folder in folders for path in glob.glob(os.path.join(folder, "*.npz"))
+    )
+
+
+def load_value_shards_from_paths(paths):
+    # The existing loader accepts folders; a temporary link tree would make
+    # this less transparent, so load the same five arrays directly instead.
+    import numpy as np
+
+    parts = []
+    for path in paths:
+        with np.load(path) as d:
+            parts.append(
+                tuple(
+                    d[name].astype(dtype)
+                    for name, dtype in (
+                        ("static", np.float32),
+                        ("dynamic", np.float32),
+                        ("game", np.int64),
+                        ("z", np.float32),
+                        ("turn", np.int64),
+                    )
+                )
+            )
+    return parts
 
 
 def benchmark(run, n, args):
@@ -592,6 +774,34 @@ def main(argv=None):
     parser.add_argument("--match-simulations", type=int, default=100)
     parser.add_argument("--max-games", type=int, default=2000)
     parser.add_argument(
+        "--promote-at",
+        type=float,
+        default=0.51,
+        help="progress gate: the score against the best that passes the match",
+    )
+    parser.add_argument(
+        "--extend-games",
+        type=int,
+        default=0,
+        help="progress gate: extra games for a near miss (0: none)",
+    )
+    parser.add_argument("--extend-below", type=float, default=0.505)
+    parser.add_argument("--extend-above", type=float, default=0.525)
+    parser.add_argument(
+        "--train-from",
+        choices=("best", "latest"),
+        default="best",
+        help="start each round's training from the best net, or from the "
+        "previous round's new net (gains add up without promotions)",
+    )
+    parser.add_argument(
+        "--reset-below",
+        type=float,
+        default=0.48,
+        help="--train-from latest: go back to the best net after a round "
+        "that scored below this against it",
+    )
+    parser.add_argument(
         "--min-games",
         type=int,
         default=1000,
@@ -604,11 +814,17 @@ def main(argv=None):
     )
     parser.add_argument(
         "--gate",
-        choices=("strict", "loose"),
+        choices=("strict", "loose", "confidence", "progress"),
         default="strict",
-        help="strict: promote only a clearly better net (52%% bar); loose: "
-        "promote unless clearly worse, if the guardrails hold",
+        help="strict: SPRT clearly better; loose: SPRT not clearly worse; "
+        "confidence: fixed paired match with unrounded 95%% lower bound >=50%% "
+        "and human, anchor, benchmark, tactical guardrails",
     )
+    parser.add_argument("--min-human-games", type=int, default=100)
+    parser.add_argument("--min-fresh-human-games", type=int, default=30)
+    parser.add_argument("--min-tactical-positions", type=int, default=200)
+    parser.add_argument("--tactical-index", default="data/human/index.jsonl")
+    parser.add_argument("--tactical-captures", default="captures")
     parser.add_argument(
         "--min-score",
         type=float,
@@ -705,6 +921,19 @@ def main(argv=None):
             f"resuming {args.run_dir}: round {s['round']}, step {s['step']}, "
             f"best from round {s['best_round']}"
         )
+
+    if args.gate == "confidence" and "human_confirmation_after_ns" not in run.state:
+        # Start a prospective set at rollout. Existing games have already
+        # influenced past model selection and cannot serve as fresh evidence.
+        paths = [
+            path
+            for folder in args.live_data
+            for path in glob.glob(os.path.join(folder, "*.npz"))
+        ]
+        run.state["human_confirmation_after_ns"] = max(
+            (os.stat(path).st_mtime_ns for path in paths), default=time.time_ns()
+        )
+        run.save()
 
     actions = {"selfplay": play, "train": train, "match": match, "benchmark": benchmark}
     while run.state["round"] <= args.rounds:

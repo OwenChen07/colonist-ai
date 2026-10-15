@@ -918,6 +918,9 @@ def test_info_about_the_net_comes_first(tmp_path):
     labeled = net_info(str(path), 800, True, label="sp1 round 8")
     assert labeled["label"] == "sp1 round 8"
     assert "(sp1 round 8)" in describe_info(labeled)
+    filtered = net_info(str(path), 800, True, judgment_filter=True)
+    assert filtered["judgment_filter"] == "last_road_v1"
+    assert "judgment road filter" in describe_info(filtered)
     assert describe_info(info) == f"net {path}, epoch 7, 800 simulations, playing"
     assert "epoch" not in net_info(str(tmp_path / "missing.npz"), 50, False)
 

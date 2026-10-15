@@ -222,6 +222,157 @@ def test_strict_gate_keeps_an_undecided_net(tiny_args, monkeypatch):
     assert not state["history"][0]["promoted"] and state["best_round"] == 0
 
 
+def test_confidence_gate_uses_fixed_pairs_and_unrounded_lower_bound(
+    tmp_path, monkeypatch
+):
+    from catanatron.colonist import loop
+
+    run = loop.Run(str(tmp_path / "run"))
+    run.state = {"best_round": 0, "since_promotion": 0, "history": []}
+    calls = []
+
+    def fixed(*a, **kw):
+        calls.append(kw)
+        return SimpleNamespace(
+            n=2000, score=0.521, margin=0.021, summary=lambda: "fixed match"
+        )
+
+    monkeypatch.setattr(evaluate, "match", fixed)
+    monkeypatch.setattr(evaluate, "sprt", lambda *a, **kw: pytest.fail("SPRT used"))
+    args = SimpleNamespace(
+        gate="confidence",
+        match_simulations=100,
+        max_games=2000,
+        min_games=1000,
+        min_score=0,
+        seed=1,
+        workers=1,
+        distribute_eval=False,
+    )
+    loop.match(run, 1, args)
+    record = run.state["history"][0]
+    assert calls[0]["games"] == 2000
+    assert record["passed"] and record["lower_bound"] == 0.5
+    assert record["decision"] == "promote"
+    calls.clear()
+    monkeypatch.setattr(
+        evaluate,
+        "match",
+        lambda *a, **kw: SimpleNamespace(
+            n=2000,
+            score=0.52049,
+            margin=0.02051,
+            summary=lambda: "rounded to 52.0 ± 2.1",
+        ),
+    )
+    loop.match(run, 2, args)
+    assert not run.state["history"][-1].get("passed")
+
+
+def test_confidence_gate_requires_better_human_loss_and_accuracy(tmp_path, monkeypatch):
+    from catanatron.colonist import calibrate, failure_set, loop, net
+
+    run = loop.Run(str(tmp_path / "run"))
+    run.state = {"best_round": 0, "history": [], "human_confirmation_after_ns": 0}
+    monkeypatch.setattr(calibrate, "load_value_shards", lambda _: [object()])
+    monkeypatch.setattr(
+        calibrate, "calibrate", lambda *_: {"mse": 0.6052, "accuracy": 0.7679}
+    )
+    better = {
+        "games": 200,
+        "mse": {"improvement": 0.002, "lower": 0.001},
+        "accuracy": {"improvement": 0.003, "lower": -0.001},
+    }
+    monkeypatch.setattr(calibrate, "paired_game_comparison", lambda *_: better)
+    monkeypatch.setattr(net.Net, "load", lambda *_: object())
+    monkeypatch.setattr(
+        loop, "fresh_human_paths", lambda *_: [str(tmp_path / "fresh")] * 30
+    )
+    monkeypatch.setattr(
+        loop, "load_value_shards_from_paths", lambda *_: [object()] * 30
+    )
+    monkeypatch.setattr(loop.os.path, "isfile", lambda *_: True)
+    monkeypatch.setattr(loop.os, "stat", lambda *_: SimpleNamespace(st_mtime_ns=1))
+    monkeypatch.setattr(failure_set, "compare", lambda *_a, **_k: {"positions": 50})
+    args = SimpleNamespace(
+        gate="confidence",
+        anchor="",
+        benchmark="",
+        live_data=["heldout"],
+        guard_live=0.01,
+        min_human_games=100,
+        min_fresh_human_games=30,
+        min_tactical_positions=30,
+        tactical_index="index",
+        tactical_captures="captures",
+        match_simulations=100,
+    )
+    record = {"live": {"mse": 0.6037, "accuracy": 0.7682}}
+    assert loop.guardrails(run, 1, args, record) == (True, [])
+    assert record["best_live_mse"] == 0.6052
+    assert record["best_live_accuracy"] == 0.7679
+
+    monkeypatch.setattr(
+        calibrate,
+        "paired_game_comparison",
+        lambda *_: {**better, "mse": {"improvement": 0.0001, "lower": -0.001}},
+    )
+    record = {"live": {"mse": 0.6052, "accuracy": 0.7679}}
+    ok, reasons = loop.guardrails(run, 1, args, record)
+    assert not ok and any("no game-level evidence" in r for r in reasons)
+    args.live_data = []
+    assert not loop.guardrails(run, 1, args, record)[0]
+
+
+def test_confidence_gate_waits_for_fresh_games_and_blocks_tactical_regression(
+    tmp_path, monkeypatch
+):
+    from catanatron.colonist import calibrate, failure_set, loop, net
+
+    run = loop.Run(str(tmp_path / "run"))
+    run.state = {"best_round": 0, "history": [], "human_confirmation_after_ns": 5}
+    good = {
+        "games": 200,
+        "mse": {"improvement": 0.003, "lower": 0.001},
+        "accuracy": {"improvement": 0.002, "lower": -0.002},
+    }
+    monkeypatch.setattr(calibrate, "load_value_shards", lambda _: [object()])
+    monkeypatch.setattr(
+        calibrate, "calibrate", lambda *_: {"mse": 0.6, "accuracy": 0.7}
+    )
+    monkeypatch.setattr(calibrate, "paired_game_comparison", lambda *_: good)
+    monkeypatch.setattr(net.Net, "load", lambda *_: object())
+    monkeypatch.setattr(loop.os.path, "isfile", lambda *_: True)
+    monkeypatch.setattr(
+        failure_set,
+        "compare",
+        lambda *_a, **_k: {
+            "positions": 300,
+            "baseline_immediate_win_missed": 1,
+            "candidate_immediate_win_missed": 2,
+        },
+    )
+    monkeypatch.setattr(loop, "fresh_human_paths", lambda *_: [])
+    args = SimpleNamespace(
+        gate="confidence",
+        anchor="",
+        benchmark="",
+        live_data=["heldout"],
+        guard_live=0.01,
+        min_human_games=100,
+        min_fresh_human_games=30,
+        min_tactical_positions=200,
+        tactical_index="index",
+        tactical_captures="captures",
+        match_simulations=100,
+    )
+    ok, reasons = loop.guardrails(run, 1, args, {"live": {"mse": 0.59}})
+    assert not ok
+    assert any("awaiting newly collected" in reason for reason in reasons)
+    assert any("tactical regression" in reason for reason in reasons)
+    assert run.state["human_confirmation_after_ns"] == 5
+
+
 def test_train_sample_reaches_the_trainer(tiny_args, monkeypatch):
     pytest.importorskip("torch")
     from catanatron.colonist import loop
@@ -422,3 +573,88 @@ def test_the_before_round_command_runs_and_a_failure_is_not_fatal(
     failing = ["--before-round", "exit 3"]
     assert loop.main(args + failing + ["--rounds", "2"]) == 0  # played on
     assert json.loads((run / "state.json").read_text())["round"] == 3
+
+
+def _match_result(score, games, seed=0):
+    """A real MatchResult whose games score `score` on average."""
+    wins = round(score * games)
+    return evaluate.MatchResult(
+        "a",
+        "b",
+        [
+            evaluate.GameResult(
+                seed + i // 2,
+                i % 2 == 0,
+                1.0 if i < wins else 0.0,
+                50,
+                diagnostics={"RED": empty_counts()},
+            )
+            for i in range(games)
+        ],
+    )
+
+
+def test_progress_gate_extends_a_near_miss_and_judges_all_games(tiny_args, monkeypatch):
+    """51.5% after the first games is a near miss: more games are played on
+    other seeds, and the total (here 51.25%) passes at 51%."""
+    pytest.importorskip("torch")
+    from catanatron.colonist import loop
+
+    run, args, init = tiny_args
+    calls = []
+
+    def fake_match(new, opponent, games, seed, **k):
+        calls.append((games, seed))
+        if "round_" in opponent and len(calls) == 1:
+            return _match_result(0.515, 200, seed)
+        if "round_" in opponent and len(calls) == 2:
+            return _match_result(0.51, 200, seed)
+        return _match_result(0.6, 4, seed)  # benchmark
+
+    monkeypatch.setattr(evaluate, "match", fake_match)
+    gate = ["--gate", "progress", "--max-games", "200", "--extend-games", "200"]
+    assert loop.main(args + gate + ["--init", init, "--rounds", "1"]) == 0
+    record = json.loads((run / "state.json").read_text())["history"][0]
+    assert calls[0][0] == 200 and calls[1][0] == 200 and calls[1][1] != calls[0][1]
+    assert record["games"] == 400 and record["score"] == 0.5125
+    assert record["passed"] and record["decision"] == "promote"
+
+
+def test_progress_gate_keeps_a_clear_miss_without_extra_games(tiny_args, monkeypatch):
+    pytest.importorskip("torch")
+    from catanatron.colonist import loop
+
+    run, args, init = tiny_args
+    calls = []
+    monkeypatch.setattr(
+        evaluate,
+        "match",
+        lambda new, opponent, games, seed, **k: calls.append(games)
+        or _match_result(0.49, 200, seed),
+    )
+    gate = ["--gate", "progress", "--max-games", "200", "--extend-games", "200"]
+    assert loop.main(args + gate + ["--init", init, "--rounds", "1"]) == 0
+    record = json.loads((run / "state.json").read_text())["history"][0]
+    assert calls.count(200) == 1 and not record.get("passed")  # no extension
+
+
+def test_training_continues_from_the_previous_round_unless_it_was_clearly_worse(
+    tmp_path, monkeypatch
+):
+    from catanatron.colonist import loop
+
+    run = loop.Run(str(tmp_path / "run"))
+    init = tmp_path / "init.npz"
+    random_net(hidden=(8,)).save(str(init))
+    run.start(str(init))
+    args = SimpleNamespace(train_from="latest", reset_below=0.48)
+    assert loop.train_init(run, 1, args)[0] == run.best  # no previous round
+    os.makedirs(os.path.dirname(run.net(3)), exist_ok=True)
+    random_net(hidden=(8,)).save(run.net(3))
+    run.state["history"].append({"round": 3, "score": 0.512})
+    assert loop.train_init(run, 4, args)[0] == run.net(3)
+    run.state["history"][-1]["score"] = 0.45  # clearly worse: back to the best
+    assert loop.train_init(run, 4, args)[0] == run.best
+    best_args = SimpleNamespace(train_from="best", reset_below=0.48)
+    run.state["history"][-1]["score"] = 0.55
+    assert loop.train_init(run, 4, best_args)[0] == run.best

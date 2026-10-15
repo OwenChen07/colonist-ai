@@ -115,6 +115,8 @@ LOG_PIECE_NOTICE = {72, 87}  # before matching setup road / settlement placement
 #: which the bot never accepts), and trade offers between players
 #: (118: an offer alone changes nothing; an accepted trade
 #: logs its own entry, which is not mapped yet and so stops the record), and
+#: a player embargoing another (113: only blocks player-to-player trades,
+#: which this bot never offers or accepts), and
 #: a pre-game counter (130), and how many players the robber can steal
 #: from (139, logged with the robber move; the steal itself may follow in a
 #: later update, seen live), and a player disconnecting (140, logged with

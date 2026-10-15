@@ -185,12 +185,14 @@ class Bridge:
         bot=None,
         opponent_model=None,
         opponent_mix=0.0,
+        judgment_filter=False,
     ):
         self.net = net
         # A net trained on people's moves (opponent_model.py): the search
         # mixes it into the opponent's prior, at this weight (0: off).
         self.opponent_model = opponent_model
         self.opponent_mix = opponent_mix
+        self.judgment_filter = judgment_filter
         # Which net and search played (net_info), saved with each capture so
         # every live game's data says which version produced it.
         self.bot = bot
@@ -1051,6 +1053,13 @@ class Bridge:
         from catanatron.colonist.mcts import Search
 
         seconds, simulations = self.budget
+        root_filter = None
+        if self.judgment_filter:
+            from catanatron.colonist.judgment_policy import filtered_root_actions
+
+            root_filter = lambda copy, choices: filtered_root_actions(
+                copy.state, choices
+            )
         search = Search(
             self.net,
             simulations or self.simulations,
@@ -1058,6 +1067,7 @@ class Bridge:
             noise=False,
             opponent_model=self.opponent_model if self.opponent_mix > 0 else None,
             opponent_mix=self.opponent_mix,
+            root_action_filter=root_filter,
         )
         action, root = search.run(game, time_limit=seconds)
         self.searched += search.used
@@ -1165,7 +1175,15 @@ async def serve_forever(make_bridge, host=HOST, port=PORT, info=None):
         await asyncio.Future()
 
 
-def net_info(path, simulations, play, label=None, opponent_model=None, opponent_mix=0):
+def net_info(
+    path,
+    simulations,
+    play,
+    label=None,
+    opponent_model=None,
+    opponent_mix=0,
+    judgment_filter=False,
+):
     """What the extension's panel shows about the bot: which net file (and the
     training epoch, when the file records it), how much search, which mode.
     Also a hash of the file and an optional label (e.g. the training round),
@@ -1178,6 +1196,8 @@ def net_info(path, simulations, play, label=None, opponent_model=None, opponent_
     }
     if label:
         info["label"] = label
+    if judgment_filter:
+        info["judgment_filter"] = "last_road_v1"
     try:
         with open(path, "rb") as f:
             info["sha256"] = hashlib.file_digest(f, "sha256").hexdigest()[:16]
@@ -1213,6 +1233,8 @@ def describe_info(info):
             f", opponent model {info['opponent_model']} "
             f"at mix {info['opponent_mix']}"
         )
+    if info.get("judgment_filter"):
+        opponent += ", judgment road filter"
     return (
         f"net {info['net']}{epoch}, {info['simulations']} simulations{opponent}, "
         f"{mode}"
@@ -1253,11 +1275,18 @@ def main(argv=None):
         default=0.0,
         help="the opponent model's weight in that prior, 0 to 1 (default 0: off)",
     )
+    parser.add_argument(
+        "--judgment-filter",
+        action="store_true",
+        help="experimental last-road root filter; default off",
+    )
     args = parser.parse_args(argv)
     if not 0 <= args.opponent_mix <= 1:
         parser.error("--opponent-mix must be between 0 and 1")
     if args.opponent_mix > 0 and not args.opponent_model:
         parser.error("--opponent-mix needs --opponent-model")
+    if args.judgment_filter and args.simulations < 1:
+        parser.error("--judgment-filter requires --simulations of at least 1")
     if (
         not args.spectator_state
         and args.save
@@ -1279,6 +1308,7 @@ def main(argv=None):
         args.label,
         args.opponent_model,
         args.opponent_mix,
+        args.judgment_filter,
     )
     try:
         asyncio.run(
@@ -1293,6 +1323,7 @@ def main(argv=None):
                     bot=info,
                     opponent_model=opponent_model,
                     opponent_mix=args.opponent_mix if opponent_model else 0.0,
+                    judgment_filter=args.judgment_filter,
                 ),
                 port=args.port,
                 info=info,

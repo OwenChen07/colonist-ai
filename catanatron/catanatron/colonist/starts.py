@@ -118,7 +118,15 @@ def start_game(entry, seed):
     """A self-play Game at one of the entry's cuts (picked by `seed`), with
     its own random stream for everything from there on."""
     rng = random.Random(seed)
-    cut = entry["cuts"][rng.randrange(len(entry["cuts"]))]
+    # A targeted start may narrow the eligible cuts. Consume the draw used by
+    # its source entry so that changing the cut list does not also change the
+    # subsequent dice/development-card random stream.
+    source_cut_count = entry.get("source_cut_count")
+    if source_cut_count is None:
+        cut = entry["cuts"][rng.randrange(len(entry["cuts"]))]
+    else:
+        rng.randrange(source_cut_count)
+        cut = entry["cuts"][random.Random(seed).randrange(len(entry["cuts"]))]
     record = {**entry, "log": entry["log"][:cut]}
     game = None
 

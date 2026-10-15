@@ -16,6 +16,7 @@ the net from the capture); by default every game counts, whichever net played.
 import argparse
 import glob
 import json
+import math
 import os
 import sys
 
@@ -61,6 +62,41 @@ def calibrate(net, parts):
         if rows.any():
             out[name] = _scores(v[rows], z[rows])
     return out
+
+
+def paired_game_comparison(candidate, best, parts):
+    """Compare value predictions on the same games, with games as units.
+
+    Positive deltas favor candidate. The confidence limits use the variation
+    between games, rather than treating turns from one game as independent.
+    """
+    mse, accuracy = [], []
+    for static, dynamic, game, z, _ in parts:
+        rows = [static[g] for g in game]
+        _, new = candidate.forward_rows(rows, dynamic)
+        _, old = best.forward_rows(rows, dynamic)
+        new, old, z = (np.asarray(x, np.float64).reshape(-1) for x in (new, old, z))
+        if not len(z):
+            continue
+        mse.append(float(np.mean((old - z) ** 2 - (new - z) ** 2)))
+        accuracy.append(
+            float(
+                np.mean(np.sign(new) == np.sign(z))
+                - np.mean(np.sign(old) == np.sign(z))
+            )
+        )
+
+    def interval(values):
+        count = len(values)
+        mean = float(np.mean(values)) if count else float("nan")
+        margin = (
+            1.96 * float(np.std(values, ddof=1)) / math.sqrt(count)
+            if count >= 2
+            else float("inf")
+        )
+        return {"improvement": mean, "lower": mean - margin, "upper": mean + margin}
+
+    return {"games": len(mse), "mse": interval(mse), "accuracy": interval(accuracy)}
 
 
 def _scores(v, z):

@@ -319,6 +319,36 @@ def test_playout_cap_randomization(tmp_path):
     assert np.array_equal(d["v"][~full], d["z"][~full].astype(np.float16))
 
 
+def test_setup_search_budget_can_stay_fixed_in_a_search_mix_test():
+    from types import SimpleNamespace
+
+    from catanatron.colonist.selfplay import _Game
+
+    state = SimpleNamespace(is_initial_build_phase=True)
+    game = _Game(
+        0,
+        {
+            "simulations": 212,
+            "setup_simulations": 400,
+            "full_rate": 0.5,
+            "fast_simulations": 24,
+        },
+        {},
+        object(),
+        game=SimpleNamespace(state=state),
+    )
+    full, args = game.next_search()
+    assert full and args["simulations"] == 400
+    assert "setup_simulations" not in args
+    state.is_initial_build_phase = False
+    game.rng.random = lambda: 0.1
+    full, args = game.next_search()
+    assert full and args["simulations"] == 212
+    game.rng.random = lambda: 0.9
+    full, args = game.next_search()
+    assert not full and args["simulations"] == 24
+
+
 def test_full_rate_needs_fast_simulations(tmp_path):
     from catanatron.colonist.selfplay import run
 

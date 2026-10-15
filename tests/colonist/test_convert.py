@@ -91,6 +91,18 @@ def with_extra_log_entry(frames, text):
     return frames
 
 
+def test_player_embargo_notice_does_not_change_the_game(frames):
+    # Seen in a ranked capture: embargo affects player trades, which the bot
+    # does not make. The ordinary board and hand checks still have to replay.
+    changed = with_extra_log_entry(
+        frames, {"type": 113, "playerColor": 5, "embargoedPlayerColor": 1}
+    )
+    conv = convert(changed)
+    assert not conv.unsupported, conv.unsupported
+    report = replay(conv.record)
+    assert report.ok, report.summary()
+
+
 def test_unknown_log_entry_stops_the_record(frames):
     conv = convert(with_extra_log_entry(frames, {"type": 9999, "playerColor": 1}))
     assert conv.ended == "unsupported"

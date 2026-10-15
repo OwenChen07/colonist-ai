@@ -15,11 +15,10 @@
 # round 32; round 31 was already running at 25%. Every self-play
 # position also has auxiliary targets (longest road, largest army, final
 # points), which training learns at --aux-weight 0.1 (train.py's default).
-# From round 22's match, the gate is strict (SPRT 50% vs 54%: clearly better
-# than the best), and a net that passes must also hold its guardrails: no
-# clear drop against the fixed anchor (round 13, 2000 games on the same
-# boards), on the benchmark, or in live value error (0.01). Rounds 16-21 were
-# all promoted at 49-52%, coin flips the loose gate let through.
+# The confidence gate uses a fixed paired match and its unrounded lower bound,
+# then checks game-level human results, newly collected confirmation games,
+# the fixed anchor, benchmark, and private tactical decisions. Earlier rounds
+# used the strict SPRT gate; PROMOTION_GATE can override this rollout.
 # From round 23, self-play's full searches get 400 simulations instead of 160
 # (stronger policy targets: at 160 the search barely improved on the net),
 # with 3500 games a round instead of 5000 to keep rounds about as long.
@@ -30,6 +29,13 @@
 # sp1's old MLP-era data (~28% of games), and the human folder 4 times instead
 # of 10 (8.2% of round 30's loaded positions), so the 400-simulation targets are most
 # of what training sees instead of ~10%.
+# From round 58 (E9): rounds 41-56 mostly beat round 40 by 1-2.5% but no
+# single 2000-game match could prove it, and every round restarted from round
+# 40, so nothing added up. Now training continues from the previous round's
+# net (--train-from latest; back to the best after a round below 48%), and
+# the progress gate promotes at 51% against the best, playing 2000 more games
+# for a near miss (50.5-52.5%); the anchor, benchmark and live-error
+# guardrails still apply. PROMOTION_GATE=confidence restores the old gate.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 init=()
@@ -39,8 +45,8 @@ human=$(printf ',data/human/train/value%.0s' $(seq "${HUMAN_REPEAT:-4}"))
 starts=()
 [ -e data/human/starts.jsonl.gz ] && starts=(--human-starts data/human/starts.jsonl.gz)
 exec .venv/bin/python -m catanatron.colonist.loop runs/g1 "${init[@]}" \
-    --rounds 1000 --games "${SELFPLAY_GAMES:-3500}" --window 6 --train-sample 4000000 \
-    --gate strict --min-games 1000 --anchor runs/g1/nets/round_013.npz --anchor-games 2000 --guard-live 0.01 \
+    --rounds 1000 --games "${SELFPLAY_GAMES:-3500}" --epochs "${TRAIN_EPOCHS:-3}" --window 6 --train-sample 4000000 \
+    --gate "${PROMOTION_GATE:-progress}" --promote-at 0.51 --extend-games 2000 --train-from latest --min-games 1000 --anchor runs/g1/nets/round_013.npz --anchor-games 2000 --guard-live 0.01 \
     --distribute-eval \
     --simulations "${SELFPLAY_SIMULATIONS:-400}" --full-rate 0.25 --fast-simulations 24 \
     --reference AB:2,F \

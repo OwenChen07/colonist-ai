@@ -211,6 +211,7 @@ class Search:
         setup_noise_scale=1.0,
         opponent_model=None,
         opponent_mix=0.0,
+        root_action_filter=None,
     ):
         self.net = net
         self.simulations = simulations
@@ -231,6 +232,9 @@ class Search:
         # With mix 0 the model is never run: the search is exactly as without.
         self.opponent_model = opponent_model if opponent_mix > 0 else None
         self.opponent_mix = opponent_mix
+        # Experimental decision rules may narrow only the root's legal moves.
+        # Descendants always use the simulator's complete legal action set.
+        self.root_action_filter = root_action_filter
         self.root_color = None  # the searcher, set when a search starts
         self.evaluations = 0
         self.opponent_evaluations = 0
@@ -407,7 +411,19 @@ class Search:
         g = game.copy()
         viewer = self.root_color = g.state.current_color()
         redeal_hidden_cards(g, viewer, self.rng)
-        root = self.node_after(g)
+        filtered = None
+        if self.root_action_filter is not None:
+            filtered = list(self.root_action_filter(g, list(g.playable_actions)))
+            if not filtered or any(a not in g.playable_actions for a in filtered):
+                raise ValueError("root action filter must retain legal moves")
+            g.playable_actions = filtered
+        # A filter may leave one move. Keep it as a root decision rather than
+        # playing through to an unrelated decision later in the game.
+        root = (
+            Decision(g, viewer, filtered)
+            if filtered is not None and len(filtered) == 1
+            else self.node_after(g)
+        )
         if not isinstance(root, Decision):
             raise ValueError("search needs a position with a choice to make")
         yield [root]
