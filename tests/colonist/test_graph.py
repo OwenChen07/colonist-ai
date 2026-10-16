@@ -165,3 +165,26 @@ def test_widen_from_the_command_line(tmp_path):
     assert (big.hidden_size, big.glob, big.layers) == (16, 32, 3)
     with pytest.raises(ValueError):
         G.widen(big, 8, 32, 3)
+
+
+def test_training_with_a_weight_average_exports_the_average(tmp_path):
+    torch = pytest.importorskip("torch")
+    from catanatron.colonist.datagen import run_shard
+    from catanatron.colonist.train import main
+
+    run_shard((str(tmp_path / "bot"), "W", 0, 4, 10, 0.0))
+    base = [str(tmp_path / "bot"), "--arch", "graph", "--graph", "8,8,1"]
+    base += ["--epochs", "1", "--batch", "32", "--device", "cpu"]
+    base += ["--val-fraction", "0.5", "--seed", "3"]
+    assert main(base + ["--out", str(tmp_path / "plain")]) == 0
+    assert main(base + ["--out", str(tmp_path / "ema"), "--ema", "0.9"]) == 0
+    plain = Net.load(str(tmp_path / "plain" / "last.npz"))
+    averaged = Net.load(str(tmp_path / "ema" / "last.npz"))
+    assert any(
+        not np.allclose(plain.params[k][0], averaged.params[k][0]) for k in plain.params
+    )
+    ckpt = torch.load(str(tmp_path / "ema" / "checkpoint.pt"))
+    assert ckpt["ema"] and "ema" in ckpt
+    # The raw trained weights are what the checkpoint resumes from.
+    raw = ckpt["model"]
+    assert any(not torch.allclose(raw[k], ckpt["ema"][k]) for k in ckpt["ema"])

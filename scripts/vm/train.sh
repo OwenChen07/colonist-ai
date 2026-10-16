@@ -47,8 +47,11 @@
 # unless it scored below 48%, not the promoted one: rounds 57-59 all learned
 # from round 40's games and stalled) and --match-simulations 200 (promotion,
 # anchor and benchmark matches at 200 simulations a move instead of 100,
-# closer to live play; the anchor reference is played again at 200). PROMOTION_GATE=progress uses the
-# 51% gate instead.
+# closer to live play; the anchor reference is played again at 200).
+# PROMOTION_GATE=progress uses the 51% gate instead.
+# Oct 16 (E12): --train-ema 0.9997 trains with a moving average of the
+# weights (about the last epoch's worth of steps), which is validated and
+# exported as the round's net: KataGo averages weight snapshots the same way.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 init=()
@@ -59,7 +62,7 @@ starts=()
 [ -e data/human/starts.jsonl.gz ] && starts=(--human-starts data/human/starts.jsonl.gz)
 exec .venv/bin/python -m catanatron.colonist.loop runs/g1 "${init[@]}" \
     --rounds 1000 --games "${SELFPLAY_GAMES:-3500}" --epochs "${TRAIN_EPOCHS:-3}" --window 6 --train-sample 4000000 \
-    --gate "${PROMOTION_GATE:-confidence}" --promote-at 0.51 --extend-games 2000 --futility-games 1000 --prefetch --train-from latest --selfplay-from latest --match-simulations 200 --min-games 1000 --anchor runs/g1/nets/round_013.npz --anchor-games 2000 --guard-live 0.01 \
+    --gate "${PROMOTION_GATE:-confidence}" --promote-at 0.51 --extend-games 2000 --futility-games 1000 --prefetch --train-from latest --selfplay-from latest --match-simulations 200 --train-ema 0.9997 --min-games 1000 --anchor runs/g1/nets/round_013.npz --anchor-games 2000 --guard-live 0.01 \
     --distribute-eval \
     --simulations "${SELFPLAY_SIMULATIONS:-400}" --full-rate 0.25 --fast-simulations 24 \
     --reference AB:2,F \

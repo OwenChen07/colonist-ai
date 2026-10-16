@@ -362,6 +362,19 @@ def losses(model, x, legal, action, pi, value, aux, value_weight, aux_weight=0.0
     return total, policy_loss, value_loss, correct, n_target, aux_loss
 
 
+def _swap_in(model, weights):
+    """Load `weights` (name -> tensor) into the model in place; return the
+    weights they replaced."""
+    import torch
+
+    live = model.state_dict()
+    old = {k: live[k].detach().clone() for k in weights}
+    with torch.no_grad():
+        for k, v in weights.items():
+            live[k].copy_(v)
+    return old
+
+
 def model_device(model):
     return next(model.parameters()).device
 
@@ -470,6 +483,13 @@ def main(argv=None):
         help="load a random subset of the shards with about this many positions "
         "(default: all), when memory can't hold them all",
     )
+    parser.add_argument(
+        "--ema",
+        type=float,
+        default=0.0,
+        help="keep a moving average of the weights with this decay per step "
+        "(e.g. 0.9997) and validate and export it; 0 is off",
+    )
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args(argv)
 
@@ -537,6 +557,17 @@ def main(argv=None):
     ckpt_path = os.path.join(args.out, "checkpoint.pt")
     log_path = os.path.join(args.out, "log.csv")
     first_epoch, best = 0, float("inf")
+    # A running average of the weights (as KataGo averages snapshots): what
+    # is validated and exported, less noisy than the last step's weights.
+    ema = (
+        {
+            k: v.detach().clone()
+            for k, v in model.state_dict().items()
+            if v.is_floating_point()
+        }
+        if args.ema
+        else None
+    )
     if os.path.exists(ckpt_path):
         ckpt = torch.load(ckpt_path, map_location=device)
         if ckpt["hidden"] != hidden:
@@ -546,6 +577,8 @@ def main(argv=None):
             )
             return 1
         model.load_state_dict(ckpt["model"])
+        if args.ema and "ema" in ckpt:
+            ema = {k: v.to(device) for k, v in ckpt["ema"].items()}
         opt.load_state_dict(ckpt["opt"])
         sched.load_state_dict(ckpt["sched"])
         first_epoch = ckpt["epoch"]
@@ -566,6 +599,8 @@ def main(argv=None):
                 ]
             )
 
+    live = model.state_dict()  # shares storage with the parameters
+    ema_pairs = [(ema[k], live[k]) for k in ema] if ema else []
     gen = torch.Generator(device="cpu").manual_seed(args.seed)
     augment = None if args.no_augment else Augment(device, gen)
     for epoch in range(first_epoch, args.epochs):
@@ -585,7 +620,12 @@ def main(argv=None):
             total.backward()
             opt.step()
             sched.step()
+            if ema_pairs:
+                with torch.no_grad():
+                    for average, weight in ema_pairs:
+                        average.mul_(args.ema).add_(weight, alpha=1 - args.ema)
             sums += [pl.item(), vl.item(), 1]
+        raw = _swap_in(model, ema) if ema else None
         vp, vv, va, vaux = evaluate(model, val, args.batch * 4, args.value_weight)
         secs = time.time() - start
         row = [epoch + 1, sums[0] / sums[2], sums[1] / sums[2], vp, vv, va, secs]
@@ -612,8 +652,11 @@ def main(argv=None):
             best = val_loss
             export(model, os.path.join(args.out, "net.npz"), meta)
         export(model, os.path.join(args.out, "last.npz"), meta)
+        if raw is not None:
+            _swap_in(model, raw)  # back to the trained weights
         torch.save(
             {
+                "ema": ema,
                 "model": model.state_dict(),
                 "opt": opt.state_dict(),
                 "sched": sched.state_dict(),

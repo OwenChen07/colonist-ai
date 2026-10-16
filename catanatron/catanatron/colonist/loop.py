@@ -339,6 +339,8 @@ def train(run, n, args):
         argv += ["--device", args.device]
     if args.train_sample:
         argv += ["--sample", str(args.train_sample)]
+    if getattr(args, "train_ema", 0):
+        argv += ["--ema", str(args.train_ema)]
     if args.train_host:
         try:
             train_remote(args, argv, data, run.dir(n, "train"), init, n)
@@ -977,6 +979,12 @@ def main(argv=None):
         help="positions --train-host loads (its memory limit)",
     )
     parser.add_argument("--lr", type=float, default=3e-4)
+    parser.add_argument(
+        "--train-ema",
+        type=float,
+        default=0.0,
+        help="train.py --ema: average the weights, decay per step (0: off)",
+    )
     parser.add_argument("--device", default=None)
     parser.add_argument("--match-simulations", type=int, default=100)
     parser.add_argument("--max-games", type=int, default=2000)
