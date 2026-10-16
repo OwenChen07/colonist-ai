@@ -875,6 +875,9 @@ def benchmark(run, n, args):
                     "simulations": args.match_simulations,
                 }
             say(f"  promoted: round {n} is the new best (guardrails held)")
+            # Saved now, not after the gauntlet (400 more games): the bots
+            # and the site read the best round from state.json.
+            run.save()
         else:
             record["guardrails"] = reasons
             run.state["since_promotion"] += 1

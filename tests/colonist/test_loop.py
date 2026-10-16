@@ -879,3 +879,22 @@ def test_a_slow_early_self_play_is_stopped_after_the_wait_limit(tmp_path, monkey
     loop.wait_prefetch(run, 7, limit=0)
     assert killed == [child.pid]
     assert child.wait(timeout=5) is not None
+
+
+def test_a_promotion_is_saved_before_the_gauntlet(tiny_args, monkeypatch):
+    pytest.importorskip("torch")
+    from catanatron.colonist import loop
+
+    run, args, init = tiny_args
+    seen = []
+
+    def gauntlet(run_, n, args_):
+        saved = json.loads((run / "state.json").read_text())
+        seen.append(saved["best_round"])
+
+    monkeypatch.setattr(loop, "gauntlet", gauntlet)
+    monkeypatch.setattr(evaluate, "sprt", lambda *a, **k: _fake_result(None, 0.49))
+    monkeypatch.setattr(evaluate, "match", lambda *a, **k: _fake_result(None, 0.6))
+    gate = ["--gate", "loose", "--gauntlet", "W", "--init", init, "--rounds", "1"]
+    assert loop.main(args + gate) == 0
+    assert seen == [1]  # on disk already when the gauntlet started
