@@ -118,3 +118,13 @@ def test_a_failed_worker_s_games_are_played_here(tmp_path, monkeypatch):
     games = distributed.run_tasks(tasks, 1, [("w@x", 2)], log=logs.append)
     assert games == list(evaluate._run(tasks, 1))
     assert logs
+
+
+def test_excluded_hosts_are_left_out():
+    from catanatron.colonist.distributed import worker_hosts
+
+    env = {
+        "COLONIST_WORKER_HOSTS": "a@x:4,b@pc:10,c@y:2",
+        "COLONIST_EXCLUDE_HOSTS": "b@pc",
+    }
+    assert worker_hosts(env) == [("a@x", 4), ("c@y", 2)]

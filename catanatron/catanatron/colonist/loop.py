@@ -167,6 +167,11 @@ def ensure_prefetch(run, n, args):
 
     os.makedirs(run.dir(n), exist_ok=True)
     log = open(run.dir(n, "prefetch.log"), "a")
+    env = dict(os.environ)
+    if getattr(args, "train_host", None):
+        # Not on the GPU host: it trains this round meanwhile, and both don't
+        # fit in its memory (round 60's training was killed for it).
+        env["COLONIST_EXCLUDE_HOSTS"] = args.train_host
     process = subprocess.Popen(
         [
             sys.executable,
@@ -178,6 +183,7 @@ def ensure_prefetch(run, n, args):
         ],
         stdout=log,
         stderr=subprocess.STDOUT,
+        env=env,
     )
     with open(_prefetch_path(run), "w") as stream:
         json.dump({"round": n, "pid": process.pid}, stream)

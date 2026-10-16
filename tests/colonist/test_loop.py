@@ -762,8 +762,19 @@ def test_prefetch_starts_the_next_round_once_and_records_when_done(
     monkeypatch.setattr(
         subprocess, "Popen", lambda argv, **k: started.append(argv) or FakeProcess()
     )
-    args = SimpleNamespace(prefetch=True, prefetch_round=0, argv=[run.root, "--x"])
+    args = SimpleNamespace(
+        prefetch=True, prefetch_round=0, argv=[run.root, "--x"], train_host="gpu@pc"
+    )
+    envs = []
+    monkeypatch.setattr(
+        subprocess,
+        "Popen",
+        lambda argv, env=None, **k: envs.append(env)
+        or started.append(argv)
+        or FakeProcess(),
+    )
     loop.ensure_prefetch(run, 5, args)
+    assert envs[0]["COLONIST_EXCLUDE_HOSTS"] == "gpu@pc"  # not on the trainer
     loop.ensure_prefetch(run, 5, args)  # running: not again
     assert len(started) == 1 and started[0][-2:] == ["--prefetch-round", "5"]
     assert started[0][3:5] == [run.root, "--x"]

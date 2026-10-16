@@ -82,6 +82,9 @@ def worker_hosts(environ=os.environ):
             f"{environ['COLONIST_WORKER_HOST']}:"
             f"{environ.get('COLONIST_REMOTE_WORKERS', '2')}"
         )
+    # COLONIST_EXCLUDE_HOSTS: hosts to leave out here, e.g. the GPU host while
+    # it trains (the loop's early self-play), which can't hold both at once.
+    excluded = {h for h in environ.get("COLONIST_EXCLUDE_HOSTS", "").split(",") if h}
     hosts = []
     for item in (spec or "").split(","):
         item = item.strip()
@@ -90,7 +93,8 @@ def worker_hosts(environ=os.environ):
         host, _, processes = item.rpartition(":")
         if not host or not processes.isdigit() or int(processes) < 1:
             raise ValueError(f"worker {item!r} is not user@host:processes")
-        hosts.append((host, int(processes)))
+        if host not in excluded:
+            hosts.append((host, int(processes)))
     return hosts
 
 
