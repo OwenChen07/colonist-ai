@@ -225,6 +225,31 @@ def prefetch_only(run, n, args):
         json.dump({"round": n, "pid": os.getpid(), "done": True}, stream)
 
 
+def selfplay_net(run, n, args):
+    """(net file, description) that plays round n's self-play: the best net,
+    or with --selfplay-from latest the newest net trained since the best
+    (as AlphaZero's data keeps moving with the net, while the bots still
+    switch only on a promotion), unless that net scored below --reset-below
+    against the best. Early self-play for round n starts while round n - 1
+    still trains, so it uses round n - 2's net: a one-round lag."""
+    best_round = run.state["best_round"]
+    if getattr(args, "selfplay_from", "best") == "latest":
+        scored = {
+            r["round"]: r.get("score")
+            for r in run.state["history"]
+            if best_round < r.get("round", 0) < n
+        }
+        if scored:
+            k = max(scored)
+            if (
+                scored[k] is not None
+                and scored[k] >= args.reset_below
+                and os.path.exists(run.net(k))
+            ):
+                return run.net(k), f"round {k}'s net (it scored {scored[k]:.1%})"
+    return run.best, f"the best net (round {best_round})"
+
+
 def play(run, n, args):
     from catanatron.colonist import selfplay
 
@@ -239,12 +264,13 @@ def play(run, n, args):
     best_round = run.state["best_round"]
     older = [run.net(k) for k in range(max(0, best_round - 3), best_round)]
     opponents = [p for p in older if os.path.exists(p)] + args.reference
+    net, source = selfplay_net(run, n, args)
     say(
-        f"round {n}: self-play, {args.games} games, opponents {opponents or 'none'}, "
-        f"setup noise scale {args.setup_noise_scale:g}"
+        f"round {n}: self-play by {source}, {args.games} games, opponents "
+        f"{opponents or 'none'}, setup noise scale {args.setup_noise_scale:g}"
     )
     runner(
-        run.best,
+        net,
         run.dir(n, "data"),
         games=args.games,
         seed=args.seed + n * 1_000_000,  # fresh boards every round
@@ -621,12 +647,18 @@ def anchor_reference(run, args):
     net (and again if the anchor changes)."""
     best = run.state["best_round"]
     known = run.state.get("anchor") or {}
-    if known.get("round") != best or known.get("net") != args.anchor:
+    if (
+        known.get("round") != best
+        or known.get("net") != args.anchor
+        # Scores at another search budget aren't comparable: play it again.
+        or known.get("simulations", 100) != args.match_simulations
+    ):
         say(f"  anchor: scoring the best net (round {best}) first")
         known = {
             "round": best,
             "net": args.anchor,
             "score": _anchor_match(run, run.net(best), args),
+            "simulations": args.match_simulations,
         }
         run.state["anchor"] = known
         run.save()
@@ -815,6 +847,7 @@ def benchmark(run, n, args):
                     "round": n,
                     "net": args.anchor,
                     "score": record["anchor"],
+                    "simulations": args.match_simulations,
                 }
             say(f"  promoted: round {n} is the new best (guardrails held)")
         else:
@@ -964,6 +997,13 @@ def main(argv=None):
         default="best",
         help="start each round's training from the best net, or from the "
         "previous round's new net (gains add up without promotions)",
+    )
+    parser.add_argument(
+        "--selfplay-from",
+        choices=("best", "latest"),
+        default="best",
+        help="the net that plays self-play: the best (promoted) net, or the "
+        "newest trained one (the bots still follow promotions only)",
     )
     parser.add_argument(
         "--reset-below",

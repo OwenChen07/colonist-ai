@@ -810,3 +810,48 @@ def test_the_loop_starts_prefetch_after_self_play_and_waits_before_it(
     monkeypatch.setattr(evaluate, "match", lambda *a, **k: _fake_result(None, 0.6))
     assert loop.main(args + ["--prefetch", "--init", init, "--rounds", "1"]) == 0
     assert calls[0] == ("wait", 1) and ("start", 2) in calls
+
+
+def test_selfplay_uses_the_newest_good_net_or_the_best(tmp_path):
+    from catanatron.colonist import loop
+
+    run = loop.Run(str(tmp_path / "run"))
+    init = tmp_path / "init.npz"
+    random_net(hidden=(8,)).save(str(init))
+    run.start(str(init))
+    run.state["best_round"] = 40
+    for k in (57, 58):
+        random_net(hidden=(8,)).save(run.net(k))
+    run.state["history"] += [
+        {"round": 57, "score": 0.522},
+        {"round": 58, "score": 0.51},
+    ]
+    latest = SimpleNamespace(selfplay_from="latest", reset_below=0.48)
+    assert loop.selfplay_net(run, 59, latest)[0] == run.net(58)
+    # Early self-play for round 60 starts while round 59 trains: round 58's.
+    assert loop.selfplay_net(run, 60, latest)[0] == run.net(58)
+    run.state["history"].append({"round": 59, "score": 0.45})  # clearly worse
+    random_net(hidden=(8,)).save(run.net(59))
+    assert loop.selfplay_net(run, 60, latest)[0] == run.best
+    best = SimpleNamespace(selfplay_from="best", reset_below=0.48)
+    assert loop.selfplay_net(run, 59, best)[0] == run.best
+    run.state["best_round"] = 59  # promoted: nothing newer yet
+    assert loop.selfplay_net(run, 60, latest)[0] == run.best
+
+
+def test_the_anchor_is_scored_again_at_a_new_search_budget(tmp_path, monkeypatch):
+    from catanatron.colonist import loop
+
+    run = loop.Run(str(tmp_path / "run"))
+    run.state = {"best_round": 40, "history": []}
+    run.save = lambda: None
+    played = []
+    monkeypatch.setattr(
+        loop, "_anchor_match", lambda run, net, args: played.append(net) or 0.6
+    )
+    run.state["anchor"] = {"round": 40, "net": "a.npz", "score": 0.5865}  # at 100
+    args = SimpleNamespace(anchor="a.npz", match_simulations=100)
+    assert loop.anchor_reference(run, args) == 0.5865 and not played
+    args.match_simulations = 200
+    assert loop.anchor_reference(run, args) == 0.6 and len(played) == 1
+    assert run.state["anchor"]["simulations"] == 200
