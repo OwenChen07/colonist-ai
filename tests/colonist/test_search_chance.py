@@ -55,3 +55,65 @@ def test_dev_card_branches_draw_different_cards():
     branches = expand_spectrum(game, [buy])[buy]
     drawn = {g.state.action_records[-1].result for g, _ in branches}
     assert len(drawn) == len(branches) > 1
+
+
+def _one_point_from_winning(seed=3):
+    """A colonist 1v1 position where the player to move can build, set one
+    point short of winning, so the build wins."""
+    import random as _random
+
+    from catanatron.colonist.rules import new_game
+    from catanatron.models.enums import ActionType
+    from catanatron.models.player import Color, Player
+    from catanatron.state_functions import player_key
+
+    rng = _random.Random(seed)
+    game = new_game([Player(Color.RED), Player(Color.BLUE)], seed=seed)
+    builds = (ActionType.BUILD_CITY, ActionType.BUILD_SETTLEMENT)
+    for _ in range(5000):
+        state = game.state
+        if not state.is_initial_build_phase and any(
+            a.action_type in builds for a in game.playable_actions
+        ):
+            key = player_key(state, state.current_color()) + "_"
+            state.player_state[key + "ACTUAL_VICTORY_POINTS"] = game.vps_to_win - 1
+            state.player_state[key + "VICTORY_POINTS"] = game.vps_to_win - 1
+            return game
+        game.execute(rng.choice(game.playable_actions))
+    raise AssertionError("no build position found")
+
+
+def test_the_search_always_takes_an_immediate_win():
+    from catanatron.colonist.graph import random_graph_net
+    from catanatron.colonist.mcts import Decision, Search, immediate_win
+    from catanatron.models.enums import ActionType
+
+    game = _one_point_from_winning()
+    color = game.state.current_color()
+    root = Decision(game, color, list(game.playable_actions))
+    win = immediate_win(root)
+    assert win is not None
+    assert root.actions[win].action_type in (
+        ActionType.BUILD_CITY,
+        ActionType.BUILD_SETTLEMENT,
+    )
+    search = Search(random_graph_net(seed=1), simulations=16)
+    action, played = search.run(game)
+    after = game.copy()
+    after.execute(action)
+    assert after.winning_color() == color
+    pi, v = search.root_targets(played)
+    assert pi.sum() == 1.0 and pi[played.immediate_win] == 1.0 and v == 1.0
+    # Off: the plain search, which may or may not find it.
+    off = Search(random_graph_net(seed=1), simulations=16, take_immediate_wins=False)
+    off.run(game)
+
+
+def test_no_immediate_win_far_from_the_end():
+    from catanatron.colonist.mcts import Decision, immediate_win
+    from catanatron.colonist.rules import new_game
+    from catanatron.models.player import Color, Player
+
+    game = new_game([Player(Color.RED), Player(Color.BLUE)], seed=4)
+    root = Decision(game, game.state.current_color(), list(game.playable_actions))
+    assert immediate_win(root) is None

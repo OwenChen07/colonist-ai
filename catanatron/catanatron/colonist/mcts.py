@@ -145,6 +145,28 @@ def mix_logits(main, human, mix):
     return np.logaddexp(math.log1p(-mix) + log_p, math.log(mix) + log_q)
 
 
+# ===== immediate wins
+def immediate_win(root):
+    """Index of a root move that wins the game at once, or None. Only moves
+    without a chance outcome count (a development card bought could be a
+    point, but isn't known to be), and only when the player is within 2
+    points of winning (no single move gains more: a city or settlement 1,
+    longest road or largest army 2)."""
+    game, color = root.game, root.color
+    state = game.state
+    points = state.player_state[player_key(state, color) + "_ACTUAL_VICTORY_POINTS"]
+    if points < game.vps_to_win - 2:
+        return None
+    for i, action in enumerate(root.actions):
+        if outcomes(game, action) is not None:
+            continue
+        after = game.copy()
+        after.execute(action, validate_action=False)
+        if after.winning_color() == color:
+            return i
+    return None
+
+
 # ===== the tree
 class Decision:
     __slots__ = (
@@ -158,6 +180,7 @@ class Decision:
         "N",
         "W",
         "children",
+        "immediate_win",
     )
 
     def __init__(self, game, color, actions):
@@ -169,6 +192,7 @@ class Decision:
         self.N = np.zeros(n)
         self.W = np.zeros(n)  # summed values for `color`
         self.children = [None] * n
+        self.immediate_win = None  # index of a move that wins at once (root)
 
     def set_evaluation(self, logits, value):
         self.logits = logits
@@ -212,6 +236,7 @@ class Search:
         opponent_model=None,
         opponent_mix=0.0,
         root_action_filter=None,
+        take_immediate_wins=True,
     ):
         self.net = net
         self.simulations = simulations
@@ -235,6 +260,7 @@ class Search:
         # Experimental decision rules may narrow only the root's legal moves.
         # Descendants always use the simulator's complete legal action set.
         self.root_action_filter = root_action_filter
+        self.take_immediate_wins = take_immediate_wins
         self.root_color = None  # the searcher, set when a search starts
         self.evaluations = 0
         self.opponent_evaluations = 0
@@ -427,6 +453,15 @@ class Search:
         if not isinstance(root, Decision):
             raise ValueError("search needs a position with a choice to make")
         yield [root]
+        if self.take_immediate_wins:
+            win = immediate_win(root)
+            if win is not None:
+                # The root samples at most `considered` moves by the net's
+                # prior: a win the net rates low was never looked at (seen
+                # in 5-6 of 35 flagged human-game positions). A win is a win.
+                root.immediate_win = win
+                self.used = 0
+                return root.actions[win], root
         n = len(root.actions)
         gumbel = self.root_gumbel(n, root.game.state.current_prompt)
         m = min(self.considered, n)
@@ -470,6 +505,10 @@ class Search:
     def root_targets(self, root):
         """Training targets from a finished search: the improved policy over
         the root's moves, and the search's value for the root player."""
+        if root.immediate_win is not None:  # the move that wins, for sure
+            pi = np.zeros(len(root.actions))
+            pi[root.immediate_win] = 1.0
+            return pi, 1.0
         q = self.completed_q(root)
         pi = self.improved_policy(root)
         return pi, float((pi * q).sum())
