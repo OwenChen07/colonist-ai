@@ -188,3 +188,24 @@ def test_training_with_a_weight_average_exports_the_average(tmp_path):
     # The raw trained weights are what the checkpoint resumes from.
     raw = ckpt["model"]
     assert any(not torch.allclose(raw[k], ckpt["ema"][k]) for k in ckpt["ema"])
+
+
+def test_a_sampling_net_player_plays_legal_moves_and_follows_its_seed(tmp_path):
+    from catanatron.colonist.rules import new_game
+    from catanatron.models.player import Color
+    import catanatron.players  # noqa: F401  (registers the builtins)
+    from catanatron.registry import REGISTRY
+
+    path = str(tmp_path / "h.npz")
+    G.random_graph_net(8, 8, 1, seed=2).save(path)
+    moves = []
+    for _ in range(2):
+        players = [
+            REGISTRY.build(f"ZS:{path}:1.0", Color.RED),
+            REGISTRY.build(f"ZS:{path}:1.0", Color.BLUE),
+        ]
+        game = new_game(players, seed=5)
+        game.play()
+        moves.append([r.action for r in game.state.action_records][:60])
+        assert game.winning_color() is not None or game.state.num_turns > 0
+    assert moves[0] == moves[1]  # same seeds, same game

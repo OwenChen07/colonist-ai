@@ -41,9 +41,10 @@ def register_builtins(registry=REGISTRY):
         "SAB": SameTurnAlphaBetaPlayer,
     }
     try:  # the network player needs numpy (the colonist extra)
-        from catanatron.colonist.mcts import NetPlayer
+        from catanatron.colonist.mcts import NetPlayer, SamplingNetPlayer
 
         builtins["Z"] = NetPlayer
+        builtins["ZS"] = SamplingNetPlayer
     except ImportError:
         pass
     for key, player_class in builtins.items():

@@ -514,6 +514,42 @@ class Search:
         return pi, float((pi * q).sum())
 
 
+class SamplingNetPlayer(Player):
+    """A net's policy, sampled without search: ZS:<net.npz>:<temperature>.
+    Meant for the human opponent model, so it plays like a person (who
+    doesn't always make their most likely move) rather than an optimiser.
+    Temperature 1 samples the policy as is; lower is greedier."""
+
+    LABEL = "Net policy (sampled)"
+
+    @dataclass(frozen=True)
+    class Params:
+        path: str = "models/human/net.npz"
+        temperature: float = 1.0
+        seed: int = 0
+
+    def __init__(self, color, params=None, net=None):
+        super().__init__(color, params)
+        if net is None:
+            from catanatron.colonist.net import Net
+
+            net = NetPlayer._nets.get(self.params.path)
+            if net is None:
+                net = NetPlayer._nets[self.params.path] = Net.load(self.params.path)
+        self.net = net
+        self.rng = np.random.default_rng(self.params.seed)
+
+    def decide(self, game, playable_actions):
+        if len(playable_actions) == 1:
+            return playable_actions[0]
+        legal = E.legal_indices(playable_actions)
+        static, dynamic = E.encode(game, game.state.current_color())
+        logits, _ = self.net.forward(static, dynamic[None, :])
+        x = logits[0, legal].astype(np.float64) / max(self.params.temperature, 1e-6)
+        p = np.exp(x - x.max())
+        return playable_actions[int(self.rng.choice(len(legal), p=p / p.sum()))]
+
+
 class NetPlayer(Player):
     """The network with search: Z:<net.npz>:<simulations>. With 0 simulations
     it plays the policy's top move."""
