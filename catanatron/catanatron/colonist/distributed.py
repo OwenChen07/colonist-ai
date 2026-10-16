@@ -281,6 +281,14 @@ def _prepare(host, key, root, remote_data, remote_nets, net_path):
     subprocess.run(
         _ssh(host, key, ["mkdir", "-p", remote_data, remote_nets]), check=True
     )
+    # A worker runs one self-play job at a time, so any self-play still
+    # there was left behind: a stopped early self-play or a restarted loop
+    # ends its ssh, not the remote processes. Left there, they filled the
+    # 2-core AWS workers' memory until a new job's pool hung (round 64).
+    subprocess.run(
+        _ssh(host, key, ["pkill", "-f", "[c]atanatron.colonist.selfplay"]),
+        check=False,
+    )
     # The same rules and search everywhere.
     _sync_code(host, key, root)
     remote_net = remote_nets / "best.npz"

@@ -128,3 +128,27 @@ def test_excluded_hosts_are_left_out():
         "COLONIST_EXCLUDE_HOSTS": "b@pc",
     }
     assert worker_hosts(env) == [("a@x", 4), ("c@y", 2)]
+
+
+def test_a_worker_s_leftover_self_play_is_cleared_before_a_new_job(
+    tmp_path, monkeypatch
+):
+    from pathlib import Path
+
+    from catanatron.colonist import distributed
+
+    commands = []
+    monkeypatch.setattr(
+        distributed.subprocess,
+        "run",
+        lambda argv, **k: commands.append(argv[-1]),
+    )
+    monkeypatch.setattr(distributed, "_sync_code", lambda *a: None)
+    monkeypatch.setattr(distributed, "_rsync", lambda *a: None)
+    root = Path("/home/w/colonist-ai")
+    argv = distributed._prepare(
+        "w@host", "key", root, root / "data", root / "nets", tmp_path / "n.npz"
+    )
+    assert any("pkill" in c and "atanatron.colonist.selfplay" in c for c in commands)
+    assert commands.index(next(c for c in commands if "pkill" in c)) == 1  # after mkdir
+    assert "catanatron.colonist.selfplay" in [str(a) for a in argv]
