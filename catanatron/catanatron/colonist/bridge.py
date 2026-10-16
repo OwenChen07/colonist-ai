@@ -673,9 +673,6 @@ class Bridge:
             return []
         _, plan, _ = self.expect
         expected = plan[0]
-        self.expect = None
-        self.pending_sends.clear()
-        self.sent_raws = []
         if expected["type"] == "DISCARD_RESOURCE":
             # Earlier-seat discards can be inserted before the opponent's
             # already-recorded discards, so the old log length misses them.
@@ -688,7 +685,13 @@ class Bridge:
             if entry[0][0] == self.live.bot.value
         ]
         if not mine:
-            return []  # the update was someone else's (e.g. the opponent's discard)
+            # The update was someone else's (e.g. the opponent's discard): the
+            # move sent is still expected. Forgetting it, the bot thought again
+            # and sent a second discard (seen live: bot5).
+            return []
+        self.expect = None
+        self.pending_sends.clear()
+        self.sent_raws = []
         if expected["type"] == "DISCARD_RESOURCE":
             # colonist logs a 7's discards together, in its own order.
             sent = sorted(m["resource"] for m in plan)

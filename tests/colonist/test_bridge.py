@@ -1374,3 +1374,44 @@ def test_confirms_earlier_seats_discards_inserted_before_the_opponents(wrong):
         assert replies == []
         assert bridge.live.error is None
     assert bridge.expect is None
+
+
+def test_a_pending_discard_waits_through_the_opponents():
+    """bot5's 2026-10-16 capture: the bot (the earlier seat) sent its five
+    discards, then the opponent's were logged first. That update wasn't the
+    bot's move, so the sent plan must stay expected: forgetting it, the bot
+    thought again, sent a second discard, and then stopped on its real one."""
+    from catanatron.models.player import Color
+    from catanatron.colonist.live import RESOURCE_ID
+
+    conv = C._Converter.__new__(C._Converter)
+    conv.play_order = [1, 2]
+    conv.seat = {1: "RED", 2: "BLUE"}
+    conv.record = {"seats": ["RED", "BLUE"], "checks": []}
+    conv.log = [[["RED", "ROLL", [3, 4]], [3, 4]]]
+    conv.record["log"] = conv.log
+    conv.discard_phase = None
+    before = len(conv.log)
+    cards = ["ORE", "ORE", "WOOD", "ORE", "SHEEP"]
+    plan = [{"type": "DISCARD_RESOURCE", "resource": RESOURCE_ID[c]} for c in cards]
+    bridge = Bridge(random_net(hidden=(8,)), 2)
+    bridge.live = SimpleNamespace(
+        conv=conv,
+        record=conv.record,
+        bot=Color.RED,
+        error=None,
+        position_key=before,
+        describe=lambda a: {"resource": RESOURCE_ID[a.value]},
+    )
+    bridge.expect = (before, plan, time.time())
+    conv.discards = [(2, c) for c in ["ORE", "ORE", "BRICK", "WOOD", "WOOD"]]
+    conv._flush_discards()
+    bridge.live.position_key = len(conv.log)
+    assert bridge.check_played(before) == []
+    assert bridge.expect is not None and bridge.expect[1] == plan
+    before = bridge.live.position_key
+    conv.discards = [(1, c) for c in cards]
+    conv._flush_discards()
+    bridge.live.position_key = len(conv.log)
+    assert bridge.check_played(before) == []
+    assert bridge.live.error is None and bridge.expect is None
