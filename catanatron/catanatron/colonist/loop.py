@@ -190,8 +190,12 @@ def ensure_prefetch(run, n, args):
     say(f"round {n}: self-play started early, alongside round {n - 1}")
 
 
-def wait_prefetch(run, n):
-    """Wait for round n's background self-play, if it is still running."""
+def wait_prefetch(run, n, limit=600):
+    """Wait for round n's background self-play, if it is still running, but
+    at most `limit` seconds: then stop it, and the round's own self-play
+    plays what's left on every host (the early one leaves out the GPU host,
+    and round 61 waited 1 h 45 min on its two slowest workers). Only the
+    shards it had under way are lost."""
     try:
         with open(_prefetch_path(run)) as stream:
             info = json.load(stream)
@@ -200,7 +204,26 @@ def wait_prefetch(run, n):
     if info.get("round") != n or info.get("done") or not _prefetch_alive(info):
         return
     say(f"round {n}: waiting for its early self-play to finish")
+    deadline = time.time() + limit
     while _prefetch_alive(info):
+        if time.time() >= deadline:
+            import signal as _signal
+
+            say(f"round {n}: early self-play still running; stopping it")
+            try:
+                os.kill(int(info["pid"]), _signal.SIGTERM)
+            except OSError:
+                pass
+            for _ in range(60):  # it stops its remote workers first
+                if not _prefetch_alive(info):
+                    break
+                try:
+                    if os.waitpid(int(info["pid"]), os.WNOHANG)[0]:
+                        break
+                except ChildProcessError:
+                    pass
+                time.sleep(1)
+            return
         try:
             with open(_prefetch_path(run)) as stream:
                 if json.load(stream).get("done"):

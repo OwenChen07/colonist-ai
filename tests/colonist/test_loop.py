@@ -855,3 +855,27 @@ def test_the_anchor_is_scored_again_at_a_new_search_budget(tmp_path, monkeypatch
     args.match_simulations = 200
     assert loop.anchor_reference(run, args) == 0.6 and len(played) == 1
     assert run.state["anchor"]["simulations"] == 200
+
+
+def test_a_slow_early_self_play_is_stopped_after_the_wait_limit(tmp_path, monkeypatch):
+    import signal
+    import subprocess
+
+    from catanatron.colonist import loop
+
+    run = loop.Run(str(tmp_path / "run"))
+    os.makedirs(run.root)
+    child = subprocess.Popen(["sleep", "60"])
+    with open(os.path.join(run.root, "prefetch.json"), "w") as stream:
+        json.dump({"round": 7, "pid": child.pid}, stream)
+    killed = []
+    real_kill = os.kill
+    monkeypatch.setattr(
+        loop.os,
+        "kill",
+        lambda pid, sig: (sig == signal.SIGTERM and killed.append(pid))
+        or real_kill(pid, sig),
+    )
+    loop.wait_prefetch(run, 7, limit=0)
+    assert killed == [child.pid]
+    assert child.wait(timeout=5) is not None
