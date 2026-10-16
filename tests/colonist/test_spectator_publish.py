@@ -346,3 +346,32 @@ def test_training_shows_the_configured_epochs_and_every_round(tmp_path):
         "epoch 1: train policy 0.9 value 0.4 | val policy 0.9 value 0.4 accuracy 77.0% | 200 s\n"
     )
     assert training(tmp_path)["progress"]["training"]["total"] == 4
+
+
+def test_round_progress_with_early_self_play():
+    """Round 62's lines from the live log: its early self-play was announced
+    during round 61, and round 63's during round 62's training."""
+    lines = [
+        "[08:03:20] round 62: self-play started early, alongside round 61",
+        "[08:03:21] round 61: training on 10 data folders, from round 60's net",
+        "[08:19:11] round 61: promotion match (confidence gate), new vs best (at most 2000 games)",
+        "[10:53:01] round 61: live value MSE 0.593, picks the winner 77.2%",
+        "[10:53:01] round 62: waiting for its early self-play to finish",
+        "[11:03:01] round 62: early self-play still running; stopping it",
+        "[11:03:02] round 62: before the round: scripts/vm/human_dataset.sh",
+        "[11:04:54] round 62: self-play by round 61's net (it scored 51.0%), 5000 games, opponents []",
+        "[11:05:53]   1 shards to play",
+        "[11:40:00]   shard_3062000000_64.npz: 64 games in 900 s | 64 games, 0.07/s",
+        "[12:15:00]   self-play complete across 8 machines: 5000 games",
+        "[12:16:04] round 63: self-play started early, alongside round 62",
+        "[12:16:05] round 62: training on 10 data folders, from round 61's net",
+        "epoch 1: train policy 0.83 value 0.38 | val policy 0.83 value 0.40 accuracy 79.2% aux 0.3 | 212 s",
+        "[12:31:31] round 62: promotion match (confidence gate), new vs best (at most 2000 games)",
+        "[13:00:00]   1000 games: 51.1% ± 2.9%",
+    ]
+    now = dt.datetime(2026, 10, 16, 13, 5, tzinfo=dt.timezone.utc).timestamp()
+    p = round_progress(lines, 62, epochs=4, now=now)
+    assert p["selfplay"]["games"] == 5000 and p["selfplay"]["done"]
+    assert p["selfplay"]["localDone"] == 64
+    assert p["training"]["total"] == 4 and len(p["training"]["epochs"]) == 1
+    assert p["match"]["games"] == 1000

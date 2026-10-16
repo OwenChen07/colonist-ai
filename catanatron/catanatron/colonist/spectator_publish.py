@@ -134,6 +134,7 @@ STAMP = re.compile(r"^\[(\d\d):(\d\d):(\d\d)\] ")
 EPOCH = re.compile(
     r"^epoch (\d+): .*\| val policy [\d.]+ value ([\d.]+) accuracy ([\d.]+)%(?: aux [\d.]+)? \| (\d+) s"
 )
+EARLY = "self-play started early"
 LOCAL_SHARD = re.compile(r"\| (\d+) games, [\d.]+/s$")
 MATCH = re.compile(r"^\[[\d:]+\]\s+(\d+) games: ([\d.]+)% ± ([\d.]+)%")
 
@@ -157,7 +158,13 @@ def round_progress(lines, number, epochs=3, now=None):
     self-play games, training epochs, the promotion match's running score."""
     now = time.time() if now is None else now
     head = f"] round {number}: "
-    first = next((i for i, line in enumerate(lines) if head in line), None)
+    # A round's early self-play is announced during the previous round
+    # ("round N: self-play started early"), and the next round's in this
+    # one's: neither starts or ends a round's own lines.
+    first = next(
+        (i for i, line in enumerate(lines) if head in line and EARLY not in line),
+        None,
+    )
     if first is None:
         return None
     progress = {"selfplay": None, "training": None, "match": None}
@@ -166,11 +173,15 @@ def round_progress(lines, number, epochs=3, now=None):
     remote_assigned = 0
     unprepared_remote = False
     for line in lines[first:]:
+        if EARLY in line:
+            continue
         if "] round " in line and head not in line:
             break  # the next round
         stamp = _when(line, now) or stamp
         if head + "self-play" in line:
-            total = re.search(r"self-play, (\d+) games", line)
+            # "self-play, 5000 games" or "self-play by round 61's net (...),
+            # 5000 games"
+            total = re.search(r"self-play.*?, (\d+) games", line)
             remote_assigned = 0
             unprepared_remote = False
             progress["selfplay"] = {
