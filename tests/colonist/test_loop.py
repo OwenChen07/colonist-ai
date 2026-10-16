@@ -305,6 +305,7 @@ def test_confidence_gate_blocks_only_a_clear_human_regression(tmp_path, monkeypa
         human_mse_margin=0.01,
         human_accuracy_margin=0.01,
         min_tactical_positions=30,
+        tactical_margin=2,
         tactical_index="index",
         tactical_captures="captures",
         match_simulations=100,
@@ -356,12 +357,14 @@ def test_confidence_gate_skips_too_few_fresh_games_and_blocks_tactical_regressio
     monkeypatch.setattr(
         failure_set,
         "compare",
-        lambda *_a, **_k: {
-            "positions": 300,
-            "baseline_immediate_win_missed": 1,
-            "candidate_immediate_win_missed": 2,
-        },
+        lambda *_a, **_k: tactical,
     )
+    # Round 56's case: one more miss than the best is within the margin.
+    tactical = {
+        "positions": 300,
+        "baseline_immediate_win_missed": 4,
+        "candidate_immediate_win_missed": 5,
+    }
     monkeypatch.setattr(loop, "fresh_human_paths", lambda *_: [])
     args = SimpleNamespace(
         gate="confidence",
@@ -374,10 +377,13 @@ def test_confidence_gate_skips_too_few_fresh_games_and_blocks_tactical_regressio
         human_mse_margin=0.01,
         human_accuracy_margin=0.01,
         min_tactical_positions=200,
+        tactical_margin=2,
         tactical_index="index",
         tactical_captures="captures",
         match_simulations=100,
     )
+    assert loop.guardrails(run, 1, args, {"live": {"mse": 0.59}}) == (True, [])
+    tactical["candidate_immediate_win_missed"] = 7
     ok, reasons = loop.guardrails(run, 1, args, {"live": {"mse": 0.59}})
     assert not ok
     # Too few fresh games is no longer a reason to wait.

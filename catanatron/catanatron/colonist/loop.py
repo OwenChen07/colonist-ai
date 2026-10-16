@@ -735,9 +735,12 @@ def guardrails(run, n, args, record):
             record["tactical"] = tactical
             if tactical.get("positions", 0) < args.min_tactical_positions:
                 reasons.append("too few verified tactical decisions")
+            # A margin, not any increase: two nets of equal strength differ
+            # by a position or two on ~36 win positions by chance alone.
             for key in ("immediate_win_missed", "last_road_no_immediate_gain_chosen"):
-                if tactical.get("candidate_" + key, 0) > tactical.get(
-                    "baseline_" + key, 0
+                if (
+                    tactical.get("candidate_" + key, 0)
+                    > tactical.get("baseline_" + key, 0) + args.tactical_margin
                 ):
                     reasons.append("tactical regression: " + key)
     return not reasons, reasons
@@ -983,7 +986,14 @@ def main(argv=None):
         "and human, anchor, benchmark, tactical guardrails",
     )
     parser.add_argument("--min-human-games", type=int, default=100)
-    parser.add_argument("--min-fresh-human-games", type=int, default=30)
+    parser.add_argument(
+        "--min-fresh-human-games",
+        type=int,
+        default=100,
+        help="confidence gate: fresh human games needed before they are checked "
+        "(fewer is skipped, and they keep accumulating; at 30 the interval was "
+        "too wide to tell a regression from noise)",
+    )
     parser.add_argument(
         "--human-mse-margin",
         type=float,
@@ -998,6 +1008,13 @@ def main(argv=None):
         help="confidence gate: the same for picking the winner (fraction)",
     )
     parser.add_argument("--min-tactical-positions", type=int, default=200)
+    parser.add_argument(
+        "--tactical-margin",
+        type=int,
+        default=2,
+        help="confidence gate: a tactical count (e.g. immediate wins missed) "
+        "blocks only if the new net's exceeds the best's by more than this",
+    )
     parser.add_argument("--tactical-index", default="data/human/index.jsonl")
     parser.add_argument("--tactical-captures", default="captures")
     parser.add_argument(
