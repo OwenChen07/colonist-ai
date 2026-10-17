@@ -13,6 +13,11 @@ A share of games (--opponent-rate) put a random opponent in one seat: an
 older net or a reference bot, so the net doesn't only learn to beat itself.
 Only the main net's moves are recorded from those games.
 
+Human opponent (E13, --human-opponent, a model from opponent_model.py): a
+--human-opponent-rate share of games put it in one seat, where it samples
+each move from its policy without search, so the net learns to beat
+people's style of play. Again only the main net's moves are recorded.
+
 Every searched position is recorded, with the search's improved policy over
 the moves (`pi`) and its value (`v`) as training targets, and the game result
 (`z`) once the game ends. Shards are written and resumed as in datagen.py, in
@@ -63,6 +68,36 @@ def load_opponent(spec):
     return spec
 
 
+class HumanModel:
+    """A seat that plays like people (E13): each move is sampled from the
+    human opponent model's policy over the legal moves, with no search.
+    Shared by the games of a shard; each game gets its own seat()."""
+
+    def __init__(self, net):
+        self.net = net
+
+    def seat(self, seed):
+        return _HumanSeat(self.net, random.Random(seed ^ 0x4A11))
+
+
+class _HumanSeat:
+    """A HumanModel's seat in one game. Has decide() like a bot, so _Game
+    plays it without a search and records none of its moves."""
+
+    def __init__(self, net, rng):
+        self.net = net
+        self.rng = rng
+
+    def decide(self, game, actions):
+        static, dynamic = E.encode(game, game.state.current_color())
+        logits, _ = self.net.forward_rows([static], np.asarray(dynamic)[None])
+        x = logits[0, E.legal_indices(actions)].astype(np.float64)
+        p = np.exp(x - x.max())
+        cdf = np.cumsum(p / p.sum())
+        pick = int(np.searchsorted(cdf, self.rng.random(), side="right"))
+        return actions[min(pick, len(actions) - 1)]
+
+
 class _Game:
     """One game in progress and its records. `seats` maps each color to what
     plays it: the main Net, another Net, or a bot spec string."""
@@ -76,12 +111,17 @@ class _Game:
         self.main = main
         self.seats = {}
         for color, agent in seats.items():
-            if isinstance(agent, str):
+            if isinstance(agent, HumanModel):
+                agent = agent.seat(seed)
+            elif isinstance(agent, str):
                 import catanatron.players  # noqa: F401
                 from catanatron.registry import REGISTRY
 
                 agent = REGISTRY.build(agent, color)
             self.seats[color] = agent
+        self.human_opponent = any(
+            isinstance(a, _HumanSeat) for a in self.seats.values()
+        )
         self.rows = []  # (dynamic, legal mask, pi, v, color, turn)
         self.search = None
         self.search_net = None
@@ -179,12 +219,21 @@ def fresh_game(seed):
     return game
 
 
-def seat_plan(seed, net, opponents, opponent_rate, colors=None):
+def seat_plan(
+    seed, net, opponents, opponent_rate, colors=None, human=None, human_rate=0.0
+):
     """Who plays each color in game `seed`: the main net in both seats, or,
-    at `opponent_rate`, one seat to a random opponent. Fixed by the seed."""
+    at `opponent_rate`, one seat to a random opponent, or, at `human_rate`
+    (drawn first), one seat to the HumanModel `human`. Fixed by the seed."""
     from catanatron.models.player import Color
 
     first, second = colors or (Color.RED, Color.BLUE)
+    if human is not None and human_rate > 0:
+        rng = random.Random(seed ^ 0x4A12)
+        if rng.random() < human_rate:
+            if rng.random() < 0.5:
+                return {first: net, second: human}
+            return {first: human, second: net}
     rng = random.Random(seed ^ 0x0FF0)
     if opponents and rng.random() < opponent_rate:
         other = opponents[rng.randrange(len(opponents))]
@@ -238,6 +287,8 @@ def play_games(
     opponent_rate=0.0,
     starts=None,
     start_rate=0.0,
+    human=None,
+    human_rate=0.0,
 ):
     """Plays the games together, one network call per net per step. Returns
     the finished _Games and the number of network calls."""
@@ -245,7 +296,9 @@ def play_games(
     for s in seeds:
         game = human_start(s, starts, start_rate)
         colors = None if game is None else game.state.colors
-        seats = seat_plan(s, net, list(opponents), opponent_rate, colors)
+        seats = seat_plan(
+            s, net, list(opponents), opponent_rate, colors, human, human_rate
+        )
         games.append(_Game(s, search_args, seats, net, game))
     pending = {}
     for g in games:
@@ -279,8 +332,10 @@ def play_games(
 
 def run_shard(task):
     out_dir, net_path, first, count, search_args, *rest = task
-    rest = list(rest) + [(), 0.0, None, 0.0][len(rest) :]
-    opponent_specs, opponent_rate, starts_path, start_rate = rest
+    rest = list(rest) + [(), 0.0, None, 0.0, None, 0.0][len(rest) :]
+    opponent_specs, opponent_rate, starts_path, start_rate, human_path, human_rate = (
+        rest
+    )
     from catanatron.colonist.net import Net
     from catanatron.colonist.starts import load as load_starts
 
@@ -289,6 +344,7 @@ def run_shard(task):
     net = Net.load(net_path)
     opponents = [load_opponent(o) for o in opponent_specs]
     starts = load_starts(starts_path) if starts_path and start_rate > 0 else None
+    human = HumanModel(Net.load(human_path)) if human_path and human_rate > 0 else None
     start = time.time()
     games, calls = play_games(
         net,
@@ -298,6 +354,8 @@ def run_shard(task):
         opponent_rate,
         starts,
         start_rate,
+        human,
+        human_rate,
     )
     statics, seeds, cols = [], [], {k: [] for k in "dmpvztfa"}
     gidx = []
@@ -327,6 +385,7 @@ def run_shard(task):
         full=np.asarray(cols["f"], bool),
         aux=np.asarray(cols["a"], np.float16).reshape(-1, AUX_TARGETS),
         human_start=np.asarray([g.human_start for g in games], bool),
+        human_opponent=np.asarray([g.human_opponent for g in games], bool),
     )
     os.replace(tmp, path)
     searches = sum(g.searches for g in games)
@@ -350,10 +409,18 @@ def run(
     human_starts=None,
     human_start_rate=0.0,
     setup_simulations=None,
+    human_opponent=None,
+    human_opponent_rate=0.0,
 ):
     """Plays the shards of out_dir that aren't on disk yet."""
     if not 0 <= human_start_rate <= 1:
         raise ValueError("human_start_rate must be in [0, 1]")
+    if not 0 <= human_opponent_rate <= 1:
+        raise ValueError("human_opponent_rate must be in [0, 1]")
+    if human_opponent_rate > 0 and not (
+        human_opponent and os.path.isfile(human_opponent)
+    ):
+        raise ValueError(f"human opponent model {human_opponent!r} not found")
     if human_start_rate > 0 and not (human_starts and os.path.isfile(human_starts)):
         raise ValueError(f"human starts file {human_starts!r} not found")
     if not math.isfinite(setup_noise_scale) or setup_noise_scale <= 0:
@@ -412,9 +479,16 @@ def run(
                     opponent_rate,
                     human_starts,
                     human_start_rate,
+                    human_opponent,
+                    human_opponent_rate,
                 )
             )
     log(f"{len(tasks)} shards to play")
+    if human_opponent_rate > 0:
+        log(
+            f"human opponent: {human_opponent_rate:.0%} of games, one seat "
+            f"sampling from {human_opponent}"
+        )
     if full_rate < 1:
         log(
             f"playout cap randomization: {full_rate:.0%} of moves get {simulations} "
@@ -488,6 +562,18 @@ def main(argv=None):
         default=0.0,
         help="share of games that start from --human-starts",
     )
+    parser.add_argument(
+        "--human-opponent",
+        default=None,
+        help="a human opponent model (opponent_model.py): one seat of some "
+        "games samples its moves from it, without search",
+    )
+    parser.add_argument(
+        "--human-opponent-rate",
+        type=float,
+        default=0.0,
+        help="share of games with a --human-opponent seat (default 0: off)",
+    )
     parser.add_argument("--workers", type=int, default=None)
     parser.add_argument(
         "--opponents",
@@ -520,6 +606,8 @@ def main(argv=None):
         human_starts=args.human_starts,
         human_start_rate=args.human_start_rate,
         setup_simulations=args.setup_simulations,
+        human_opponent=args.human_opponent,
+        human_opponent_rate=args.human_opponent_rate,
     )
     return 0
 

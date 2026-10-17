@@ -358,6 +358,69 @@ def test_full_rate_needs_fast_simulations(tmp_path):
         run("unused.npz", str(tmp_path), games=0, full_rate=0, log=lambda _: None)
 
 
+def test_human_opponent_seat_plays_unsearched_and_unrecorded(tmp_path):
+    from catanatron.colonist.selfplay import HumanModel, _HumanSeat, play_games
+
+    net = random_net(hidden=(16,), seed=1)
+    human = HumanModel(random_net(hidden=(16,), seed=2))
+    games, _ = play_games(net, range(2), {"simulations": 4}, human=human, human_rate=1)
+    for g in games:
+        assert g.done() and g.human_opponent
+        (main_color,) = [c for c, a in g.seats.items() if a is net]
+        (other,) = [a for c, a in g.seats.items() if c != main_color]
+        assert isinstance(other, _HumanSeat)
+        assert g.rows and all(row[4] == main_color for row in g.rows)
+
+
+def test_human_opponent_samples_from_its_policy():
+    from catanatron.colonist.selfplay import _HumanSeat
+
+    game = new_game([RandomPlayer(Color.RED), RandomPlayer(Color.BLUE)], seed=0)
+    actions = game.playable_actions
+    want = actions[len(actions) // 2]
+
+    class Peaked:
+        def forward_rows(self, statics, dynamic):
+            logits = np.zeros((len(dynamic), E.NUM_ACTIONS), np.float32)
+            logits[:, E.action_index(want)] = 50
+            return logits, np.zeros(len(dynamic))
+
+    seat = _HumanSeat(Peaked(), random.Random(0))
+    assert all(seat.decide(game, actions) == want for _ in range(20))
+    seat = _HumanSeat(random_net(hidden=(16,)), random.Random(0))
+    picks = {E.action_key(seat.decide(game, actions)) for _ in range(50)}
+    assert len(picks) > 1  # sampled, not the argmax
+
+
+def test_human_opponent_seat_plan():
+    from catanatron.colonist.selfplay import HumanModel, seat_plan
+
+    net, human = object(), HumanModel(None)
+    for seed in range(50):
+        assert seat_plan(seed, net, ["AB:2"], 0.5) == seat_plan(
+            seed, net, ["AB:2"], 0.5, human=human, human_rate=0
+        )
+        seats = seat_plan(seed, net, ["AB:2"], 0.5, human=human, human_rate=1)
+        assert sorted(map(id, seats.values())) == sorted([id(net), id(human)])
+    some = [seat_plan(s, net, [], 0, human=human, human_rate=0.3) for s in range(400)]
+    share = sum(human in s.values() for s in some) / 400
+    assert 0.2 < share < 0.4
+
+
+def test_human_opponent_needs_its_model(tmp_path):
+    from catanatron.colonist.selfplay import run
+
+    with pytest.raises(ValueError, match="human opponent"):
+        run(
+            "unused.npz",
+            str(tmp_path),
+            games=0,
+            human_opponent=str(tmp_path / "missing.npz"),
+            human_opponent_rate=0.2,
+            log=lambda _: None,
+        )
+
+
 def test_compact_training_data_matches_the_dense_layout(tmp_path):
     """load_split keeps legal moves packed and search policies over legal moves
     only; its batches must equal the dense arrays datagen.load gives."""
