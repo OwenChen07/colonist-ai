@@ -1,6 +1,7 @@
 """Phase 2: inputs, moves, the network, the search and the training data."""
 
 import glob
+import os
 import random
 
 import numpy as np
@@ -228,6 +229,35 @@ def test_training_round_trip(tmp_path):
     assert main(args + ["--epochs", "2"]) == 0  # resumes
     net = Net.load(str(out / "net.npz"))
     assert len(net.hidden) == 2
+
+
+def test_a_lone_shard_is_played_in_parts_and_merged_to_the_same_data(tmp_path):
+    from catanatron.colonist import selfplay
+
+    net_path = str(tmp_path / "net.npz")
+    random_net(hidden=(16,)).save(net_path)
+    whole, *_ = selfplay.run_shard(
+        (str(tmp_path / "one"), net_path, 5, 9, {"simulations": 4})
+    )
+    lines = []
+    selfplay.run(
+        net_path,
+        str(tmp_path / "sp"),
+        games=9,
+        seed=5,
+        simulations=4,
+        workers=2,
+        log=lines.append,
+    )
+    assert "1 shards to play, in 2 parts" in lines
+    assert selfplay.parts_of(5, 9, 2) == [(5, 4), (9, 5)]
+    assert os.listdir(tmp_path / "sp" / "parts") == []
+    merged = glob.glob(str(tmp_path / "sp" / "*.npz"))
+    assert [os.path.basename(p) for p in merged] == [os.path.basename(whole)]
+    with np.load(whole) as a, np.load(merged[0]) as b:
+        assert a.files == b.files
+        for key in a.files:
+            assert np.array_equal(a[key], b[key]), key
 
 
 def test_selfplay_shard_and_mixed_training(tmp_path):

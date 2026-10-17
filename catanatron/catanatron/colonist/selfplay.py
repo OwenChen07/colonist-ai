@@ -392,6 +392,42 @@ def run_shard(task):
     return path, count, len(gidx), searches, calls, time.time() - start
 
 
+# Fewer shards than processes (a host's last shard, or one taken over from a
+# straggler) are played in parts of at least this many games, one process
+# each, and merged into the shard: round 70 waited 29 minutes on one 64-game
+# shard on one of the coordinator's processes while the others sat idle.
+MIN_PART = 4
+
+
+def parts_of(first, count, pieces):
+    """(first, count) of `pieces` near-equal consecutive parts of a shard."""
+    pieces = max(1, min(pieces, count // MIN_PART))
+    cuts = [first + count * i // pieces for i in range(pieces + 1)]
+    return [(a, b - a) for a, b in zip(cuts, cuts[1:])]
+
+
+def merge_parts(path, parts):
+    """Writes the shard at `path` from its part files, in seed order, as
+    run_shard would have written it, and removes the parts."""
+    datas = []
+    for part in parts:
+        with np.load(part) as data:
+            datas.append({k: data[k] for k in data.files})
+    merged = {}
+    for key in datas[0]:
+        pieces = []
+        offset = 0
+        for data in datas:
+            pieces.append(data[key] + offset if key == "game" else data[key])
+            offset += len(data["seed"])
+        merged[key] = np.concatenate(pieces)
+    tmp = path + ".tmp.npz"
+    np.savez_compressed(tmp, **merged)
+    os.replace(tmp, path)
+    for part in parts:
+        os.remove(part)
+
+
 def run(
     net_path,
     out_dir,
@@ -483,7 +519,30 @@ def run(
                     human_opponent_rate,
                 )
             )
-    log(f"{len(tasks)} shards to play")
+    processes = workers or os.cpu_count() or 1
+    parts = {}  # shard path -> its part paths, when played in parts
+    if 0 < len(tasks) < processes:
+        parts_dir = os.path.join(out_dir, "parts")
+        pieces = -(-processes // len(tasks))
+        whole, tasks = tasks, []
+        for task in whole:
+            paths = []
+            for first, count in parts_of(task[2], task[3], pieces):
+                paths.append(shard_path(parts_dir, first, count))
+                if not os.path.exists(paths[-1]):
+                    tasks.append((parts_dir, task[1], first, count, *task[4:]))
+            parts[shard_path(out_dir, task[2], task[3])] = paths
+        log(f"{len(whole)} shards to play, in {len(tasks)} parts")
+    else:
+        log(f"{len(tasks)} shards to play")
+
+    def merge_done():
+        for path, paths in list(parts.items()):
+            if all(os.path.exists(p) for p in paths):
+                merge_parts(path, paths)
+                del parts[path]
+                log(f"{os.path.basename(path)}: merged from {len(paths)} parts")
+
     if human_opponent_rate > 0:
         log(
             f"human opponent: {human_opponent_rate:.0%} of games, one seat "
@@ -496,6 +555,7 @@ def run(
         )
     if human_start_rate > 0:
         log(f"human starts: {human_start_rate:.0%} of games, from {human_starts}")
+    merge_done()  # parts all played before a restart
     if not tasks:
         return
     start, played = time.time(), 0
@@ -512,6 +572,7 @@ def run(
                 f"searches per game, {searches * simulations / max(calls, 1):.0f} "
                 f"simulations per network call) | {played} games, {rate:.2f}/s"
             )
+            merge_done()
 
 
 def main(argv=None):
