@@ -307,31 +307,6 @@ def test_retired_accounts_keep_their_record_and_show_nothing_live(tmp_path):
     assert bots["A"]["recent"] == "W" and bots["A"]["net"] == "g1 round 11"
 
 
-def test_orchestrator_report_is_published_as_plain_fields(tmp_path):
-    from catanatron.colonist.spectator_publish import orchestrator
-
-    assert snapshot(tmp_path, {}, "vm1")["orchestrator"] is None
-    (tmp_path / "orchestrator.json").write_text(
-        json.dumps(
-            {
-                "at": "2026-10-13T04:00:00+00:00",
-                "summary": "Round 23 kept.",
-                "questions": [
-                    {"id": "gpu-hours", "text": "OK to run the PC overnight?"},
-                    {"id": "Bad Id!", "text": "dropped"},
-                ],
-                "extra": "ignored",
-            }
-        )
-    )
-    report = orchestrator(tmp_path)
-    assert report["summary"] == "Round 23 kept."
-    assert report["questions"] == [
-        {"id": "gpu-hours", "text": "OK to run the PC overnight?"}
-    ]
-    assert set(report) == {"at", "summary", "questions"}
-
-
 def test_training_shows_the_configured_epochs_and_every_round(tmp_path):
     history = [{"round": r, "games": 1000, "score": 0.5} for r in range(1, 58)]
     (tmp_path / "state.json").write_text(

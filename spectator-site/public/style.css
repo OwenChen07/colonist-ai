@@ -160,14 +160,6 @@ td small { color: var(--muted); font-weight: 400; }
 .fill.mid { background: var(--wait); }
 .fill.low { background: var(--bad); }
 
-.orchestrator { margin-top: 2rem; }
-.orchestrator .summary { white-space: pre-wrap; line-height: 1.5; padding: 0.75rem 1rem; border: 1px solid var(--line, rgba(127,127,127,.25)); border-radius: 10px; }
-.orchestrator .reply { display: grid; gap: 0.4rem; margin-top: 0.9rem; }
-.orchestrator .reply p { margin: 0; font-weight: 600; }
-.orchestrator textarea, .orchestrator input { width: 100%; box-sizing: border-box; font: inherit; padding: 0.5rem; border-radius: 8px; border: 1px solid var(--line, rgba(127,127,127,.35)); background: transparent; color: inherit; }
-.orchestrator button { justify-self: start; font: inherit; padding: 0.35rem 0.9rem; border-radius: 8px; border: 1px solid currentColor; background: transparent; color: inherit; cursor: pointer; }
-.orchestrator .sent { color: var(--muted); font-size: 0.9em; }
-.orchestrator .reply-key { margin-top: 0.9rem; color: var(--muted); }
 
 /* About 20 rounds tall; older rounds scroll. */
 .rounds-wrap { max-height: 46rem; overflow-y: auto; }

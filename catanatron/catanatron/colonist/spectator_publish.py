@@ -373,39 +373,6 @@ def retired_status(folder, name, now=None):
     }
 
 
-def orchestrator(data):
-    """The orchestrator's latest report (scripts/vm/orchestrator, passed here
-    by sync_bot.sh as data/orchestrator.json), or None."""
-    doc = _read_json(Path(data) / "orchestrator.json")
-    if not isinstance(doc, dict) or not isinstance(doc.get("summary"), str):
-        return None
-    try:
-        at = dt.datetime.fromisoformat(str(doc.get("at"))).isoformat()
-    except ValueError:
-        return None
-    questions = []
-    for q in doc.get("questions") or []:
-        if isinstance(q, dict) and re.fullmatch(r"[a-z0-9-]{1,40}", str(q.get("id"))):
-            questions.append({"id": q["id"], "text": str(q.get("text", ""))[:1000]})
-    return {"at": at, "summary": doc["summary"][:8000], "questions": questions[:10]}
-
-
-def fetch_answers(site, key, data):
-    """The owner's replies from the site's reply box, to data/
-    orchestrator-answers.json, which sync_bot.sh brings to the orchestrator."""
-    request = urllib.request.Request(
-        site.rstrip("/") + "/api/answers",
-        headers={"Authorization": f"Bearer {key}"},
-    )
-    with urllib.request.urlopen(request, timeout=20) as response:
-        answers = json.load(response).get("answers", [])
-    path = Path(data) / "orchestrator-answers.json"
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(answers, indent=1))
-    tmp.replace(path)
-    return len(answers)
-
-
 def snapshot(data, names, source, now=None, run="runs/g1", retired=None):
     """This VM's bots, then its retired accounts (whose games stay in their
     folders), with the training run and credits."""
@@ -425,7 +392,6 @@ def snapshot(data, names, source, now=None, run="runs/g1", retired=None):
         "training": training(run),
         "netRecords": net_records(data, {**names, **retired}, run),
         "credits": credits(data),
-        "orchestrator": orchestrator(data),
     }
 
 
@@ -467,14 +433,7 @@ def main(argv=None):
     names = parse_names(args.names)
     retired = parse_names(args.retired)
     source = re.sub(r"[^a-z0-9-]", "-", args.source.lower())[:32]
-    cycle = 0
     while True:
-        if cycle % 10 == 0:  # replies every few minutes are plenty
-            try:
-                fetch_answers(args.site, key, args.data)
-            except (OSError, ValueError, urllib.error.HTTPError) as exc:
-                print(f"answers retry: {type(exc).__name__}", flush=True)
-        cycle += 1
         body = snapshot(args.data, names, source, run=args.run, retired=retired)
         try:
             publish(args.site, key, body)

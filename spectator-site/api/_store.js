@@ -2,8 +2,6 @@ import { createClient } from 'redis';
 
 // One hash: field = bot VM, value = its latest status JSON.
 export const KEY = 'spectator:bots';
-// A list: the owner's replies to the orchestrator, oldest first.
-export const ANSWERS_KEY = 'orchestrator:answers';
 
 let client;
 export async function redis() {

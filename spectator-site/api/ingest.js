@@ -83,27 +83,15 @@ function validCredits(rows) {
     && ['api', 'console'].includes(row.source)));
 }
 
-// The orchestrator's latest hourly report (scripts/vm/orchestrator): plain
-// text, shown as text, never as HTML.
-function validOrchestrator(o) {
-  return o === null || (exact(o, ['at', 'summary', 'questions']) && iso(o.at)
-    && typeof o.summary === 'string' && o.summary.length <= 8000
-    && Array.isArray(o.questions) && o.questions.length <= 10
-    && o.questions.every((q) => exact(q, ['id', 'text'])
-      && typeof q.id === 'string' && /^[a-z0-9-]{1,40}$/.test(q.id)
-      && typeof q.text === 'string' && q.text.length <= 1000));
-}
-
 export function validBody(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return false;
   const base = ['schema', 'source', 'updatedAt', 'bots'];
-  const allowed = [...base, 'training', 'netRecords', 'credits', 'orchestrator'];
+  const allowed = [...base, 'training', 'netRecords', 'credits'];
   const keys = Object.keys(body);
   return base.every((k) => keys.includes(k)) && keys.every((k) => allowed.includes(k))
     && ('training' in body) === ('netRecords' in body)
     && (!('training' in body) || (validTraining(body.training) && validNetRecords(body.netRecords)))
     && (!('credits' in body) || validCredits(body.credits))
-    && (!('orchestrator' in body) || validOrchestrator(body.orchestrator))
     && body.schema === 2
     && typeof body.source === 'string' && /^[a-z0-9-]{1,32}$/.test(body.source)
     && typeof body.updatedAt === 'string' && !Number.isNaN(Date.parse(body.updatedAt))
@@ -125,7 +113,10 @@ export default async function handler(request, response) {
     return response.status(405).json({ error: 'Method not allowed' });
   }
   if (!authorized(request)) return response.status(401).json({ error: 'Unauthorized' });
-  const body = request.body;
+  // Publishers from before 16 Oct still send the retired orchestrator report: drop it.
+  const raw = request.body;
+  const body = raw && typeof raw === 'object' && !Array.isArray(raw)
+    ? Object.fromEntries(Object.entries(raw).filter(([k]) => k !== 'orchestrator')) : raw;
   if (!validBody(body)) return response.status(400).json({ error: 'Invalid status' });
   try {
     await (await redis()).hSet(KEY, body.source, JSON.stringify(body));
