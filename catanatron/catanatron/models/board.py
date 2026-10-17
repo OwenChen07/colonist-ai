@@ -133,7 +133,7 @@ class Board:
                     # Update longest road by plowed player. Compare again with all
                     self.road_lengths[edge_color] = max(
                         *[
-                            len(longest_acyclic_path(self, component, edge_color))
+                            longest_road_length(self, component, edge_color)
                             for component in self.connected_components[edge_color]
                         ]
                     )
@@ -232,7 +232,7 @@ class Board:
 
         # find longest path on component under question
         previous_road_color = self.road_color
-        candidate_length = len(longest_acyclic_path(self, component, color))
+        candidate_length = longest_road_length(self, component, color)
         self.road_lengths[color] = max(self.road_lengths[color], candidate_length)
         if candidate_length >= 5 and candidate_length > self.road_length:
             self.road_color = color
@@ -364,6 +364,38 @@ class Board:
 
     def is_friendly_road(self, edge, color):
         return self.get_edge_color(edge) == color
+
+
+_NEIGHBORS = {n: tuple(STATIC_GRAPH.neighbors(n)) for n in STATIC_GRAPH.nodes}
+
+
+def longest_road_length(board: Board, node_set: Set[int], color: Color) -> int:
+    """len(longest_acyclic_path(...)) without building the path lists."""
+    roads = board.roads
+    buildings = board.buildings
+    best = 0
+
+    def walk(node, used, length):
+        nonlocal best
+        if length > best:
+            best = length
+        if length:
+            building = buildings.get(node)
+            if building is not None and building[0] != color:
+                return  # an enemy building ends the road
+        for nb in _NEIGHBORS[node]:
+            if roads.get((node, nb)) != color:
+                continue
+            edge = (node, nb) if node < nb else (nb, node)
+            if edge in used:
+                continue
+            used.add(edge)
+            walk(nb, used, length + 1)
+            used.discard(edge)
+
+    for start in node_set:
+        walk(start, set(), 0)
+    return best
 
 
 def longest_acyclic_path(board: Board, node_set: Set[int], color: Color):
