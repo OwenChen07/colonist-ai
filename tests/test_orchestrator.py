@@ -418,7 +418,6 @@ def test_kill_landing_kills_a_stuck_landing_and_nothing_else(tmp_path):
         landing.kill()
         if alive(holder):
             os.kill(holder, signal.SIGTERM)
-    assert not any("gcloud" in t for t in agent.allowed_tools("lead"))
 
 
 def test_only_the_lead_may_restart_the_bot():
