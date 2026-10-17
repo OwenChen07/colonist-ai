@@ -42,6 +42,8 @@ _FULL_DECK = tuple(
     tuple((a, t - a) for a in range(1, 7) if 1 <= t - a <= 6) for t in TOTALS
 )
 _FULL_COUNTS = tuple(len(p) for p in _FULL_DECK)
+# The recency factor of a total that came up k times in the last rolls
+_RECENCY = tuple(1 - k * RECENT_REDUCTION for k in range(RECENT_MEMORY + 1))
 
 
 def full_deck():
@@ -81,15 +83,19 @@ class BalancedDice:
         return list(cached)
 
     def _weights(self, color):
-        if self.cards_left < MIN_CARDS_BEFORE_RESHUFFLE:
-            counts, left = _FULL_COUNTS, DECK_SIZE
-        else:
-            counts, left = [len(p) for p in self.deck], self.cards_left
-        w = []
-        for i in range(11):
-            x = counts[i] / left
-            x *= 1 - self.recent_count[i] * RECENT_REDUCTION
-            w.append(x if x > 0 else 0)
+        # Everything but the 7's multiplier is the same for every color.
+        base = self._cache.get("base")
+        if base is None:
+            if self.cards_left < MIN_CARDS_BEFORE_RESHUFFLE:
+                counts, left = _FULL_COUNTS, DECK_SIZE
+            else:
+                counts, left = [len(p) for p in self.deck], self.cards_left
+            base = []
+            for n, k in zip(counts, self.recent_count):
+                x = n / left * _RECENCY[k]
+                base.append(x if x > 0 else 0)
+            self._cache["base"] = base
+        w = list(base)
         if self.num_players >= 2:
             w[SEVEN] *= self.seven_multiplier(color)
         return w
@@ -101,7 +107,9 @@ class BalancedDice:
         key = ("o", color)
         cached = self._cache.get(key)
         if cached is None:
-            w = self.weights(color)
+            w = self._cache.get(("w", color))
+            if w is None:
+                w = self._cache[("w", color)] = self._weights(color)
             s = sum(w)
             cached = self._cache[key] = [x / s for x in w]
         return list(cached)
@@ -109,14 +117,15 @@ class BalancedDice:
     def seven_multiplier(self, color):
         """The factor on the 7 weight if `color` rolled now. The roller counts
         as having rolled before the draw."""
-        seen = dict(self.sevens)
-        seen.setdefault(color, 0)
-        total = sum(seen.values())
-        if total < len(seen):
+        sevens = self.sevens
+        mine = sevens.get(color, 0)
+        players = len(sevens) + (color not in sevens)
+        total = sum(sevens.values())
+        if total < players:
             share = 1
         else:
-            ideal = 1 / len(seen)
-            share = 1 + (ideal - seen[color] / total) / ideal
+            ideal = 1 / players
+            share = 1 + (ideal - mine / total) / ideal
         sign = -1 if self.streak_color == color else 1
         streak = SEVEN_STREAK_REDUCTION * self.streak_count * sign
         return min(2, max(0, share + streak))

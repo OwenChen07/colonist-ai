@@ -340,27 +340,38 @@ class Search:
 
     def sigma(self, node, q):
         """Scale Q (for node.color, in [-1, 1]) as the paper's sigma, on [0, 1]."""
-        return (self.c_visit + node.N.max()) * self.c_scale * (q + 1) / 2
+        # Halving the scalar first is exact: the same floats as (... * (q + 1)) / 2
+        return (self.c_visit + node.N.max()) * self.c_scale / 2 * (q + 1)
 
-    def completed_q(self, node):
-        visited = node.N > 0
-        q = np.zeros(len(node.N))
-        q[visited] = node.W[visited] / node.N[visited]
-        total = node.N.sum()
+    def completed_q(self, node, total=None):
+        N = node.N
+        if total is None:
+            total = N.sum()
         if total == 0:
-            v_mix = node.value
-        else:
-            pv = node.prior[visited]
-            v_mix = (node.value + total / pv.sum() * (pv * q[visited]).sum()) / (
-                1 + total
-            )
-        q[~visited] = v_mix
+            return np.full(len(N), node.value)
+        visited = N > 0
+        if visited.all():  # nothing to complete
+            return node.W / N
+        qv = node.W[visited] / N[visited]
+        pv = node.prior[visited]
+        v_mix = (node.value + total / pv.sum() * (pv * qv).sum()) / (1 + total)
+        q = np.full(len(N), v_mix)
+        q[visited] = qv
         return q
 
-    def improved_policy(self, node):
-        x = node.logits + self.sigma(node, self.completed_q(node))
-        p = np.exp(x - x.max())
-        return p / p.sum()
+    def improved_policy(self, node, total=None):
+        x = node.logits + self.sigma(node, self.completed_q(node, total))
+        x -= x.max()
+        p = np.exp(x, out=x)
+        p /= p.sum()
+        return p
+
+    def pick(self, node):
+        """The move a simulation takes from a Decision."""
+        total = node.N.sum()
+        pi = self.improved_policy(node, total)
+        pi -= node.N / (1 + total)
+        return int(np.argmax(pi))
 
     # ----- simulation
     def descend(self, root, first):
@@ -383,8 +394,7 @@ class Search:
                 leaf = node
                 break
             if isinstance(node, Decision):
-                pi = self.improved_policy(node)
-                i = int(np.argmax(pi - node.N / (1 + node.N.sum())))
+                i = self.pick(node)
             else:
                 i = int(np.argmax(node.probs - node.N / (1 + node.N.sum())))
             path.append((node, i))
