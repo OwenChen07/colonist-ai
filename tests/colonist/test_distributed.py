@@ -102,7 +102,7 @@ def test_evaluation_games_on_workers_match_local_play(tmp_path, monkeypatch):
         ),
     )
     monkeypatch.setattr(distributed, "_sync_code", lambda *a: None)
-    tasks = list(evaluate.tasks_for(f"Z:{net}:2", "R", range(5, 8), {}))
+    tasks = list(evaluate.tasks_for(f"Z:{net}:2", f"ZE:{net}:2", range(5, 8), {}))
     here = list(evaluate._run(tasks, 1))
     spread = distributed.run_tasks(tasks, 1, [("w@x", 1), ("w@y", 1)], log=print)
     assert spread == here

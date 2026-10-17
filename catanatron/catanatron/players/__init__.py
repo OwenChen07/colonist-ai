@@ -43,8 +43,11 @@ def register_builtins(registry=REGISTRY):
     try:  # the network player needs numpy (the colonist extra)
         from catanatron.colonist.mcts import NetPlayer, SamplingNetPlayer
 
+        from catanatron.colonist.endgame_policy import EndgameNetPlayer
+
         builtins["Z"] = NetPlayer
         builtins["ZS"] = SamplingNetPlayer
+        builtins["ZE"] = EndgameNetPlayer
     except ImportError:
         pass
     for key, player_class in builtins.items():

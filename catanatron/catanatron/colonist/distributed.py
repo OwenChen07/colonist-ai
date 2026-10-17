@@ -441,8 +441,8 @@ def _sync_code(host, key, root):
 
 
 def _remote_specs(host, key, root, tasks):
-    """Copies the nets the tasks name (Z:<net.npz>:<simulations>) to the
-    worker, and returns the tasks naming the worker's copies."""
+    """Copies the nets the tasks name (Z:<net.npz>:<simulations>, or ZE:...)
+    to the worker, and returns the tasks naming the worker's copies."""
     import hashlib
 
     folder = root / "eval-nets"
@@ -450,16 +450,16 @@ def _remote_specs(host, key, root, tasks):
     copies = {}
 
     def remote(spec):
-        if not (isinstance(spec, str) and spec.startswith("Z:")):
+        if not (isinstance(spec, str) and spec.split(":")[0] in ("Z", "ZE")):
             return spec
-        _, path, *rest = spec.split(":")
+        kind, path, *rest = spec.split(":")
         if path not in copies:
             with open(path, "rb") as f:
                 digest = hashlib.file_digest(f, "sha256").hexdigest()[:12]
             target = folder / f"{digest}-{Path(path).name}"
             _rsync(key, path, f"{host}:{target}")
             copies[path] = str(target)
-        return ":".join(["Z", copies[path], *rest])
+        return ":".join([kind, copies[path], *rest])
 
     return [(remote(t[0]), remote(t[1]), *t[2:]) for t in tasks]
 
