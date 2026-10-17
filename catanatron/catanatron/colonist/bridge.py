@@ -192,6 +192,7 @@ class Bridge:
         opponent_model=None,
         opponent_mix=0.0,
         judgment_filter=False,
+        endgame_filter=False,
     ):
         self.net = net
         # A net trained on people's moves (opponent_model.py): the search
@@ -199,6 +200,7 @@ class Bridge:
         self.opponent_model = opponent_model
         self.opponent_mix = opponent_mix
         self.judgment_filter = judgment_filter
+        self.endgame_filter = endgame_filter
         # Which net and search played (net_info), saved with each capture so
         # every live game's data says which version produced it.
         self.bot = bot
@@ -1069,6 +1071,13 @@ class Bridge:
             root_filter = lambda copy, choices: filtered_root_actions(
                 copy.state, choices
             )
+        if self.endgame_filter:
+            from catanatron.colonist.endgame_policy import endgame_root_actions
+
+            previous = root_filter
+            root_filter = lambda copy, choices: endgame_root_actions(
+                copy, previous(copy, choices) if previous else choices
+            )
         search = Search(
             self.net,
             simulations or self.simulations,
@@ -1289,6 +1298,12 @@ def main(argv=None):
         action="store_true",
         help="experimental last-road root filter; default off",
     )
+    parser.add_argument(
+        "--endgame-filter",
+        action="store_true",
+        help="experimental root filter toward a YoP/trade-funded build near the "
+        "target; default off",
+    )
     args = parser.parse_args(argv)
     if not 0 <= args.opponent_mix <= 1:
         parser.error("--opponent-mix must be between 0 and 1")
@@ -1296,6 +1311,8 @@ def main(argv=None):
         parser.error("--opponent-mix needs --opponent-model")
     if args.judgment_filter and args.simulations < 1:
         parser.error("--judgment-filter requires --simulations of at least 1")
+    if args.endgame_filter and args.simulations < 1:
+        parser.error("--endgame-filter requires --simulations of at least 1")
     if (
         not args.spectator_state
         and args.save
@@ -1333,6 +1350,7 @@ def main(argv=None):
                     opponent_model=opponent_model,
                     opponent_mix=args.opponent_mix if opponent_model else 0.0,
                     judgment_filter=args.judgment_filter,
+                    endgame_filter=args.endgame_filter,
                 ),
                 port=args.port,
                 info=info,
