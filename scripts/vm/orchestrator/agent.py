@@ -51,6 +51,8 @@ SHARED = (".venv", "data", "runs", "models", "captures", "real_replays")
 SHARED_FILES = ("scripts/vm/bot.env", "scripts/vm/workers.env")
 # Modules only the bots' services run (denied to agents).
 LIVE_ONLY = {"__init__", "bridge", "ranked_runner", "live", "client", "capture"}
+# The coordinator and the long-lived worker: never deleted or stopped by an agent.
+PROTECTED_VMS = ("colonist-selfplay-1", "colonist-selfplay-worker-4")
 
 
 # Ways the main checkout is written in commands: relative from it, by its
@@ -141,6 +143,11 @@ def allowed_tools(role):
             "Bash(.venv/bin/python bench/speed.py:*)",
             "Bash(.venv/bin/python bench/selfplay.py:*)",
             "Bash(.venv/bin/python bench/*)",
+            # Self-play compute on GCP (the owner's cap is in WORKER.md); the
+            # machines we depend on are protected in disallowed_tools.
+            "Bash(gcloud compute *)",
+            "Bash(gcloud config list:*)",
+            "Bash(gcloud auth list:*)",
         ]
         for root in ("", f"{ROOT}/", f"{HOME_ROOT}/"):
             tools.append(f"Bash({root}scripts/vm/orchestrator/land.sh:*)")
@@ -148,12 +155,27 @@ def allowed_tools(role):
 
 
 def disallowed_tools(role):
-    """The live bots' own processes: the services run them, never an agent."""
-    return [
+    """The live bots' own processes: the services run them, never an agent.
+    And the GCP machines everything runs on: no agent deletes or stops them."""
+    denied = [
         f"Bash({prefix}.venv/bin/python -m catanatron.colonist.{module}*)"
         for module in sorted(LIVE_ONLY - {"__init__"})
         for prefix in ("", "nohup ")
     ]
+    for machine in PROTECTED_VMS:
+        for verb in (
+            "delete",
+            "stop",
+            "reset",
+            "suspend",
+            "update",
+            "set-machine-type",
+        ):
+            denied.append(f"Bash(gcloud compute instances {verb}*{machine}*)")
+    denied.append("Bash(gcloud compute instances delete*--all*)")
+    denied.append("Bash(gcloud iam *)")
+    denied.append("Bash(gcloud projects *)")
+    return denied
 
 
 def now():

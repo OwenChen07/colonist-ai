@@ -241,3 +241,12 @@ def test_workers_run_any_module_but_never_the_live_bots():
         "Bash(nohup .venv/bin/python -m catanatron.colonist.ranked_runner*)" in denied
     )
     assert any(t.startswith("Bash(~/") and "safe_restart_account" in t for t in worker)
+
+
+def test_workers_manage_gcp_workers_but_not_the_machines_we_run_on():
+    worker, denied = agent.allowed_tools("worker"), agent.disallowed_tools("worker")
+    assert "Bash(gcloud compute *)" in worker
+    assert "Bash(gcloud compute instances delete*colonist-selfplay-1*)" in denied
+    assert "Bash(gcloud compute instances stop*colonist-selfplay-worker-4*)" in denied
+    assert "Bash(gcloud iam *)" in denied
+    assert not any("gcloud" in t for t in agent.allowed_tools("lead"))

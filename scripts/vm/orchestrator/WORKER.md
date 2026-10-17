@@ -18,6 +18,7 @@ You run without prompts, so Bash takes only allowed commands. These work:
 - **Your own scripts:** for anything multi-line, **Write** a script to `data/orchestrator/scratch/<your workstream>/<name>.py` and run `.venv/bin/python data/orchestrator/scratch/<your workstream>/<name>.py`. Delete it with `rm data/orchestrator/scratch/...` when done.
 - **git:** status, diff, log, show, add, commit, mv, rm, checkout, restore, stash, fetch, rebase.
 - **Landing and deploying:** `land.sh`, and `safe_restart_training.sh`, `safe_restart_account.sh`, `bot_ctl.sh`, `sync_bot.sh`, by relative path or as `~/colonist-ai/scripts/...`.
+- **GCP (efficiency):** `gcloud compute …` for self-play workers, within the owner's cap of **US$15/day and 40 vCPUs in total**, spot VMs only, and never touching `colonist-selfplay-1` or `colonist-selfplay-worker-4` (denied anyway). Record every VM you create in `data/orchestrator/experiments.md` with its hourly cost, and delete it when its job is done.
 - **Read-only tools:** ls, cat, head, tail, grep, sed, awk, find, wc, du, ps, systemctl status/cat, journalctl, `bash -n` ….
 
 These don't work, so don't try them:
