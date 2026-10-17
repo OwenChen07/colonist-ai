@@ -95,7 +95,8 @@ def allowed_tools(role):
         tools.append(f"Bash(nohup .venv/bin/python {script}:*)")
     for command in (
         "tail head cat ls grep wc df free nproc date mkdir echo sleep "
-        "ps pgrep top nvidia-smi"
+        "ps pgrep top nvidia-smi sed awk cut sort uniq find du stat diff "
+        "uptime which basename dirname realpath readlink"
     ).split():
         tools.append(f"Bash({command}:*)")
     tools += [
@@ -207,6 +208,9 @@ def run_agent(prompt, *, role, workstream=None, model, cwd, log, env=None, resum
         command += ["--permission-mode", "dontAsk"]
         if resume:
             command += ["--resume", resume]
+        # The worktrees' data/, runs/ and models/ are symlinks into the main
+        # checkout; without it every read of them is denied.
+        command += ["--add-dir", str(ROOT)]
         command += ["--allowedTools", *allowed_tools(role)]
         try:
             out = subprocess.run(
@@ -277,8 +281,10 @@ def run_agent(prompt, *, role, workstream=None, model, cwd, log, env=None, resum
 
 
 def apply_outputs(data, source):
-    """Writes decisions and messages to workers carried by a run's JSON."""
+    """Writes decisions and messages to workers carried by a run's JSON.
+    Returns how many decisions were filed."""
     known = {d.get("id") for d in core.read_jsonl(STATE / "decisions.jsonl")}
+    filed = 0
     for d in data.get("decisions") or []:
         if not isinstance(d, dict) or not d.get("question"):
             continue
@@ -296,12 +302,14 @@ def apply_outputs(data, source):
             "at": now().isoformat(timespec="seconds"),
         }
         append(STATE / "decisions.jsonl", json.dumps(row) + "\n")
+        filed += 1
     for workstream, message in (data.get("messages") or {}).items():
         if (STATE / "workstreams" / workstream).is_dir() and message:
             append(
                 STATE / "workstreams" / workstream / "inbox.md",
                 f"\n### From {source}, {core.local(now()):%b %d %H:%M}\n{message}\n",
             )
+    return filed
 
 
 def workstreams():
@@ -338,10 +346,12 @@ def answers_since(path_seen):
     return new, seen | {r.get("key") for r in rows}
 
 
-def open_decisions():
+def open_decisions(source=None):
     answered = {r.get("id") for r in core.read_jsonl(STATE / "answers.jsonl")}
     return [
-        d for d in core.read_jsonl(STATE / "decisions.jsonl") if d["id"] not in answered
+        d
+        for d in core.read_jsonl(STATE / "decisions.jsonl")
+        if d["id"] not in answered and source in (None, d.get("from"))
     ]
 
 
@@ -502,6 +512,13 @@ def worker(name):
             + read(d / "progress.md", 5000, tail=True),
             "## New messages for you (from the owner or the lead)\n"
             + (inbox.strip() or "- none"),
+            "## Your questions the owner hasn't answered yet (don't ask again)\n"
+            + (
+                "\n".join(
+                    f"- [{d['id']}] {d['question']}" for d in open_decisions(name)
+                )
+                or "- none"
+            ),
             "## Git state of your worktree\n"
             + sh(["git", "log", "--oneline", "-5"], cwd=path).stdout
             + sh(["git", "status", "--short"], cwd=path).stdout,
@@ -530,7 +547,8 @@ def worker(name):
     when = core.local(now())
     note = data.get("progress") or f"(task ended without a summary; see {log.name})"
     append(d / "progress.md", f"\n## {when:%b %d %H:%M} ({agent}, {status})\n{note}\n")
-    apply_outputs(data, name)
+    if apply_outputs(data, name) and status == "progress":
+        status = "idle"  # rests until the owner answers, not two minutes
     post = data.get("post")
     if status == "failed" and not post:
         post = f"Task failed or ended without a summary. Log: `{log}`"

@@ -12,6 +12,9 @@ Your workstream's brief, the lead's latest report, your own progress notes and a
 5. **Deploying** to training or the live bots happens after landing, from `~/colonist-ai`: `scripts/vm/orchestrator/safe_restart_training.sh`, `safe_restart_account.sh <account>` and `bot_ctl.sh`. Record each experiment in `data/orchestrator/experiments.md` first (hypothesis, metric, games until a verdict, how to revert it).
 6. Long jobs (training, big matches, profiling runs) go to the background: `nohup … > data/orchestrator/jobs/<name>.log 2>&1 &`, with the PID in `data/orchestrator/jobs/<name>.pid`. Check them next task rather than waiting.
 
+## Shell commands
+You run without prompts, so Bash takes only listed commands: git, `.venv/bin/python -m catanatron.colonist.<module>`, `.venv/bin/python bench/speed.py` and `bench/selfplay.py`, cProfile, pytest, black, `land.sh`, the `scripts/vm` control scripts, and read-only tools (ls, cat, head, tail, grep, sed, awk, find, wc, du, ps, uptime …). Write them plainly: relative paths from your worktree, no `cd`, no `VAR=… ` prefixes and no `time`/`timeout` wrappers. Pipes and `;` are fine between listed commands. A denial applies to **that command**, not to Bash: rewrite it (or use Read/Grep) and go on. Never ask the owner about tool permissions; if something you need truly can't be run, say which command in your `post`.
+
 ## Limits
 - Your autonomy and the owner's rules are in `scripts/vm/orchestrator/ORCHESTRATOR.md` ("What you and the workers may do", "Ask the owner first", "The owner's rules"). Read them once if they aren't in your progress notes. Most important: never commit `captures/`; never print the reconnect token; never log in, type passwords or touch accounts; restart bots only between games; spend no money; the bot never trades or chats.
 - Another workstream owns another area. If your task needs a change there, say so in your output's `post` rather than doing it.

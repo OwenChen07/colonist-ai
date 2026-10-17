@@ -139,3 +139,15 @@ def test_workers_may_land_but_the_lead_may_not_push():
     assert "Bash(scripts/vm/orchestrator/land.sh:*)" in worker
     assert not any("push" in t or "land.sh" in t for t in lead)
     assert not any("bridge" in t or "ranked_runner" in t for t in worker)
+
+
+def test_a_worker_sees_its_open_questions(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent, "STATE", tmp_path)
+    asked = {
+        "decisions": [{"id": "a", "question": "A?"}, {"id": "b", "question": "B?"}]
+    }
+    assert agent.apply_outputs(asked, "efficiency") == 2
+    assert agent.apply_outputs({"status": "progress"}, "efficiency") == 0
+    (tmp_path / "answers.jsonl").write_text('{"id": "a", "answer": "yes"}\n')
+    assert [d["id"] for d in agent.open_decisions("efficiency")] == ["b"]
+    assert agent.open_decisions("training") == []
