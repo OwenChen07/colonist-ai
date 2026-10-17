@@ -94,7 +94,23 @@ def workers():
     ]
     if waiting:
         lines.append(f"Decisions waiting for you: {len(waiting)}")
+        for d in waiting[-5:]:
+            lines.append(decision_line(d))
+        if len(waiting) > 5:
+            lines.append(f"… and {len(waiting) - 5} more")
     return "\n".join(lines)
+
+
+def decision_line(d):
+    """One short line per waiting decision, for a phone screen."""
+    try:
+        when = f"{core.local(dt.datetime.fromisoformat(d['at'])):%-I:%M %p}"
+    except (KeyError, TypeError, ValueError):
+        when = "?"
+    question = " ".join(str(d.get("question", "")).split())
+    if len(question) > 160:
+        question = question[:159].rstrip() + "…"
+    return f"- **{d['id']}** ({d.get('from')}, {when}): {question}"
 
 
 def main():
