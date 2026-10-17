@@ -151,3 +151,49 @@ def test_a_worker_sees_its_open_questions(tmp_path, monkeypatch):
     (tmp_path / "answers.jsonl").write_text('{"id": "a", "answer": "yes"}\n')
     assert [d["id"] for d in agent.open_decisions("efficiency")] == ["b"]
     assert agent.open_decisions("training") == []
+
+
+def test_rank_watch_finds_each_number_one():
+    import rank_watch
+
+    standing = [
+        {"name": {"key": "strings:leaderboardPage.tabs.global"}, "rank": "65"},
+        {"name": {"key": "strings:leaderboardPage.tabs.continents.NA"}, "rank": "1"},
+        {"name": "CA", "rank": "4"},
+        {"name": "Ontario", "rank": "1"},
+    ]
+    assert rank_watch.firsts(standing) == ["North America", "Ontario"]
+    assert rank_watch.firsts(None) == []
+    assert rank_watch.level_name(standing[0]) == "Global"
+
+
+def test_rank_watch_queues_once_and_releases_by_day(tmp_path, monkeypatch):
+    import rank_watch
+
+    monkeypatch.setattr(rank_watch, "STATE", tmp_path)
+    monkeypatch.setattr(rank_watch, "SHOTS", tmp_path / "shots")
+    monkeypatch.setattr(rank_watch, "accounts", lambda: ["Petra4620"])
+    pages = {
+        "ranked-seasons": [{"seasonType": 20}, {"seasonType": 21}],
+        "Petra4620/ranked/21": [
+            {
+                "modeType": 1,
+                "skillRating": 2400,
+                "rankedStanding": [{"name": "Ontario", "rank": "1"}],
+            }
+        ],
+    }
+    monkeypatch.setattr(
+        rank_watch, "fetch", lambda url: pages[url.split("/profile/")[1]]
+    )
+    shots = []
+    monkeypatch.setattr(
+        rank_watch, "screenshot", lambda name, path: shots.append(path) or path.touch()
+    )
+    rank_watch.main([])  # night: shoot now, post later
+    rank_watch.main([])  # already seen: no second shot
+    assert len(shots) == 1
+    state = json.loads((tmp_path / "rank-watch.json").read_text())
+    assert len(state["queue"]) == 1 and "Ontario" in state["queue"][0]["text"]
+    rank_watch.main(["--release"])
+    assert json.loads((tmp_path / "rank-watch.json").read_text())["queue"] == []

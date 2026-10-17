@@ -34,6 +34,7 @@ ROOT = HERE.parents[2]
 STATE = ROOT / "data" / "orchestrator"
 PY = str(ROOT / ".venv/bin/python")
 LEAD = "orchestrator"
+RANK_EVERY_S = 600  # how often rank_watch.py checks for a #1
 WORKSTREAMS = [
     w.strip()
     for w in os.environ.get(
@@ -180,7 +181,19 @@ class Orchestrator(discord.Client):
                 self.spawn(self.major())
         await self.alerts()
         await self.post_decisions(now)
+        if now.timestamp() - self.state.get("rank_checked", 0) >= RANK_EVERY_S:
+            self.state["rank_checked"] = now.timestamp()
+            self.spawn(self.rank_watch(now))
         await self.supervise(now)
+
+    async def rank_watch(self, now):
+        """Screenshots of any account at #1 (rank_watch.py), posted by day."""
+        args = ["--release"] if core.daytime(now) else []
+        result, text = await self.execute(str(HERE / "rank_watch.py"), *args)
+        for post in result.get("posts", []):
+            image = Path(post.get("image", ""))
+            extra = {"file": discord.File(image)} if image.is_file() else {}
+            await self.say(LEAD, post["text"], **extra)
 
     async def post_status(self):
         _, text = await self.execute(str(HERE / "status.py"))
