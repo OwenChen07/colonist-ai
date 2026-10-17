@@ -23,6 +23,20 @@ for tile in base_map.tiles.values():
     STATIC_GRAPH.add_edges_from(tile.edges.values())
 
 
+def _plain_adjacency(subgraph):
+    """node -> ((node, neighbor), sorted edge) for each neighbor, in the
+    subgraph's own order, kept on the (immutable, shared) subgraph view."""
+    # Not in subgraph.graph: a view shares that dict with STATIC_GRAPH.
+    adjacency = getattr(subgraph, "_plain_adjacency", None)
+    if adjacency is None:
+        adjacency = {
+            n: tuple(((n, nbr), tuple(sorted((n, nbr)))) for nbr in nbrs)
+            for n, nbrs in subgraph.adj.items()
+        }
+        subgraph._plain_adjacency = adjacency
+    return adjacency
+
+
 @functools.lru_cache(1)
 def get_node_distances():
     return nx.floyd_warshall(STATIC_GRAPH)
@@ -270,10 +284,14 @@ class Board:
         expandable_nodes = set()
         expandable_nodes = expandable_nodes.union(*self.connected_components[color])
 
-        candidate_edges = self.buildable_subgraph.edges(expandable_nodes)
-        for edge in candidate_edges:
-            if self.get_edge_color(edge) is None:
-                expandable.add(tuple(sorted(edge)))
+        # Same edges, in the same order, as buildable_subgraph.edges(expandable_
+        # nodes), whose filtered subgraph views were most of this function's time.
+        adjacency = _plain_adjacency(self.buildable_subgraph)
+        roads = self.roads
+        for node in expandable_nodes:
+            for edge, ordered in adjacency.get(node, ()):
+                if edge not in roads:
+                    expandable.add(ordered)
 
         self.buildable_edges_cache[color] = list(expandable)
         return self.buildable_edges_cache[color]
