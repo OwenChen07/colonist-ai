@@ -314,22 +314,46 @@ def ncr(n, r):
     return numer // denom
 
 
-def maritime_trade_possibilities(state, color) -> List[Action]:
-    hand_freqdeck = [
-        player_num_resource_cards(state, color, resource) for resource in RESOURCES
-    ]
-    port_resources = state.board.get_player_port_resources(color)
-    trade_offers = inner_maritime_trade_possibilities(
-        hand_freqdeck, state.resource_freqdeck, port_resources
-    )
+# (resource, its index in a freqdeck, the "<key>_<resource>_IN_HAND" suffix),
+# in alphabetical order, which is the order _trade_sort_key gives the offers:
+# by the resource given, then by the one asked for.
+_SORTED_TRADE_RESOURCES = tuple(
+    (r, RESOURCES.index(r), f"_{r}_IN_HAND") for r in sorted(RESOURCES)
+)
+# _TRADE_OFFERS[rate][resource] = [(bank index of j, offer tuple), ...]
+_TRADE_OFFERS = {
+    rate: {
+        r: [
+            (j_index, tuple([r] * rate + [None] * (4 - rate) + [j]))
+            for j, j_index, _ in _SORTED_TRADE_RESOURCES
+            if j != r
+        ]
+        for r in RESOURCES
+    }
+    for rate in (2, 3, 4)
+}
 
-    # Sorted: the offers are tuples holding None, whose hash (before Python
-    # 3.12) is its memory address, so set order changed from run to run and
-    # with it a bot's choice between equally good trades.
-    return [
-        Action(color, ActionType.MARITIME_TRADE, t)
-        for t in sorted(trade_offers, key=_trade_sort_key)
-    ]
+
+def maritime_trade_possibilities(state, color) -> List[Action]:
+    # Same offers, in the same (sorted) order, as sorting the set from
+    # inner_maritime_trade_possibilities by _trade_sort_key: sorted because
+    # the offers are tuples holding None, whose hash (before Python 3.12) is
+    # its memory address, so set order changed from run to run and with it a
+    # bot's choice between equally good trades.
+    key = player_key(state, color)
+    player_state = state.player_state
+    port_resources = state.board.get_player_port_resources(color)
+    base_rate = 3 if None in port_resources else 4
+    bank = state.resource_freqdeck
+    trade = ActionType.MARITIME_TRADE
+    actions = []
+    for resource, _, suffix in _SORTED_TRADE_RESOURCES:
+        rate = 2 if resource in port_resources else base_rate
+        if player_state[key + suffix] >= rate:
+            for j_index, offer in _TRADE_OFFERS[rate][resource]:
+                if bank[j_index] > 0:
+                    actions.append(Action(color, trade, offer))
+    return actions
 
 
 def _trade_sort_key(offer):
