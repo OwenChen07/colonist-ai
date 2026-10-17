@@ -138,7 +138,7 @@ class Orchestrator(discord.Client):
             message = await channel.send(part, **extra)
         return message
 
-    async def run(self, *args):
+    async def execute(self, *args):
         """Runs agent.py or a script; returns its last stdout line as JSON."""
         proc = await asyncio.create_subprocess_exec(
             PY,
@@ -183,7 +183,7 @@ class Orchestrator(discord.Client):
         await self.supervise(now)
 
     async def post_status(self):
-        _, text = await self.run(str(HERE / "status.py"))
+        _, text = await self.execute(str(HERE / "status.py"))
         await self.say(LEAD, text)
 
     async def major(self):
@@ -191,7 +191,7 @@ class Orchestrator(discord.Client):
             return
         self.major_running = True
         try:
-            result, text = await self.run(str(HERE / "agent.py"), "major")
+            result, text = await self.execute(str(HERE / "agent.py"), "major")
             if result.get("status") == "busy":
                 return
             if result.get("post"):
@@ -348,7 +348,7 @@ class Orchestrator(discord.Client):
 
     async def work(self, name):
         try:
-            result, text = await self.run(str(HERE / "agent.py"), "worker", name)
+            result, text = await self.execute(str(HERE / "agent.py"), "worker", name)
             status = result.get("status", "failed")
             if result.get("post"):
                 await self.say(name, Path(result["post"]).read_text())
@@ -408,7 +408,9 @@ class Orchestrator(discord.Client):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(text)
             async with message.channel.typing():
-                result, raw = await self.run(str(HERE / "agent.py"), "chat", str(path))
+                result, raw = await self.execute(
+                    str(HERE / "agent.py"), "chat", str(path)
+                )
             if result.get("post"):
                 await self.say(LEAD, Path(result["post"]).read_text())
             else:
