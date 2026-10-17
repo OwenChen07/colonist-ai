@@ -12,7 +12,8 @@ game's result.
 
 eval prints, per net: positions, bias (mean v - z), MSE, and the same on
 the "confident" positions (v > 0.5), where the observed win rate should match
-the mean value. Captures stay private; output is aggregate only.
+the mean value, then by what the person holds (no dev card / dev cards /
+largest army + dev cards). Captures stay private; output is aggregate only.
 """
 
 import argparse
@@ -25,6 +26,7 @@ from catanatron.colonist.convert import convert
 from catanatron.colonist.net import Net
 from catanatron.colonist.replay import game_winner, replay
 from catanatron.models.player import Color
+from catanatron.state import DEVELOPMENT_CARDS
 
 ACCOUNTS = ("bot3", "bot4", "bot5", "bot7")
 SET = "data/orchestrator/live-loss/late_value_set.jsonl"
@@ -32,10 +34,24 @@ TURN = 75
 _nets = None
 
 
+def _slice(state, me):
+    """'army_dev' if the opponent holds largest army and 1+ unplayed dev cards,
+    'dev' if only the cards, else ''. Live finding (Oct 17): these are where
+    the late overconfidence sits (bias +0.285 with army+dev, about 0 with no
+    cards)."""
+    them = next(c for c in state.colors if c != me)
+    i = state.color_to_index[them]
+    p = state.player_state
+    if not any(p[f"P{i}_{c}_IN_HAND"] for c in DEVELOPMENT_CARDS):
+        return ""
+    return "army_dev" if p[f"P{i}_HAS_ARMY"] else "dev"
+
+
 class _Collector:
     def __init__(self, me, nets):
         self.me, self.nets = me, nets
         self.values = []  # one list of per-net values per position
+        self.slices = []
 
     def before(self, game):
         pass
@@ -44,6 +60,7 @@ class _Collector:
         if decision.color != self.me or game.state.num_turns < TURN:
             return
         self.values.append([net.evaluate(game, self.me)[1] for net in self.nets])
+        self.slices.append(_slice(game.state, self.me))
 
     def after(self, game):
         pass
@@ -65,6 +82,7 @@ def _game(path, nets):
         "capture": path,
         "won": game_winner(rec, rep) == you[0],
         "values": obs.values,
+        "slices": obs.slices,
     }
 
 
@@ -129,6 +147,18 @@ def evaluate(net_paths, workers, src=SET):
         # per-game: first position, so each game counts once
         first = [(r["values"][0][i], 1.0 if r["won"] else -1.0) for r in res]
         print(f"  first position per game: {_stats(first)} | v>0.5 {_confident(first)}")
+        for name, keep in (
+            ("person holds no dev card", ("",)),
+            ("person holds dev cards", ("dev", "army_dev")),
+            ("person holds army + dev cards", ("army_dev",)),
+        ):
+            sub = [
+                (v[i], 1.0 if r["won"] else -1.0)
+                for r in res
+                for v, s in zip(r["values"], r["slices"])
+                if s in keep
+            ]
+            print(f"  {name}: {_stats(sub)} | v>0.5 {_confident(sub)}")
 
 
 def main(argv=None):
