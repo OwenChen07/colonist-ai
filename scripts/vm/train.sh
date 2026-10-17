@@ -76,5 +76,5 @@ exec .venv/bin/python -m catanatron.colonist.loop runs/g1 "${init[@]}" \
     --reference AB:2,F \
     --extra-data "${human#,}" \
     --gauntlet $sp1/nets/round_016.npz,$sp1/nets/round_008.npz \
-    --live-data data/human/holdout/value "${starts[@]}" "${humanseat[@]}" --human-start-rate "${HUMAN_START_RATE:-0.35}" --before-round scripts/vm/human_dataset.sh \
+    --live-data data/human/holdout/value "${starts[@]}" "${humanseat[@]}" --human-start-rate "${HUMAN_START_RATE:-0.35}" --before-round "scripts/vm/gcp_start_spot.sh; scripts/vm/human_dataset.sh" \
     --workers "${COLONIST_LOCAL_WORKERS:-8}" --train-threads "${COLONIST_TRAIN_THREADS:-8}"
