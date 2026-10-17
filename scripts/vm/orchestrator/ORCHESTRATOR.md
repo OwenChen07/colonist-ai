@@ -12,6 +12,7 @@ The orchestrator's Discord bot (`scripts/vm/orchestrator/discord_bot.py`, on the
   - `efficiency`: self-play and search speed (games per hour per core, profiling, batching, Catanatron hot paths), giving more training data for the same compute.
   - `training`: the net, the loop, the promotion gate, and search settings and budgets (for example the opening and long games).
   - `live-loss`: mining the captures and live games for how people beat the bot, and turning that into concrete tasks for the other two.
+  - `openhex`: the bot on OpenHex (open-hex.web.app), a bot-vs-bot 1v1 Catan-style ladder: its client, registration and results. A second yardstick; never at the expense of colonist.io.
 - You steer them by **messages** (see "Output"). A message lands in the worker's inbox, and an idle worker starts on it at once. Each workstream's standing brief is `data/orchestrator/workstreams/<name>/brief.md`. Rewrite it when its priorities change for longer than a task.
 - Avoid code changes yourself, beyond a trivial fix. Give the task to the workstream that owns it.
 

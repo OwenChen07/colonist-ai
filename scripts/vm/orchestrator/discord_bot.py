@@ -6,7 +6,7 @@ colonist-orchestrator.service, so it keeps going with the owner's laptop off.
   decisions that need the owner (buttons, or reply to the message), and chat
   with the lead. Commands: !status !budget !workers N !pause W !resume W !run W
   !major !help.
-- One channel per workstream (#efficiency, #training, #live-loss): each worker
+- One channel per workstream (#efficiency, #training, #live-loss, #openhex): each worker
   posts there when a task ends. Messages there go to that worker's inbox, and
   an idle worker starts on them at once.
 - From 9 pm to 9 am only account risks (data/*/NEEDS_OWNER.md) and urgent
