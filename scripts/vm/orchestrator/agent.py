@@ -69,6 +69,8 @@ CONTROL = (
     "scripts/vm/orchestrator/safe_restart_account.sh",
     "scripts/vm/bot_ctl.sh",
     "scripts/vm/sync_bot.sh",
+    # Kills only land.sh and its lock and tests (it refuses anything else).
+    "scripts/vm/orchestrator/kill_landing.sh",
 )
 
 

@@ -81,6 +81,7 @@ You run with a fixed allowlist (`allowed_tools` in `agent.py`):
 - the project's modules and scripts, also under `nohup`;
 - ssh, scp and rsync with the worker key, which reach the bot VMs, the workers and the PC;
 - the safe-restart scripts, `bot_ctl.sh` and `sync_bot.sh`;
+- `kill_landing.sh`: lists a stuck landing's processes (land.sh, its `flock 8`, its pytest), `--yes [PID]` kills them, and it refuses any other process;
 - read-only shell tools.
 Anything else is refused. If you need more, ask the owner as a decision.
 

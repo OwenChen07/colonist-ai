@@ -3,7 +3,11 @@
 
 import datetime as dt
 import json
+import os
+import signal
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -139,6 +143,12 @@ def test_workers_may_land_but_the_lead_may_not_push():
     assert "Bash(scripts/vm/orchestrator/land.sh:*)" in worker
     assert not any("push" in t or "land.sh" in t for t in lead)
     assert not any("bridge" in t or "ranked_runner" in t for t in worker)
+    for tools in (lead, worker):
+        assert "Bash(scripts/vm/orchestrator/kill_landing.sh:*)" in tools
+        assert (
+            f"Bash({agent.HOME_ROOT}/scripts/vm/orchestrator/kill_landing.sh:*)"
+            in tools
+        )
 
 
 def test_a_worker_sees_its_open_questions(tmp_path, monkeypatch):
@@ -292,3 +302,71 @@ def test_a_timed_out_run_keeps_what_it_said(tmp_path):
     assert timed_out and result is None
     assert said == "working on slow"
     assert "working on slow" in log and log.endswith("(timed out)\n")
+
+
+KILL_LANDING = (
+    Path(__file__).resolve().parents[1] / "scripts/vm/orchestrator/kill_landing.sh"
+)
+
+
+def kill_landing(*args):
+    return subprocess.run(
+        ["bash", str(KILL_LANDING), *args], capture_output=True, text=True
+    )
+
+
+def test_kill_landing_kills_a_stuck_landing_and_nothing_else(tmp_path):
+    lock = tmp_path / ".land.lock"
+    lock.touch()
+    # Another process holds the lock, so the fake land.sh waits in `flock 8`
+    # with its "pytest" running. The holder is not a landing process: it is
+    # double-forked out of this test's tree, which under land.sh is one.
+    holder = int(
+        subprocess.run(
+            ["bash", "-c", f"flock {lock} sleep 60 >/dev/null 2>&1 & echo $!"],
+            capture_output=True,
+            text=True,
+        ).stdout
+    )
+
+    def alive(pid):
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+
+    land = tmp_path / "land.sh"
+    land.write_text(
+        'exec 8>"$1"\n'
+        f"{sys.executable} -c 'import time; time.sleep(60)' -m pytest &\n"
+        "flock -w 60 8\n"
+    )
+    landing = subprocess.Popen(["bash", str(land), str(lock)])
+    # Under land.sh this test is itself a landing process: touch only our own.
+    ours = (str(land), "flock -w 60 8", "time.sleep(60) -m pytest")
+
+    def listed():
+        lines = kill_landing().stdout.splitlines()
+        return {
+            int(l.split()[0]): l for l in lines if l.endswith(ours) or str(land) in l
+        }
+
+    try:
+        for _ in range(100):
+            if len(listed()) == 3:  # land.sh, its flock and its "pytest"
+                break
+            time.sleep(0.1)
+        pids = listed()
+        assert len(pids) == 3 and landing.pid in pids and holder not in pids
+        refused = kill_landing("--yes", str(holder))
+        assert refused.returncode == 1 and "refused" in refused.stdout
+        killed = kill_landing("--yes", str(landing.pid)).stdout  # and what's under it
+        assert all(f"killed {pid}" in killed for pid in pids)
+        assert landing.wait(10) != 0
+        assert alive(holder)
+        assert listed() == {}
+    finally:
+        landing.kill()
+        if alive(holder):
+            os.kill(holder, signal.SIGTERM)
