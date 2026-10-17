@@ -351,7 +351,13 @@ def losses(model, x, legal, action, pi, value, aux, value_weight, aux_weight=0.0
     n_target = has_target.sum().clamp(min=1)
     policy_loss = -(target * log_p.clamp(min=-1e4)).sum() / n_target
     correct = ((logits.argmax(1) == target.argmax(1)) & has_target).sum()
-    value_loss = F.mse_loss(v, value)
+    # Rows without a result (NaN: human_dataset.policy_won) train the policy only.
+    known_value = torch.isfinite(value)
+    value_loss = (
+        F.mse_loss(v[known_value], value[known_value])
+        if known_value.any()
+        else torch.zeros((), device=x.device)
+    )
     total = policy_loss + value_weight * value_loss
     aux_loss = torch.zeros((), device=x.device)
     if use_aux:
@@ -389,7 +395,7 @@ def evaluate(model, data, batch_size, value_weight):
     import torch
 
     model.eval()
-    sums = np.zeros(6)
+    sums = np.zeros(7)
     with torch.no_grad():
         for start in range(0, data.n, batch_size):
             idx = torch.arange(
@@ -400,18 +406,20 @@ def evaluate(model, data, batch_size, value_weight):
             known = 0
             if batch[5] is not None:
                 known = int(torch.isfinite(batch[5][:, 0]).sum())
+            valued = int(torch.isfinite(batch[4]).sum())
             sums += [
                 pl.item() * nt.item(),
-                vl.item() * len(idx),
+                vl.item() * valued,
                 correct.item(),
                 nt.item(),
                 al.item() * known,
                 known,
+                valued,
             ]
     model.train()
     return (
         sums[0] / max(sums[3], 1),
-        sums[1] / max(data.n, 1),
+        sums[1] / max(sums[6], 1),
         sums[2] / max(sums[3], 1),
         sums[4] / sums[5] if sums[5] else float("nan"),
     )
@@ -517,7 +525,7 @@ def main(argv=None):
         f"on {device}",
         flush=True,
     )
-    baseline = float((val.value**2).mean()) if val.n else float("nan")
+    baseline = float(val.value.pow(2).nanmean()) if val.n else float("nan")
     print(f"validation value loss of always guessing 0: {baseline:.3f}", flush=True)
 
     graph = args.arch == "graph" or (args.init and is_graph_file(args.init))

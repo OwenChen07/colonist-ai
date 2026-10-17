@@ -95,3 +95,61 @@ def test_opponent_moves_only_without_hidden_cards(tmp_path):
 
     replay(record, observer=Count())
     assert total == sum(seen) <= len(seen)
+
+
+def _person_won(out):
+    rows = [json.loads(l) for l in open(out / "index.jsonl")]
+    for row in rows:
+        row["bot_won"] = False
+    (out / "index.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+    return rows[0]
+
+
+def test_policy_won_keeps_the_moves_of_games_the_person_won(tmp_path):
+    out = tmp_path / "human"
+    H.build(_captures(tmp_path), out=str(out), log=lambda _: None)
+    (row,) = [json.loads(l) for l in open(out / "index.jsonl")]
+    if row["bot_won"]:
+        assert H.policy_won(str(out), log=lambda _: None) == 0
+    row = _person_won(out)
+    assert H.policy_won(str(out), log=lambda _: None) == 1
+    (shard,) = (out / row["split"] / "policy_won").glob("*.npz")
+    (source,) = (out / row["split"] / "opponent").glob("*.npz")
+    copy, original = np.load(shard), np.load(source)
+    assert np.isnan(copy["z"]).all() and "v" not in copy.files
+    assert (copy["action"] == original["action"]).all()
+    assert (copy["action"] >= 0).all()
+    assert H.policy_won(str(out), log=lambda _: None) == 0  # already there
+
+
+def test_training_reads_moves_without_results(tmp_path, capsys):
+    import pytest
+
+    torch = pytest.importorskip("torch")
+    from catanatron.colonist import graph as G
+    from catanatron.colonist.train import losses, main
+
+    out = tmp_path / "human"
+    H.build(_captures(tmp_path), out=str(out), log=lambda _: None)
+    row = _person_won(out)
+    H.policy_won(str(out), log=lambda _: None)
+
+    model = G.torch_model(8, 8, 1)
+    x, legal = torch.rand(4, 1297), torch.ones(4, 313, dtype=torch.bool)
+    action = torch.zeros(4, dtype=torch.long)
+    value = torch.tensor([1.0, -1.0, float("nan"), float("nan")])
+    total, pl, vl, *_ = losses(model, x, legal, action, None, value, None, 1.0)
+    assert torch.isfinite(total) and vl.item() > 0
+    _, pl2, vl2, *_ = losses(
+        model, x, legal, action, None, value.fill_(float("nan")), None, 1.0
+    )
+    assert vl2.item() == 0 and torch.isclose(pl2, pl)
+
+    net = str(tmp_path / "net.npz")
+    G.random_graph_net(8, 8, 1, seed=1).save(net)
+    folders = [str(out / row["split"] / f) for f in ("policy_won", "value")]
+    args = folders + ["--out", str(tmp_path / "t"), "--init", net, "--epochs", "1"]
+    args += ["--batch", "16", "--device", "cpu", "--val-fraction", "0"]
+    assert main(args) == 0
+    (epoch,) = [l for l in capsys.readouterr().out.splitlines() if "epoch 1" in l]
+    assert "train policy" in epoch and "nan" not in epoch

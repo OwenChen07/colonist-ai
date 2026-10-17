@@ -24,6 +24,11 @@ split, result and play statistics: for the bot and the person, roads built
 before their third settlement and dead roads (branches that lead to no
 building of theirs) at the end. Captures already in the index are skipped, so
 it can run again as games arrive.
+
+OUT/<split>/policy_won (policy_won()) repeats the `opponent` shards of the
+games the person won, with no result (z = NaN): move targets only, so
+training can learn the moves that beat the bot without a value target that
+says the player to move always wins.
 """
 
 import argparse
@@ -32,6 +37,8 @@ import json
 import os
 import sys
 from pathlib import Path
+
+import numpy as np
 
 from catanatron.colonist.capture import load as load_capture
 from catanatron.colonist.convert import convert
@@ -207,6 +214,35 @@ def build(
     return counts
 
 
+def policy_won(out="data/human", log=print):
+    """Copies the `opponent` shards of games the person won into
+    OUT/<split>/policy_won, without results. Skips shards already there."""
+    with open(os.path.join(out, "index.jsonl")) as stream:
+        won = [
+            row
+            for row in map(json.loads, stream)
+            if row.get("status") == "ok" and row.get("bot_won") is False
+        ]
+    added = 0
+    for row in won:
+        folder = os.path.join(out, row["split"], "policy_won")
+        pattern = f"shard_{row['game']:019d}_*_opponent_known.npz"
+        for source in glob.glob(os.path.join(out, row["split"], "opponent", pattern)):
+            target = os.path.join(folder, os.path.basename(source))
+            if os.path.exists(target):
+                continue
+            os.makedirs(folder, exist_ok=True)
+            with np.load(source) as shard:
+                d = {k: shard[k] for k in shard.files if k != "v"}
+            d["z"] = np.full(len(d["z"]), np.nan, np.float32)
+            tmp = target + ".tmp.npz"
+            np.savez_compressed(tmp, **d)
+            os.replace(tmp, target)
+            added += 1
+    log(f"policy_won: {added} new shards from {len(won)} games the person won")
+    return added
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("captures", nargs="+", help="capture paths or globs")
@@ -231,6 +267,7 @@ def main(argv=None):
         args.min_rolls,
         args.holdout,
     )
+    policy_won(args.out)
     return 0
 
 

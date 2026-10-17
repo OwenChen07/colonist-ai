@@ -58,6 +58,10 @@ init=()
 [ -e runs/g1/state.json ] || init=(--init models/graph1/net.npz)
 sp1=runs/sp1
 human=$(printf ',data/human/train/value%.0s' $(seq "${HUMAN_REPEAT:-4}"))
+# E14: the moves people made in the games they won against the bot, as move
+# targets only, listed HUMAN_POLICY_REPEAT times (3 is about 9% of the move
+# targets in a round). Off (0) unless set.
+for ((i = 0; i < ${HUMAN_POLICY_REPEAT:-0}; i++)); do human+=",data/human/train/policy_won"; done
 starts=()
 [ -e data/human/starts.jsonl.gz ] && starts=(--human-starts data/human/starts.jsonl.gz)
 exec .venv/bin/python -m catanatron.colonist.loop runs/g1 "${init[@]}" \
