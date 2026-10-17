@@ -14,7 +14,10 @@ def test_play():
     assert "Game Summary" in result.output
 
 
-def test_play_strong():
+def test_play_strong(monkeypatch):
+    # G forks a Pool on every decision; forking pytest after torch/BLAS have
+    # started threads can deadlock the child (hung land.sh for 11 h on Oct 17).
+    monkeypatch.setattr("catanatron.players.playouts.USE_MULTIPROCESSING", False)
     runner = CliRunner()
     result = runner.invoke(
         simulate,
