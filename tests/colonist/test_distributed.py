@@ -183,6 +183,47 @@ def test_a_vanished_host_s_range_is_shared_with_the_hosts_that_finished(
     assert any("lost shards" in line for line in logs)
 
 
+def test_human_opponent_reaches_local_and_remote_self_play(tmp_path, monkeypatch):
+    from catanatron.colonist import distributed
+
+    out = tmp_path / "run" / "round" / "data"
+    local, remote, copied = {}, [], []
+
+    def selfplay_run(net, out_dir, games, seed, **options):
+        local.update(options)
+
+    def ssh(host, key, argv):
+        remote.append([str(a) for a in argv])
+        return ["true"]
+
+    monkeypatch.setenv("COLONIST_WORKER_HOSTS", "w@x:4")
+    monkeypatch.delenv("COLONIST_WORKERS_FILE", raising=False)
+    monkeypatch.delenv("COLONIST_SELFPLAY_CAPACITIES", raising=False)
+    monkeypatch.setattr(distributed, "_prepare", lambda *a: ["selfplay"])
+    monkeypatch.setattr(distributed, "_remote_opponents", lambda *a: [])
+    monkeypatch.setattr(distributed, "_ssh", ssh)
+    monkeypatch.setattr(distributed, "_rsync", lambda k, s, d: copied.append(str(s)))
+    monkeypatch.setattr(distributed, "_complete", lambda *a: True)
+    monkeypatch.setattr(distributed.selfplay, "run", selfplay_run)
+    distributed.run(
+        "net.npz",
+        out,
+        games=128,
+        seed=0,
+        workers=4,
+        log=lambda m: None,
+        human_opponent="human.npz",
+        human_opponent_rate=0.15,
+    )
+
+    assert local["human_opponent"] == "human.npz"
+    assert local["human_opponent_rate"] == 0.15
+    argv = remote[0]
+    assert argv[argv.index("--human-opponent-rate") + 1] == "0.15"
+    assert argv[argv.index("--human-opponent") + 1].endswith("human_opponent.npz")
+    assert "human.npz" in copied
+
+
 def test_excluded_hosts_are_left_out():
     from catanatron.colonist.distributed import worker_hosts
 

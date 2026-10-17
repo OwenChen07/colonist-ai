@@ -168,6 +168,8 @@ def run(
     fast_simulations=None,
     human_starts=None,
     human_start_rate=0.0,
+    human_opponent=None,
+    human_opponent_rate=0.0,
 ):
     """Generate all shards locally and remotely, then verify the whole round."""
     hosts = worker_hosts()
@@ -197,6 +199,8 @@ def run(
         fast_simulations=fast_simulations,
         human_starts=human_starts,
         human_start_rate=human_start_rate,
+        human_opponent=human_opponent,
+        human_opponent_rate=human_opponent_rate,
     )
     os.makedirs(out_dir, exist_ok=True)
     flags = [
@@ -219,6 +223,14 @@ def run(
             "--human-start-rate",
             human_start_rate,
         ]
+    remote_human = remote_nets / "human_opponent.npz"
+    if human_opponent and human_opponent_rate > 0:
+        flags += [
+            "--human-opponent",
+            remote_human,
+            "--human-opponent-rate",
+            human_opponent_rate,
+        ]
 
     prepared = {}  # host -> the start of its self-play command
     for host, _ in hosts:
@@ -227,6 +239,8 @@ def run(
             argv += _remote_opponents(host, key, remote_nets, opponents)
             if human_starts and human_start_rate > 0:
                 _rsync(key, human_starts, f"{host}:{remote_starts}")
+            if human_opponent and human_opponent_rate > 0:
+                _rsync(key, human_opponent, f"{host}:{remote_human}")
         except subprocess.CalledProcessError:
             log(f"could not prepare {host}; its range runs elsewhere")
             continue

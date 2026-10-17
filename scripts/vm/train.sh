@@ -64,6 +64,10 @@ human=$(printf ',data/human/train/value%.0s' $(seq "${HUMAN_REPEAT:-4}"))
 for ((i = 0; i < ${HUMAN_POLICY_REPEAT:-0}; i++)); do human+=",data/human/train/policy_won"; done
 starts=()
 [ -e data/human/starts.jsonl.gz ] && starts=(--human-starts data/human/starts.jsonl.gz)
+# E13: a HUMAN_OPPONENT_RATE share of self-play games has one seat playing
+# the human opponent model's moves, no search. Off (0) unless set.
+humanseat=()
+[ "${HUMAN_OPPONENT_RATE:-0}" != 0 ] && humanseat=(--human-opponent "${HUMAN_OPPONENT:-models/human/net.npz}" --human-opponent-rate "$HUMAN_OPPONENT_RATE")
 exec .venv/bin/python -m catanatron.colonist.loop runs/g1 "${init[@]}" \
     --rounds 1000 --games "${SELFPLAY_GAMES:-3500}" --epochs "${TRAIN_EPOCHS:-3}" --window 6 --train-sample 4000000 \
     --gate "${PROMOTION_GATE:-confidence}" --promote-at 0.51 --extend-games 2000 --futility-games 1000 --prefetch --train-from latest --selfplay-from latest --match-simulations 200 --train-ema 0.9997 --min-games 1000 --anchor runs/g1/nets/round_013.npz --anchor-games 2000 --guard-live 0.01 \
@@ -72,5 +76,5 @@ exec .venv/bin/python -m catanatron.colonist.loop runs/g1 "${init[@]}" \
     --reference AB:2,F \
     --extra-data "${human#,}" \
     --gauntlet $sp1/nets/round_016.npz,$sp1/nets/round_008.npz \
-    --live-data data/human/holdout/value "${starts[@]}" --human-start-rate "${HUMAN_START_RATE:-0.35}" --before-round scripts/vm/human_dataset.sh \
+    --live-data data/human/holdout/value "${starts[@]}" "${humanseat[@]}" --human-start-rate "${HUMAN_START_RATE:-0.35}" --before-round scripts/vm/human_dataset.sh \
     --workers "${COLONIST_LOCAL_WORKERS:-8}" --train-threads "${COLONIST_TRAIN_THREADS:-8}"

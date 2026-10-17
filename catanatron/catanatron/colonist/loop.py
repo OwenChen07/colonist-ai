@@ -306,6 +306,8 @@ def play(run, n, args):
         fast_simulations=args.fast_simulations,
         human_starts=args.human_starts or None,
         human_start_rate=args.human_start_rate if args.human_starts else 0.0,
+        human_opponent=args.human_opponent or None,
+        human_opponent_rate=args.human_opponent_rate if args.human_opponent else 0.0,
         log=lambda m: say("  " + m),
     )
 
@@ -1161,11 +1163,25 @@ def main(argv=None):
         default=0.25,
         help="share of self-play games from --human-starts",
     )
+    parser.add_argument(
+        "--human-opponent",
+        default="",
+        help="an opponent_model.py net: one seat of some self-play games "
+        "samples its moves from it (E13)",
+    )
+    parser.add_argument(
+        "--human-opponent-rate",
+        type=float,
+        default=0.0,
+        help="share of self-play games with a --human-opponent seat (0: off)",
+    )
     parser.add_argument("--seed", type=int, default=3_000_000_000)
     parser.add_argument("--workers", type=int, default=None)
     args = parser.parse_args(argv)
     if not 0 <= args.human_start_rate <= 1:
         parser.error("--human-start-rate must be in [0, 1]")
+    if not 0 <= args.human_opponent_rate <= 1:
+        parser.error("--human-opponent-rate must be in [0, 1]")
     if not math.isfinite(args.setup_noise_scale) or args.setup_noise_scale <= 0:
         parser.error("--setup-noise-scale must be positive and finite")
     if not 0 < args.full_rate <= 1:
