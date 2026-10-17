@@ -1233,6 +1233,15 @@ def test_each_decision_gets_its_share_of_the_time():
     assert think_budget(setup, 57.5, 2)[1] == 17  # caps scale with --simulations
 
 
+def test_free_roads_before_the_roll_get_the_build_budget():
+    from catanatron.colonist.bridge import think_budget
+
+    game = _position("ROLL")
+    assert think_budget(game, 15.0, 2400) == (1.0, 800)  # the roll itself
+    game.state.is_road_building = True  # Road Building played before rolling
+    assert think_budget(game, 15.0, 2400) == (3.75, 4800)
+
+
 def test_a_search_stops_when_its_time_is_up():
     from catanatron.colonist.mcts import Search
 

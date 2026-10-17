@@ -100,7 +100,13 @@ def think_budget(game, remaining, simulations):
 
     state = game.state
     prompt = state.current_prompt.value
-    if prompt == "PLAY_TURN" and not player_has_rolled(state, state.current_color()):
+    # Road Building is often played before the roll; its free roads are a
+    # build decision, not the roll's 1 s / 800 simulations.
+    if (
+        prompt == "PLAY_TURN"
+        and not state.is_road_building
+        and not player_has_rolled(state, state.current_color())
+    ):
         prompt = "ROLL"
     share, cap, scale = BUDGETS.get(prompt, BUDGETS["PLAY_TURN"])
     if remaining is None:
