@@ -63,6 +63,15 @@ def scan(path):
     return observer.rows, report.winner == you[0]
 
 
+def _wilson(wins, n, z=1.96):
+    """(rate, low, high): Wilson 95% interval for wins out of n."""
+    p = wins / n
+    d = 1 + z * z / n
+    mid = (p + z * z / (2 * n)) / d
+    half = z * (p * (1 - p) / n + z * z / (4 * n * n)) ** 0.5 / d
+    return p, mid - half, mid + half
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("captures", nargs="+")
@@ -86,7 +95,16 @@ def main(argv=None):
         counts["games_with_miss"] += bool(missed)
         counts["lost_games"] += not won
         counts["lost_games_with_miss"] += bool(missed) and not won
-    print(json.dumps(dict(counts), sort_keys=True))
+        if rows:
+            arm = "miss" if missed else "followed"
+            counts[f"position_games_{arm}"] += 1
+            counts[f"position_wins_{arm}"] += won
+    out = dict(counts)
+    for arm in ("miss", "followed"):
+        n, w = counts[f"position_games_{arm}"], counts[f"position_wins_{arm}"]
+        if n:
+            out[f"win_rate_{arm}"] = [round(x, 3) for x in _wilson(w, n)]
+    print(json.dumps(out, sort_keys=True))
     return 0
 
 
