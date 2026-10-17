@@ -210,12 +210,8 @@ def forward(params, x, layers, xp=np, aux=False):
                 ),
             )
         )
-        e2 = relu(
-            linear_g(f"edge{l}", cat([e, gather(topo["edge_node"], n)], -1))
-        )
-        t2 = relu(
-            linear_g(f"tile{l}", cat([t, gather(topo["tile_node"], n)], -1))
-        )
+        e2 = relu(linear_g(f"edge{l}", cat([e, gather(topo["edge_node"], n)], -1)))
+        t2 = relu(linear_g(f"tile{l}", cat([t, gather(topo["tile_node"], n)], -1)))
         pooled = cat([g, n.mean(0), e.mean(0), t.mean(0)], -1)
         g2 = relu(pooled @ params[f"glob{l}"][0] + params[f"glob{l}"][1])
         n, e, t, g = n + n2, e + e2, t + t2, g + g2
