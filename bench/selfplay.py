@@ -47,13 +47,36 @@ class Timer:
         setattr(owner, name, timed)
 
 
+def profile_batched(net, games, simulations):
+    import cProfile
+    import pstats
+
+    from catanatron.colonist import selfplay
+
+    profiler = cProfile.Profile()
+    start = time.perf_counter()
+    profiler.enable()
+    selfplay.play_games(net, range(games), {"simulations": simulations})
+    profiler.disable()
+    print(f"{(time.perf_counter() - start) / games:.1f} s per game (profiled)")
+    pstats.Stats(profiler).sort_stats("tottime").print_stats(25)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("net", nargs="?", help="net.npz (default: untrained)")
     parser.add_argument("--simulations", type=int, default=50)
     parser.add_argument("--games", type=int, default=1)
+    parser.add_argument(
+        "--profile",
+        type=int,
+        metavar="N",
+        help="instead: cProfile N games played together as real self-play does",
+    )
     args = parser.parse_args()
     net = Net.load(args.net) if args.net else random_net()
+    if args.profile:
+        return profile_batched(net, args.profile, args.simulations)
 
     timer = Timer()
     timer.wrap(Game, "copy", "copy")
