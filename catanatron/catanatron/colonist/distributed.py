@@ -199,78 +199,132 @@ def run(
         human_start_rate=human_start_rate,
     )
     os.makedirs(out_dir, exist_ok=True)
+    flags = [
+        "--simulations",
+        simulations,
+        "--opponent-rate",
+        opponent_rate,
+        "--setup-noise-scale",
+        setup_noise_scale,
+        "--full-rate",
+        full_rate,
+    ]
+    if fast_simulations:
+        flags += ["--fast-simulations", fast_simulations]
+    remote_starts = remote_nets / "starts.jsonl.gz"
+    if human_starts and human_start_rate > 0:
+        flags += [
+            "--human-starts",
+            remote_starts,
+            "--human-start-rate",
+            human_start_rate,
+        ]
 
-    processes = []
-    for (host, count), (first, size) in zip(hosts, remote_ranges):
-        if not size:
-            continue
+    prepared = {}  # host -> the start of its self-play command
+    for host, _ in hosts:
         try:
             argv = _prepare(host, key, root, remote_data, remote_nets, net_path)
             argv += _remote_opponents(host, key, remote_nets, opponents)
-            argv += [
-                "--games",
-                size,
-                "--seed",
-                first,
-                "--simulations",
-                simulations,
-                "--workers",
-                count,
-                "--opponent-rate",
-                opponent_rate,
-                "--setup-noise-scale",
-                setup_noise_scale,
-                "--full-rate",
-                full_rate,
-            ]
-            if fast_simulations:
-                argv += ["--fast-simulations", fast_simulations]
             if human_starts and human_start_rate > 0:
-                remote_starts = remote_nets / "starts.jsonl.gz"
                 _rsync(key, human_starts, f"{host}:{remote_starts}")
-                argv += [
-                    "--human-starts",
-                    remote_starts,
-                    "--human-start-rate",
-                    human_start_rate,
-                ]
         except subprocess.CalledProcessError:
-            log(f"could not prepare {host}; its range runs here")
+            log(f"could not prepare {host}; its range runs elsewhere")
             continue
-        stream = open(Path(out_dir).parent / f"remote-{_safe(host)}.log", "a", 1)
-        process = subprocess.Popen(
-            _ssh(host, key, argv), stdout=stream, stderr=subprocess.STDOUT
-        )
-        processes.append((host, process, stream))
-        log(f"self-play: {size} games (seeds {first}+) on {host}")
-    log(f"self-play: {local_games} games here")
+        prepared[host] = argv
 
-    try:
-        if local_games:
-            selfplay.run(
-                net_path, out_dir, games=local_games, seed=local_seed, **options
+    def wave(local_range, jobs):
+        """Plays local_range here while each (host, processes, first, size)
+        job runs remotely; returns the hosts that finished and were copied."""
+        processes = []
+        for host, count, first, size in jobs:
+            if not size or host not in prepared:
+                continue
+            argv = prepared[host] + ["--games", size, "--seed", first]
+            argv += ["--workers", count] + flags
+            stream = open(Path(out_dir).parent / f"remote-{_safe(host)}.log", "a", 1)
+            process = subprocess.Popen(
+                _ssh(host, key, argv), stdout=stream, stderr=subprocess.STDOUT
             )
-    except BaseException:
-        for _, process, _ in processes:
-            process.terminate()
-            process.wait()
-        raise
-    for host, process, stream in processes:
-        code = process.wait()
-        stream.close()
-        if code:
-            log(f"{host} exited with status {code}; finishing its range here")
+            processes.append((host, process, stream))
+            log(f"self-play: {size} games (seeds {first}+) on {host}")
+        first, size = local_range
+        log(f"self-play: {size} games here")
         try:
-            _rsync(key, f"{host}:{remote_data}/", f"{out_dir}/")
-        except subprocess.CalledProcessError:
-            log(f"copying shards from {host} failed; finishing its range here")
+            if size:
+                selfplay.run(net_path, out_dir, games=size, seed=first, **options)
+        except BaseException:
+            for _, process, _ in processes:
+                process.terminate()
+                process.wait()
+            raise
+        finished = []
+        for host, process, stream in processes:
+            code = process.wait()
+            stream.close()
+            if code:
+                log(f"{host} exited with status {code}; its range runs elsewhere")
+            try:
+                _rsync(key, f"{host}:{remote_data}/", f"{out_dir}/")
+            except subprocess.CalledProcessError:
+                log(f"copying shards from {host} failed; its range runs elsewhere")
+                continue
+            if not code:
+                finished.append(host)
+        return finished
+
+    jobs = [
+        (host, count, first, size)
+        for (host, count), (first, size) in zip(hosts, remote_ranges)
+    ]
+    finished = wave(ranges[0], jobs)
+    machines = 1 + len(finished)
+
+    # A host that vanished (a preempted spot VM) loses its range. Share it
+    # among the coordinator and the hosts that finished, by capacity, rather
+    # than playing it all here after everyone else is done.
+    missing = [
+        first
+        for first in range(seed, seed + games, SHARD_SIZE)
+        if not _complete(out_dir, first, min(SHARD_SIZE, seed + games - first))
+    ]
+    if missing and finished:
+        log(f"self-play: {len(missing)} lost shards shared with {finished}")
+        weight = dict(zip([host for host, _ in hosts], weights[1:]))
+        alive = [(host, count) for host, count in hosts if host in finished]
+        counts = [
+            size // SHARD_SIZE + (size % SHARD_SIZE > 0)
+            for _, size in split(
+                len(missing) * SHARD_SIZE,
+                0,
+                local_processes,
+                alive,
+                [weights[0]] + [weight[host] for host, _ in alive],
+            )
+        ]
+        chunks, start = [], 0
+        for count in counts:
+            shards = missing[start : start + count]
+            start += count
+            # One range per machine; it may span shards already here, which
+            # replay to the same games (fixed seeds), and only when a host's
+            # copy-back partly worked.
+            end = min(shards[-1] + SHARD_SIZE, seed + games) if shards else 0
+            chunks.append((shards[0], end - shards[0]) if shards else (0, 0))
+        wave(
+            chunks[0],
+            [
+                (host, count, first, size)
+                for (host, count), (first, size) in zip(alive, chunks[1:])
+            ],
+        )
+
     for first, size in remote_ranges:
         if size and not _complete(out_dir, first, size):
             log(f"self-play: {size} additional games here")
             selfplay.run(net_path, out_dir, games=size, seed=first, **options)
     if not _complete(out_dir, seed, games):
         raise RuntimeError("self-play round has missing shards; training cannot start")
-    log(f"self-play complete across {1 + len(processes)} machines: {games} games")
+    log(f"self-play complete across {machines} machines: {games} games")
 
 
 def _safe(host):

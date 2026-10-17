@@ -120,6 +120,69 @@ def test_a_failed_worker_s_games_are_played_here(tmp_path, monkeypatch):
     assert logs
 
 
+def test_a_vanished_host_s_range_is_shared_with_the_hosts_that_finished(
+    tmp_path, monkeypatch
+):
+    import subprocess
+
+    from catanatron.colonist import distributed
+    from catanatron.colonist.datagen import shard_path
+
+    out = tmp_path / "run" / "round" / "data"
+    played = {}  # where each seed was played: "here", or a host
+
+    def play(where, first, games):
+        # Like selfplay.run: shards already here are skipped.
+        for start in range(first, first + games, distributed.SHARD_SIZE):
+            path = shard_path(
+                out, start, min(distributed.SHARD_SIZE, first + games - start)
+            )
+            if not os.path.isfile(path):
+                played.setdefault(start, []).append(where)
+                open(path, "w").close()
+
+    def selfplay_run(net, out_dir, games, seed, **options):
+        play("here", seed, games)
+
+    remote = {}  # host -> the range it last played
+
+    def ssh(host, key, argv):
+        argv = [str(a) for a in argv]
+        first = int(argv[argv.index("--seed") + 1])
+        games = int(argv[argv.index("--games") + 1])
+        remote[host] = (first, games)
+        return ["false" if host == "w@dead" else "true"]
+
+    def rsync(key, source, destination):
+        host = str(source).split(":")[0]
+        if host == "w@dead":
+            raise subprocess.CalledProcessError(255, "rsync")
+        play(host, *remote[host])
+
+    monkeypatch.setenv("COLONIST_WORKER_HOSTS", "w@dead:4,w@live:4")
+    monkeypatch.delenv("COLONIST_WORKERS_FILE", raising=False)
+    monkeypatch.delenv("COLONIST_SELFPLAY_CAPACITIES", raising=False)
+    monkeypatch.setattr(distributed, "_prepare", lambda *a: ["selfplay"])
+    monkeypatch.setattr(distributed, "_remote_opponents", lambda *a: [])
+    monkeypatch.setattr(distributed, "_ssh", ssh)
+    monkeypatch.setattr(distributed, "_rsync", rsync)
+    monkeypatch.setattr(distributed.selfplay, "run", selfplay_run)
+    logs = []
+    distributed.run(
+        "net.npz", out, games=12 * 64 + 5, seed=0, workers=4, log=logs.append
+    )
+
+    assert distributed._complete(out, 0, 12 * 64 + 5)
+    dead_first, dead_games = distributed.split(12 * 64 + 5, 0, 4, [("a", 4), ("b", 4)])[
+        1
+    ]
+    lost = range(dead_first, dead_first + dead_games, 64)
+    # The dead host's shards were played once, part here and part on w@live.
+    assert all(len(played[s]) == 1 for s in played)
+    assert {played[s][0] for s in lost} == {"here", "w@live"}
+    assert any("lost shards" in line for line in logs)
+
+
 def test_excluded_hosts_are_left_out():
     from catanatron.colonist.distributed import worker_hosts
 
