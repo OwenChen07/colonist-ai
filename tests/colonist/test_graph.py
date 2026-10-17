@@ -79,6 +79,25 @@ def test_saved_graph_net_loads_through_net_load(tmp_path):
     assert np.allclose(a[0], b[0]) and np.allclose(a[1], b[1])
 
 
+def test_sparse_gathers_are_the_mean_matrices():
+    topo = G.topology()
+    for name, (slots, weight) in G.sparse_gathers().items():
+        dense = np.zeros_like(topo[name])
+        for rows, cols in slots:
+            rows = np.arange(len(dense)) if rows is None else rows
+            dense[rows, cols] += weight[rows, 0, 0]
+        assert np.array_equal(dense, topo[name]), name
+
+
+def test_forward_np_matches_forward():
+    net = G.random_graph_net(hidden=16, glob=24, layers=2, seed=4)
+    x = _inputs(5)
+    st, dy = x[:, : E.STATIC_SIZE], x[:, E.STATIC_SIZE :]
+    a = G.forward_np(net.params, list(st), dy, net.layers)
+    b = G.forward(net.params, x, net.layers)
+    assert np.allclose(a[0], b[0], atol=1e-5) and np.allclose(a[1], b[1], atol=1e-6)
+
+
 def test_graph_net_plays_through_search():
     from catanatron.colonist.mcts import Search
     from catanatron.colonist.rules import new_game

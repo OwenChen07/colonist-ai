@@ -238,6 +238,106 @@ def forward(params, x, layers, xp=np, aux=False):
     return logits, values, a @ params["aux2"][0] + params["aux2"][1]
 
 
+@lru_cache(None)
+def sparse_gathers():
+    """The mean matrices as (slots, weights): slot k lists, for the rows with
+    a k-th neighbour, (those rows or None for all, the neighbour). The dense
+    products are mostly zeros (a corner has 2-3 neighbours of 54)."""
+    topo = topology()
+    out = {}
+    for name in ("node_node", "node_edge", "node_tile", "edge_node", "tile_node"):
+        a = topo[name]
+        lists = [np.nonzero(row)[0] for row in a]
+        assert min(map(len, lists)) > 0, name
+        slots = []
+        for k in range(max(map(len, lists))):
+            rows = np.array([r for r, c in enumerate(lists) if len(c) > k])
+            cols = np.array([c[k] for c in lists if len(c) > k])
+            slots.append((None if len(rows) == len(lists) else rows, cols))
+        assert slots[0][0] is None, name
+        weight = np.array([a[r, c[0]] for r, c in enumerate(lists)], np.float32)
+        out[name] = (slots, weight[:, None, None])
+    return out
+
+
+def forward_np(params, statics, dynamic, layers):
+    """forward(), numpy only, for play: rows with their own board inputs, and
+    the means over neighbours as sums of the few that exist rather than dense
+    products. The same values up to float rounding."""
+    x = np.concatenate([np.stack(statics), dynamic], 1).astype(np.float32)
+    topo = topology()
+    sparse = sparse_gathers()
+    b = x.shape[0]
+
+    def linear(name, h):
+        w, bias = params[name]
+        return (h.reshape(-1, h.shape[-1]) @ w + bias).reshape(*h.shape[:-1], -1)
+
+    def linear_g(name, h):
+        w, bias = params[name]
+        k = h.shape[-1]
+        part = (h.reshape(-1, k) @ w[:k]).reshape(*h.shape[:-1], -1)
+        return part + (g @ w[k:] + bias)
+
+    def relu(h):
+        return np.maximum(h, 0)
+
+    def gather(name, h):
+        slots, weight = sparse[name]
+        out = h[slots[0][1]]
+        for rows, cols in slots[1:]:
+            if rows is None:
+                out += h[cols]
+            else:
+                out[rows] += h[cols]
+        out *= weight
+        return out
+
+    def per(index):
+        return x[:, index].transpose(1, 0, 2)
+
+    t = relu(linear("tile_in", per(topo["tile_in"])))
+    n = relu(linear("node_in", per(topo["node_in"])))
+    e = relu(linear("edge_in", per(topo["edge_in"])))
+    g = relu(x[:, _DYN_GLOBAL:] @ params["glob_in"][0] + params["glob_in"][1])
+    cat = np.concatenate
+    for l in range(layers):
+        n2 = relu(
+            linear_g(
+                f"node{l}",
+                cat(
+                    [
+                        n,
+                        gather("node_node", n),
+                        gather("node_edge", e),
+                        gather("node_tile", t),
+                    ],
+                    -1,
+                ),
+            )
+        )
+        e2 = relu(linear_g(f"edge{l}", cat([e, gather("edge_node", n)], -1)))
+        t2 = relu(linear_g(f"tile{l}", cat([t, gather("tile_node", n)], -1)))
+        pooled = cat([g, n.mean(0), e.mean(0), t.mean(0)], -1)
+        g2 = relu(pooled @ params[f"glob{l}"][0] + params[f"glob{l}"][1])
+        n, e, t, g = n + n2, e + e2, t + t2, g + g2
+
+    node = linear("node_out", n)
+    edge = linear("edge_out", e)[..., 0]
+    tile = linear("tile_out", t)
+    other = g @ params["glob_out"][0] + params["glob_out"][1]
+    logits = np.empty((b, E.NUM_ACTIONS), x.dtype)
+    logits[:, topo["settle"]] = node[..., 0].T
+    logits[:, topo["city"]] = node[..., 1].T
+    logits[:, topo["road"]] = edge.T
+    logits[:, topo["robber"][:, 0]] = tile[..., 0].T
+    logits[:, topo["robber"][:, 1]] = tile[..., 1].T
+    logits[:, topo["other"]] = other
+    v = relu(g @ params["value1"][0] + params["value1"][1])
+    values = np.tanh(v @ params["value2"][0] + params["value2"][1])[:, 0]
+    return logits, values
+
+
 def _topology(xp, x):
     topo = topology()
     if xp is np:
@@ -294,8 +394,7 @@ class GraphNet:
         return forward(self.params, x, self.layers)
 
     def forward_rows(self, statics, dynamic):
-        x = np.concatenate([np.stack(statics), dynamic], 1).astype(np.float32)
-        return forward(self.params, x, self.layers)
+        return forward_np(self.params, statics, dynamic, self.layers)
 
     def evaluate(self, game, color, legal=None):
         static, dynamic = E.encode(game, color)
