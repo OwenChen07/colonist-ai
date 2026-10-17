@@ -202,7 +202,12 @@ def run_agent(prompt, *, role, workstream=None, model, cwd, log, env=None, resum
     agent = os.environ.get("ORCHESTRATOR_AGENT", "claude")
     if agent == "claude" and claude_blocked() and resume is None:
         agent = "codex"
-    full_env = {**os.environ, **(env or {})}
+    # land.sh's full test run takes over Bash's default 10 minutes on a busy VM.
+    bash_limit = {
+        "BASH_DEFAULT_TIMEOUT_MS": "2400000",
+        "BASH_MAX_TIMEOUT_MS": "2400000",
+    }
+    full_env = {**bash_limit, **os.environ, **(env or {})}
     if agent == "claude":
         command = ["claude", "-p", "--model", model, "--output-format", "json"]
         command += ["--permission-mode", "dontAsk"]
