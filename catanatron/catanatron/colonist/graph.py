@@ -168,6 +168,13 @@ def forward(params, x, layers, xp=np, aux=False):
         w, bias = params[name]
         return (h.reshape(-1, h.shape[-1]) @ w + bias).reshape(*h.shape[:-1], -1)
 
+    def linear_g(name, h):  # linear(cat([h, g broadcast over count]))
+        # g's share of the product is the same for every row: do it once.
+        w, bias = params[name]
+        k = h.shape[-1]
+        part = (h.reshape(-1, k) @ w[:k]).reshape(*h.shape[:-1], -1)
+        return part + (g @ w[k:] + bias)
+
     def relu(h):
         return np.maximum(h, 0) if xp is np else xp.relu(h)
 
@@ -189,11 +196,8 @@ def forward(params, x, layers, xp=np, aux=False):
     cat = xp.concatenate if xp is np else xp.cat
     for l in range(layers):
 
-        def wide(count):
-            return xp.broadcast_to(g[None], (count, *g.shape))
-
         n2 = relu(
-            linear(
+            linear_g(
                 f"node{l}",
                 cat(
                     [
@@ -201,23 +205,16 @@ def forward(params, x, layers, xp=np, aux=False):
                         gather(topo["node_node"], n),
                         gather(topo["node_edge"], e),
                         gather(topo["node_tile"], t),
-                        wide(E.NUM_NODES),
                     ],
                     -1,
                 ),
             )
         )
         e2 = relu(
-            linear(
-                f"edge{l}",
-                cat([e, gather(topo["edge_node"], n), wide(E.NUM_EDGES)], -1),
-            )
+            linear_g(f"edge{l}", cat([e, gather(topo["edge_node"], n)], -1))
         )
         t2 = relu(
-            linear(
-                f"tile{l}",
-                cat([t, gather(topo["tile_node"], n), wide(E.NUM_TILES)], -1),
-            )
+            linear_g(f"tile{l}", cat([t, gather(topo["tile_node"], n)], -1))
         )
         pooled = cat([g, n.mean(0), e.mean(0), t.mean(0)], -1)
         g2 = relu(pooled @ params[f"glob{l}"][0] + params[f"glob{l}"][1])
