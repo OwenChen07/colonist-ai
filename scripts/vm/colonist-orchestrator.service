@@ -1,0 +1,25 @@
+[Unit]
+Description=Colonist AI: the Discord orchestrator (scripts/vm/orchestrator/discord_bot.py)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+User=owen
+WorkingDirectory=/home/owen/colonist-ai
+Environment=PYTHONUNBUFFERED=1
+Environment=PATH=/home/owen/.local/bin:/usr/local/bin:/usr/bin:/bin
+# The Discord token and settings; outside the repository.
+EnvironmentFile=/home/owen/.config/colonist-orchestrator.env
+Nice=5
+ExecStart=/home/owen/colonist-ai/.venv/bin/python scripts/vm/orchestrator/discord_bot.py
+StandardOutput=append:/home/owen/colonist-ai/data/orchestrator/bot.log
+StandardError=append:/home/owen/colonist-ai/data/orchestrator/bot.log
+Restart=always
+RestartSec=30
+# Restarting the bot leaves running agents and their background jobs alone;
+# agent.py's locks keep a restarted bot from starting a second copy.
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target

@@ -1,10 +1,9 @@
-"""The orchestrator's context report: everything a twice-daily run should know,
+"""The orchestrator's context report: everything a major report should know,
 gathered cheaply on the coordinator (no agent needed), as Markdown on stdout.
 
     .venv/bin/python scripts/vm/orchestrator/context.py
 
-Also lists the owner's replies not seen by an earlier run (`--mark-seen`
-records them as seen, after a run that handled them).
+The owner's answers and open decisions are added by agent.py.
 """
 
 import argparse
@@ -219,52 +218,17 @@ def ops():
     return lines
 
 
-def answers(mark_seen=False):
-    """New owner replies (from the site, via the bot VMs' publishers)."""
-    seen_path = STATE / "answers-seen.json"
-    seen = set(read_json(seen_path) or [])
-    found = {}
-    for path in glob.glob(str(ROOT / "data/orchestrator-answers.json")):
-        for a in read_json(path) or []:
-            if isinstance(a, dict) and a.get("id"):
-                found[a["id"]] = a
-    new = [
-        a
-        for a in sorted(found.values(), key=lambda a: a.get("at", ""))
-        if a["id"] not in seen
-    ]
-    if mark_seen:
-        seen_path.write_text(json.dumps(sorted(seen | {a["id"] for a in new})))
-        return []
-    lines = ["## The owner's new replies (act on these first)"]
-    if not new:
-        lines.append("- none")
-    for a in new:
-        lines.append(
-            f"- [{a.get('questionId')}] at {a.get('at')}: {a.get('text', '')[:2000]}"
-        )
-    report = read_json(STATE / "site.json") or {}
-    if report.get("questions"):
-        lines.append("- questions currently open on the site:")
-        lines += [f"  - [{q['id']}] {q['text']}" for q in report["questions"]]
-    return lines
-
-
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--mark-seen", action="store_true")
-    args = parser.parse_args(argv)
+    parser.parse_args(argv)
     STATE.mkdir(parents=True, exist_ok=True)
-    if args.mark_seen:
-        answers(mark_seen=True)
-        return 0
     now = dt.datetime.now(dt.timezone.utc)
     out = [
         f"# Context report, {now.isoformat(timespec='minutes')} UTC "
         f"({now.astimezone(TORONTO).strftime('%a %b %d %H:%M')} Toronto)",
         "",
     ]
-    for section in (answers, training, live, ops):
+    for section in (training, live, ops):
         out += section() + [""]
     print("\n".join(out))
     return 0
