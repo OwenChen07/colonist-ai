@@ -60,7 +60,9 @@ def lines(window):
     ahead = [g for g in exported if g["exported"]["value"] > 50]
     out.append(f"exported value known for {len(exported)} games ({len(ahead)} > 50)")
     for acct in sorted({g["account"] for g in window}):
-        out.append(f"account {acct}: bot wins {rate([g for g in window if g['account'] == acct])}")
+        out.append(
+            f"account {acct}: bot wins {rate([g for g in window if g['account'] == acct])}"
+        )
     return out
 
 
