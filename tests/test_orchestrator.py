@@ -197,3 +197,20 @@ def test_rank_watch_queues_once_and_releases_by_day(tmp_path, monkeypatch):
     assert len(state["queue"]) == 1 and "Ontario" in state["queue"][0]["text"]
     rank_watch.main(["--release"])
     assert json.loads((tmp_path / "rank-watch.json").read_text())["queue"] == []
+
+
+def test_decision_options_fit_a_phone():
+    options = [
+        "Recommended: allow Bash for worker sessions in agent.py",
+        "Keep it as is",
+    ]
+    assert core.option_lines(options) == [
+        "**1 ★.** allow Bash for worker sessions in agent.py",
+        "**2.** Keep it as is",
+    ]
+    assert [core.button_label(i, o) for i, o in enumerate(options)] == ["1 ★", "2"]
+    assert core.chosen(options, " 2 ") == "Keep it as is"
+    assert core.chosen(options, "#1") == options[0]
+    assert core.chosen(options, "option 2") == "Keep it as is"
+    assert core.chosen(options, "3") is None
+    assert core.chosen(options, "2 but only for training") is None

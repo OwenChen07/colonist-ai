@@ -251,7 +251,7 @@ class Orchestrator(discord.Client):
             for i, option in enumerate(d.get("options") or []):
                 view.add_item(
                     discord.ui.Button(
-                        label=option[:80],
+                        label=core.button_label(i, option),
                         custom_id=f"d:{d['id']}:{i}"[:100],
                         style=(
                             discord.ButtonStyle.primary
@@ -261,9 +261,13 @@ class Orchestrator(discord.Client):
                     )
                 )
             mention = f"<@{self.owner_id}> " if d.get("urgent") else ""
-            text = (
-                f"{mention}❓ **Decision** `{d['id']}` (from {d.get('from')})\n{d['question']}\n"
-                "_Pick a button, or reply to this message in your own words._"
+            text = "\n".join(
+                [
+                    f"{mention}❓ **Decision** `{d['id']}` (from {d.get('from')})",
+                    d["question"],
+                    *core.option_lines(d.get("options")),
+                    "_Tap a number (★ recommended), or reply in your own words._",
+                ]
             )
             message = await self.say(LEAD, text, view=view)
             if message:
@@ -410,7 +414,9 @@ class Orchestrator(discord.Client):
                 None,
             )
             if decision:
-                self.answer(decision, text)
+                self.answer(
+                    decision, core.chosen(decision.get("options"), text) or text
+                )
                 await message.add_reaction("✅")
                 return
         await self.chat(message, text)

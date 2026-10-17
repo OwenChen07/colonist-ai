@@ -10,6 +10,7 @@ All times are Toronto time (the VMs run on UTC):
 """
 
 import datetime as dt
+import re
 import json
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -138,3 +139,27 @@ def chunks(text, size=1990):
     if current.strip():
         out.append(current)
     return out
+
+
+def option_lines(options):
+    """A decision's options as a numbered list: the message wraps them on a
+    phone, where long button labels are cut off."""
+    lines = []
+    for i, option in enumerate(options or []):
+        text = re.sub(r"^\s*recommended:\s*", "", option, flags=re.I)
+        star = " ★" if text != option else ""
+        lines.append(f"**{i + 1}{star}.** {text}")
+    return lines
+
+
+def button_label(i, option):
+    """Short enough to show whole on a phone: the option's number."""
+    return f"{i + 1} ★" if re.match(r"\s*recommended:", option, re.I) else str(i + 1)
+
+
+def chosen(options, reply):
+    """The option a reply picks by number ('2', '#2', 'option 2'), else None."""
+    match = re.fullmatch(r"\s*(?:option\s*|#)?(\d+)\s*\.?\s*", reply, re.I)
+    if match and 1 <= int(match.group(1)) <= len(options or []):
+        return options[int(match.group(1)) - 1]
+    return None
