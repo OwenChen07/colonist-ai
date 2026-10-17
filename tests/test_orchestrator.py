@@ -138,10 +138,12 @@ def test_outputs_become_decisions_and_inbox_messages(tmp_path, monkeypatch):
     json.dumps(rows)
 
 
-def test_workers_may_land_but_the_lead_may_not_push():
+def test_the_lead_and_workers_land_but_never_push():
     lead, worker = agent.allowed_tools("lead"), agent.allowed_tools("worker")
+    # The owner's decision of Oct 17: the lead gets the workers' commands.
+    assert lead == worker
     assert "Bash(scripts/vm/orchestrator/land.sh:*)" in worker
-    assert not any("push" in t or "land.sh" in t for t in lead)
+    assert not any("push" in t for t in worker)
     assert not any("bridge" in t or "ranked_runner" in t for t in worker)
     for tools in (lead, worker):
         assert "Bash(scripts/vm/orchestrator/kill_landing.sh:*)" in tools
@@ -259,7 +261,7 @@ def test_workers_manage_gcp_workers_but_not_the_machines_we_run_on():
     assert "Bash(gcloud compute instances delete*colonist-selfplay-1*)" in denied
     assert "Bash(gcloud compute instances stop*colonist-selfplay-worker-4*)" in denied
     assert "Bash(gcloud iam *)" in denied
-    assert not any("gcloud" in t for t in agent.allowed_tools("lead"))
+    assert agent.disallowed_tools("lead") == denied
 
 
 FAKE_CLAUDE = """

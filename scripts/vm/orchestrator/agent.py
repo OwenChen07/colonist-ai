@@ -131,7 +131,8 @@ def allowed_tools(role):
         "Bash(systemctl cat:*)",
         "Bash(journalctl:*)",
     ]
-    if role == "worker":
+    # The lead runs in its own worktree (ws/lead) and lands like a worker.
+    if role in ("worker", "lead"):
         tools += [
             "Bash(git add:*)",
             "Bash(git commit:*)",
@@ -523,8 +524,14 @@ def major():
             + read(STATE / "journal.md", 6000, tail=True),
         ]
     )
+    path = worktree("lead")
     text, _, agent = run_agent(
-        prompt, role="lead", model=LEAD_MODEL, cwd=ROOT, log=runs / f"{tag}-major.log"
+        prompt,
+        role="lead",
+        model=LEAD_MODEL,
+        cwd=path,
+        log=runs / f"{tag}-major.log",
+        env=worktree_env(path),
     )
     data = final_json(text) or {}
     report = data.get("report")
@@ -558,8 +565,16 @@ def chat(message_file):
     except ValueError:
         pass
     when = core.local(now())
-    # One session per Toronto day keeps the chat's context, and its cost, bounded.
-    resume = session.get("id") if session.get("day") == core.budget_day(now()) else None
+    path = worktree("lead")
+    # One session per Toronto day keeps the chat's context, and its cost,
+    # bounded. A session is stored per directory, so one started elsewhere
+    # (before the chat ran in the lead's worktree) can't be resumed.
+    resume = (
+        session.get("id")
+        if session.get("day") == core.budget_day(now())
+        and session.get("cwd") == str(path)
+        else None
+    )
     if resume:
         prompt = f"The owner, at {when:%-I:%M %p}:\n{message}"
     else:
@@ -585,13 +600,16 @@ def chat(message_file):
         role="lead",
         workstream="chat",
         model=LEAD_MODEL,
-        cwd=ROOT,
+        cwd=path,
         log=chats / f"{tag}.log",
+        env=worktree_env(path),
         resume=resume,
     )
     if agent == "claude" and session_id:
         (STATE / "chat-session.json").write_text(
-            json.dumps({"id": session_id, "day": core.budget_day(now())})
+            json.dumps(
+                {"id": session_id, "day": core.budget_day(now()), "cwd": str(path)}
+            )
         )
     if agent == "codex":
         text = (final_json(text) or {}).get("reply") or text[-1900:]
@@ -638,6 +656,11 @@ def worktree(name):
     return path
 
 
+def worktree_env(path):
+    """Python imports the worktree's code, not the main checkout's."""
+    return {"PYTHONPATH": f"{path / 'catanatron'}:{path}"}
+
+
 def worker(name):
     tag = stamp()
     d = STATE / "workstreams" / name
@@ -670,7 +693,7 @@ def worker(name):
             + sh(["git", "status", "--short"], cwd=path).stdout,
         ]
     )
-    env = {"PYTHONPATH": f"{path / 'catanatron'}:{path}"}
+    env = worktree_env(path)
     log = d / "runs" / f"{tag}.log"
     text, _, agent = run_agent(
         prompt,

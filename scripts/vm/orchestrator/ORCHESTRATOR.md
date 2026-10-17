@@ -82,6 +82,7 @@ You run with a fixed allowlist (`allowed_tools` in `agent.py`):
 - ssh, scp and rsync with the worker key, which reach the bot VMs, the workers and the PC;
 - the safe-restart scripts, `bot_ctl.sh` and `sync_bot.sh`;
 - `kill_landing.sh`: lists a stuck landing's processes (land.sh, its `flock 8`, its pytest), `--yes [PID]` kills them, and it refuses any other process;
+- the workers' commands: git add/commit/checkout/restore/stash/fetch/rebase/mv/rm, `land.sh`, `gcloud compute`, `bench/` and cProfile. You run in your own worktree (branch `ws/lead`, with the shared `data/`, `runs/`, `models/`, `captures/` and `.venv` symlinked to the main checkout), and code you change lands through `land.sh` like a worker's;
 - read-only shell tools.
 Anything else is refused. If you need more, ask the owner as a decision.
 
