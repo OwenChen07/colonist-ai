@@ -16,7 +16,7 @@ from catanatron.colonist import encode as E
 from catanatron.colonist.capture import load as load_capture
 from catanatron.colonist.convert import convert
 from catanatron.colonist.endgame_policy import build_path_actions
-from catanatron.colonist.replay import replay
+from catanatron.colonist.replay import game_winner, replay
 from catanatron.models.player import Color
 
 
@@ -60,7 +60,7 @@ def scan(path):
     report = replay(record, observer=observer)
     if not report.ok:
         return None
-    return observer.rows, report.winner == you[0]
+    return observer.rows, game_winner(record, report) == you[0]
 
 
 def _wilson(wins, n, z=1.96):

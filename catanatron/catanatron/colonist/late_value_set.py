@@ -23,7 +23,7 @@ from multiprocessing import Pool
 from catanatron.colonist.capture import load as load_capture
 from catanatron.colonist.convert import convert
 from catanatron.colonist.net import Net
-from catanatron.colonist.replay import replay
+from catanatron.colonist.replay import game_winner, replay
 from catanatron.models.player import Color
 
 ACCOUNTS = ("bot3", "bot4", "bot5", "bot7")
@@ -61,7 +61,7 @@ def _game(path, nets):
     rep = replay(rec, observer=obs)
     if not rep.ok or not obs.values:
         return None
-    return {"capture": path, "won": rep.winner == you[0], "values": obs.values}
+    return {"capture": path, "won": game_winner(rec, rep) == you[0], "values": obs.values}
 
 
 def _init(net_paths):

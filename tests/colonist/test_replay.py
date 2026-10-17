@@ -7,7 +7,7 @@ import pytest
 
 from catanatron import Color
 from catanatron.colonist import record as rec
-from catanatron.colonist.replay import main, replay
+from catanatron.colonist.replay import ReplayReport, game_winner, main, replay
 from catanatron.colonist.rules import new_game
 from catanatron.players.value import ValueFunctionPlayer
 from catanatron.models.player import RandomPlayer
@@ -117,6 +117,13 @@ def test_non_balanced_dice_are_flagged():
     assert report.ok, report.summary()  # the moves are still legal
     assert report.dice_mode == "random"
     assert report.dice_broke_at is not None
+
+
+def test_game_winner_after_resignation():
+    record = {"seats": ["RED", "BLUE"], "resigned": "BLUE"}
+    assert game_winner(record, ReplayReport("r")) == "RED"
+    assert game_winner(record, ReplayReport("r", winner="BLUE")) == "BLUE"
+    assert game_winner({"seats": ["RED", "BLUE"]}, ReplayReport("r")) is None
 
 
 def test_cli(games, tmp_path, capsys):

@@ -61,6 +61,17 @@ class ReplayReport:
         return "\n".join([line] + [f"     - {e}" for e in self.errors])
 
 
+def game_winner(record, report) -> Optional[str]:
+    """The winner on points, or else the player who didn't resign (or leave).
+
+    A resigned game never reaches a winning position, so report.winner is None.
+    """
+    if report.winner:
+        return report.winner
+    others = [c for c in record.get("seats", []) if c != record.get("resigned")]
+    return others[0] if record.get("resigned") and len(others) == 1 else None
+
+
 def game_for_record(record) -> Game:
     """A fresh game on the record's board, seats and rules."""
     rules = record["rules"]
