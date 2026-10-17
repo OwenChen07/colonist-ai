@@ -17,6 +17,7 @@ os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 os.environ.setdefault("VECLIB_MAXIMUM_THREADS", "1")
 
 import argparse  # noqa: E402
+import hashlib  # noqa: E402
 import random  # noqa: E402
 import time  # noqa: E402
 
@@ -84,6 +85,7 @@ def main():
     timer.wrap(E, "encode", "inputs")
     timer.wrap(net, "forward", "network")
 
+    digest = hashlib.sha1()
     searches = simulations = evaluations = 0
     start = time.perf_counter()
     for seed in range(args.games):
@@ -109,6 +111,7 @@ def main():
             evaluations += search.evaluations
             key = E.action_key(action)
             game.execute(next(a for a in actions if E.action_key(a) == key))
+            digest.update(repr(key).encode())
     elapsed = time.perf_counter() - start
 
     per_game = elapsed / args.games
@@ -127,6 +130,7 @@ def main():
         f"  {'search, rest':12s} {(elapsed - accounted) / args.games:6.2f} s per game  "
         f"{(elapsed - accounted) / elapsed:5.1%}"
     )
+    print(f"move digest {digest.hexdigest()[:12]} (equal digests = identical play)")
     print("PLAN.md threshold: 5 s per game per performance core")
 
 
