@@ -14,6 +14,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import core  # noqa: E402
+import plan_usage  # noqa: E402
 from context import ROOT, SITE, STATE, read_json, sh  # noqa: E402
 
 
@@ -87,7 +88,11 @@ def workers():
         lines.append(
             f"- {name}: {s.get('state')}; ${core.spent(rows, now, name):.2f} today"
         )
-    lines.append(f"Spend today: ${core.spent(rows, now):.2f} (API-equivalent)")
+    plan = plan_usage.line(plan_usage.usage())
+    lines.append(
+        (f"Plan used: {plan}. " if plan else "")
+        + f"Spend today: ${core.spent(rows, now):.2f} (API-equivalent)"
+    )
     answered = {r.get("id") for r in core.read_jsonl(STATE / "answers.jsonl")}
     waiting = [
         d for d in core.read_jsonl(STATE / "decisions.jsonl") if d["id"] not in answered

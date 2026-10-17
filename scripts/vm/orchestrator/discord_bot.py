@@ -29,6 +29,7 @@ import discord
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import core  # noqa: E402
+import plan_usage  # noqa: E402
 
 ROOT = HERE.parents[2]
 STATE = ROOT / "data" / "orchestrator"
@@ -45,6 +46,8 @@ WORKSTREAMS = [
 DAILY_BUDGET = float(os.environ.get("ORCHESTRATOR_DAILY_BUDGET_USD", "15"))
 LEAD_RESERVE = float(os.environ.get("ORCHESTRATOR_LEAD_RESERVE", "0.3"))
 CODEX_FALLBACK = os.environ.get("ORCHESTRATOR_CODEX_FALLBACK", "1") == "1"
+PLAN_5H_MAX = float(os.environ.get("ORCHESTRATOR_PLAN_5H_MAX", "85"))
+PLAN_7D_MAX = float(os.environ.get("ORCHESTRATOR_PLAN_7D_MAX", "90"))
 log = logging.getLogger("orchestrator")
 
 
@@ -335,6 +338,7 @@ class Orchestrator(discord.Client):
         budget = core.worker_budget(DAILY_BUDGET, LEAD_RESERVE, WORKSTREAMS)
         blocked = load(STATE / "claude-blocked.json", {}).get("until")
         blocked = dt.datetime.fromisoformat(blocked) if blocked else None
+        plan = await asyncio.to_thread(plan_usage.usage)
         states = {}
         for name in WORKSTREAMS:
             if name in self.running:
@@ -352,6 +356,9 @@ class Orchestrator(discord.Client):
                 rest_until=rest,
                 claude_blocked_until=blocked,
                 codex_fallback=CODEX_FALLBACK,
+                plan=plan,
+                plan_5h_max=PLAN_5H_MAX,
+                plan_7d_max=PLAN_7D_MAX,
             )
             if ok:
                 self.running[name] = now
@@ -444,8 +451,15 @@ class Orchestrator(discord.Client):
             rows = core.read_jsonl(STATE / "usage.jsonl")
             now = utcnow()
             share = core.worker_budget(DAILY_BUDGET, LEAD_RESERVE, WORKSTREAMS)
+            plan = await asyncio.to_thread(plan_usage.usage)
             lines = [
-                f"Today ${core.spent(rows, now):.2f} of ${DAILY_BUDGET:.2f} (API-equivalent)"
+                (
+                    f"Plan used: {plan_usage.line(plan)} (workers stop above "
+                    f"{PLAN_5H_MAX:.0f}% / {PLAN_7D_MAX:.0f}%)"
+                    if plan
+                    else "Plan usage unknown: the dollar budget gates"
+                ),
+                f"Today ${core.spent(rows, now):.2f} of ${DAILY_BUDGET:.2f} (API-equivalent)",
             ]
             lines += [
                 f"- {w}: ${core.spent(rows, now, w):.2f} of ${share:.2f}"

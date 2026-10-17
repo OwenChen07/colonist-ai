@@ -94,6 +94,51 @@ def test_when_a_workstream_may_start():
     blocked = dict(claude_blocked_until=toronto(13))
     assert start(**blocked) == (True, "")  # Codex takes over
     assert start(codex_fallback=False, **blocked) == (False, "Claude usage limit")
+    # the plan's percentages, when known, gate instead of the dollars
+    plan = {"five_hour": 40.0, "seven_day": 60.0}
+    assert start(plan=plan, spent_today=3) == (True, "")
+    for over in ({"five_hour": 86.0}, {"seven_day": 91.0}):
+        assert start(plan={**plan, **over}) == (False, "plan nearly used")
+    assert start(plan={**plan, "five_hour": 86.0}, plan_5h_max=95) == (True, "")
+
+
+def test_plan_usage(tmp_path, monkeypatch):
+    import plan_usage
+
+    creds = tmp_path / "creds.json"
+    assert plan_usage.token(creds) is None
+    creds.write_text(
+        json.dumps({"claudeAiOauth": {"accessToken": "t", "expiresAt": 2000}})
+    )
+    assert plan_usage.token(creds, now=1.0) == "t"
+    assert plan_usage.token(creds, now=3.0) is None  # expired
+
+    data = {
+        "five_hour": {"utilization": 42.4, "resets_at": "2026-10-17T23:00:00Z"},
+        "seven_day": {"utilization": 61, "resets_at": None},
+        "seven_day_opus": None,
+    }
+    plan = plan_usage.parse(data)
+    assert plan["five_hour"] == 42.4 and plan["seven_day"] == 61.0
+    assert plan_usage.line(plan) == "5 h: 42%, week: 61%"
+    assert plan_usage.parse({"five_hour": None, "seven_day": {}}) is None
+    assert plan_usage.parse("nonsense") is None
+    assert plan_usage.line(None) == ""
+
+    monkeypatch.setenv("ORCHESTRATOR_CLAUDE_CREDENTIALS", str(tmp_path / "none"))
+    assert plan_usage.fetch() is None  # no token: no request
+
+    calls = []
+    monkeypatch.setattr(plan_usage, "fetch", lambda: calls.append(1) or plan)
+    monkeypatch.setattr(plan_usage, "_cache", {"at": None, "value": None})
+    t = [100.0]
+    assert plan_usage.usage(lambda: t[0]) == plan
+    t[0] = 159.0
+    plan_usage.usage(lambda: t[0])
+    assert len(calls) == 1  # cached for 60 s
+    t[0] = 160.0
+    plan_usage.usage(lambda: t[0])
+    assert len(calls) == 2
 
 
 def test_cooldowns():

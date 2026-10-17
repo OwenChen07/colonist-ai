@@ -107,13 +107,21 @@ def may_start(
     rest_until,
     claude_blocked_until,
     codex_fallback,
+    plan=None,
+    plan_5h_max=85,
+    plan_7d_max=90,
 ):
-    """Whether a workstream may start a task now, and why not if it may not."""
+    """Whether a workstream may start a task now, and why not if it may not.
+    plan is plan_usage.usage()'s percentages; when it is known it gates
+    instead of the dollars, which stay as the fallback."""
     if paused:
         return False, "paused"
     if running >= max_workers:
         return False, "worker slots full"
-    if spent_today >= budget:
+    if plan:
+        if plan["five_hour"] > plan_5h_max or plan["seven_day"] > plan_7d_max:
+            return False, "plan nearly used"
+    elif spent_today >= budget:
         return False, "daily budget used"
     if rest_until and now < rest_until:
         return False, "resting"
