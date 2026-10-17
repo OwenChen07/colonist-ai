@@ -24,7 +24,15 @@ waiting ranked || [ "$bot" = active ] || problems+=("colonist-ranked on the bot 
 while read -r name service state; do
   [ -n "$name" ] || continue
   waiting "$name" && continue
-  [ "$service" = active ] || problems+=("bot account $name: service $service")
+  # "activating" is also the few minutes between an account's browser batches
+  # (it restarts after every 50 games): a problem only if two checks see it.
+  if [ "$service" = activating ]; then
+    [ -e "data/watchdog/.activating-$name" ] && problems+=("bot account $name: service activating for 15+ minutes")
+    touch "data/watchdog/.activating-$name"
+  else
+    rm -f "data/watchdog/.activating-$name"
+    [ "$service" = active ] || problems+=("bot account $name: service $service")
+  fi
   [ "$state" = needs_attention ] && problems+=("bot account $name: runner needs_attention")
 done < <(scripts/vm/bot_ctl.sh accounts 2>/dev/null)
 # A crash loop (e.g. running out of memory) can look active between restarts:
