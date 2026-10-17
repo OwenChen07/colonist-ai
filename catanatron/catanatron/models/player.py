@@ -17,6 +17,9 @@ class Color(Enum):
     ORANGE = "ORANGE"
     WHITE = "WHITE"
 
+    # Enum's own __hash__ is Python code (3M calls per profiled run); members are singletons.
+    __hash__ = object.__hash__
+
     def __repr__(self):
         return f"C.{self.name}"
 
