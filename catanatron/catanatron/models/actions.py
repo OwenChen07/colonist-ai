@@ -206,70 +206,82 @@ def city_possibilities(state, color) -> List[Action]:
 
 
 def robber_possibilities(state, color) -> List[Action]:
-    actions = _robber_possibilities_without_friendly_robber(state, color)
-    if not state.friendly_robber:
-        return actions
+    """Every tile but the robber's: one move-and-steal action per player with
+    cards and a building on it (not `color`), else one move-only action.
 
-    filtered_actions = list(
-        filter(
-            lambda action: not _robber_action_blocks_low_vp_player(state, action),
-            actions,
-        )
-    )
-    return filtered_actions if len(filtered_actions) > 0 else actions
+    With the friendly robber, moves onto a tile touching a player with 2 or
+    fewer visible points are left out, unless that leaves none. That includes
+    the player moving the robber: colonist.io's friendly robber protects every
+    low-point player. A live game showed it: colonist ignored the bot moving
+    the robber onto its own tile at 2 points, then placed it on a tile
+    touching nobody.
 
-
-def _robber_possibilities_without_friendly_robber(state, color) -> List[Action]:
+    One pass over the tiles, with each color's card count and points looked
+    up once: this runs for every robber move the search considers."""
+    board = state.board
+    buildings = board.buildings
+    robber = board.robber_coordinate
+    friendly = state.friendly_robber
+    has_cards = {}  # color -> holds at least one resource card
+    is_low = {}  # color -> 2 or fewer visible points
     actions = []
-    for coordinate, tile in state.board.map.land_tiles.items():
-        if coordinate == state.board.robber_coordinate:
+    allowed = []  # with the friendly robber: the moves blocking nobody low
+    for coordinate, node_ids in _tile_nodes(board.map):
+        if coordinate == robber:
             continue  # ignore. must move robber.
 
         # each tile can yield a (move-but-cant-steal) action or
         #   several (move-and-steal-from-x) actions.
-        to_steal_from = set()  # set of player_indexs
-        for node_id in tile.nodes.values():
-            building = state.board.buildings.get(node_id, None)
-            if building is not None:
-                candidate_color = building[0]
-                if (
-                    player_num_resource_cards(state, candidate_color) >= 1
-                    and color != candidate_color  # can't play yourself
-                ):
+        to_steal_from = set()
+        blocks_low = False
+        for node_id in node_ids:
+            building = buildings.get(node_id)
+            if building is None:
+                continue
+            candidate_color = building[0]
+            if candidate_color != color:  # can't steal from yourself
+                cards = has_cards.get(candidate_color)
+                if cards is None:
+                    cards = player_num_resource_cards(state, candidate_color) >= 1
+                    has_cards[candidate_color] = cards
+                if cards:
                     to_steal_from.add(candidate_color)
+            if friendly and not blocks_low:
+                low = is_low.get(candidate_color)
+                if low is None:
+                    # Visible points only: counting hidden victory point cards
+                    # would let the legal moves reveal them.
+                    low = get_visible_victory_points(state, candidate_color) < 3
+                    is_low[candidate_color] = low
+                blocks_low = low
 
         if len(to_steal_from) == 0:
-            actions.append(Action(color, ActionType.MOVE_ROBBER, (coordinate, None)))
+            moves = [Action(color, ActionType.MOVE_ROBBER, (coordinate, None))]
         else:
-            for enemy_color in to_steal_from:
-                actions.append(
-                    Action(color, ActionType.MOVE_ROBBER, (coordinate, enemy_color))
-                )
+            moves = [
+                Action(color, ActionType.MOVE_ROBBER, (coordinate, enemy_color))
+                for enemy_color in to_steal_from
+            ]
+        actions.extend(moves)
+        if friendly and not blocks_low:
+            allowed.extend(moves)
 
+    if friendly and allowed:
+        return allowed
     return actions
 
 
-def _robber_action_blocks_low_vp_player(state, action) -> bool:
-    """Would this robber move block a player with 2 or fewer visible points?
-
-    That includes the player moving the robber: colonist.io's friendly robber
-    protects every low-point player. A live game showed it: colonist ignored
-    the bot moving the robber onto its own tile at 2 points, then placed it
-    on a tile touching nobody."""
-    coordinate, _ = action.value
-    tile = state.board.map.land_tiles[coordinate]
-    for node_id in tile.nodes.values():
-        building = state.board.buildings.get(node_id, None)
-        if building is None:
-            continue
-
-        candidate_color = building[0]
-        # Visible points only: counting hidden victory point cards would let the
-        # legal moves reveal them.
-        if get_visible_victory_points(state, candidate_color) < 3:
-            return True
-
-    return False
+def _tile_nodes(catan_map):
+    """((coordinate, node ids), ...) of the map's land tiles, in order; cached
+    on the map, which never changes."""
+    cached = catan_map.__dict__.get("_tile_nodes")
+    if cached is None:
+        cached = tuple(
+            (coordinate, tuple(tile.nodes.values()))
+            for coordinate, tile in catan_map.land_tiles.items()
+        )
+        catan_map._tile_nodes = cached
+    return cached
 
 
 def initial_road_possibilities(state, color) -> List[Action]:
