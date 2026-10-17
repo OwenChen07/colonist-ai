@@ -185,8 +185,9 @@ def test_outputs_become_decisions_and_inbox_messages(tmp_path, monkeypatch):
 
 def test_the_lead_and_workers_land_but_never_push():
     lead, worker = agent.allowed_tools("lead"), agent.allowed_tools("worker")
-    # The owner's decision of Oct 17: the lead gets the workers' commands.
-    assert lead == worker
+    # The owner's decision of Oct 17: the lead gets the workers' commands,
+    # plus the bot restart (test_only_the_lead_may_restart_the_bot).
+    assert [t for t in lead if "restart_bot" not in t] == worker
     assert "Bash(scripts/vm/orchestrator/land.sh:*)" in worker
     assert not any("push" in t for t in worker)
     assert not any("bridge" in t or "ranked_runner" in t for t in worker)
@@ -417,3 +418,11 @@ def test_kill_landing_kills_a_stuck_landing_and_nothing_else(tmp_path):
         landing.kill()
         if alive(holder):
             os.kill(holder, signal.SIGTERM)
+    assert not any("gcloud" in t for t in agent.allowed_tools("lead"))
+
+
+def test_only_the_lead_may_restart_the_bot():
+    restart = "Bash(scripts/vm/orchestrator/restart_bot.sh:*)"
+    assert restart in agent.allowed_tools("lead")
+    assert restart not in agent.allowed_tools("worker")
+    assert not any("sudo" in t for t in agent.allowed_tools("lead"))

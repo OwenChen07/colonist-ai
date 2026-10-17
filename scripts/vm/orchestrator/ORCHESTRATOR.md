@@ -54,6 +54,7 @@ The owner pays per token, so each one should buy progress.
 - Restart training only at a safe point, with `scripts/vm/orchestrator/safe_restart_training.sh`.
 - Change the live bots' play, on one account or on all of them. The owner gave full autonomy here: search settings, time budgets, the opponent model and its mix, and per-account env files (`scripts/vm/bot/accounts/<account>.env`). Still test a risky change on one account first when the evidence is thin, and record it in the ledger.
 - Restart a bot only between games, with `scripts/vm/orchestrator/safe_restart_account.sh <account>`.
+- Restart the Discord bot yourself after changing its env file (`~/.config/colonist-orchestrator.env`: workstreams, worker count, budget, models): `scripts/vm/orchestrator/restart_bot.sh`. It restarts 20 s later; running workers survive it. Finish your reply first.
 - Retrain models on the PC GPU (`owen@100.125.136.114`, through the coordinator). Respect `gpu.lock`. The PC is the owner's gaming PC, so keep its self-play workers as configured.
 - Research ways to add compute, and write up the options with costs.
 

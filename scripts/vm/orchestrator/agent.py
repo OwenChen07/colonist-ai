@@ -131,6 +131,10 @@ def allowed_tools(role):
         "Bash(systemctl cat:*)",
         "Bash(journalctl:*)",
     ]
+    if role == "lead":
+        # The one script that uses sudo: restarting the Discord bot itself,
+        # after an env-file change (owner's decision, 2026-10-17).
+        tools.append("Bash(scripts/vm/orchestrator/restart_bot.sh:*)")
     # The lead runs in its own worktree (ws/lead) and lands like a worker.
     if role in ("worker", "lead"):
         tools += [
