@@ -250,3 +250,45 @@ def test_workers_manage_gcp_workers_but_not_the_machines_we_run_on():
     assert "Bash(gcloud compute instances stop*colonist-selfplay-worker-4*)" in denied
     assert "Bash(gcloud iam *)" in denied
     assert not any("gcloud" in t for t in agent.allowed_tools("lead"))
+
+
+FAKE_CLAUDE = """
+import json, sys, time
+assert sys.argv[1:] == ["--output-format", "stream-json", "--verbose"]
+prompt = sys.stdin.read()
+say = lambda text: {"type": "assistant", "message": {"content": [
+    {"type": "text", "text": text}, {"type": "tool_use", "name": "Bash"}]}}
+print(json.dumps({"type": "system", "subtype": "init"}), flush=True)
+print(json.dumps(say("working on " + prompt)), flush=True)
+if prompt == "slow":
+    time.sleep(60)
+print("a stderr line about a rate limit in some file", flush=True)
+print(json.dumps({"type": "result", "result": "done", "session_id": "s1",
+                  "total_cost_usd": 0.5}), flush=True)
+"""
+
+
+def stream(tmp_path, prompt, timeout):
+    script = tmp_path / "fake_claude.py"
+    script.write_text(FAKE_CLAUDE)
+    log = tmp_path / "run.log"
+    command = [sys.executable, str(script), "--output-format", "json"]
+    out = agent.stream_claude(
+        command, prompt, cwd=tmp_path, env=None, log=log, timeout=timeout
+    )
+    return out, log.read_text()
+
+
+def test_claude_streams_into_the_log_and_ends_with_its_result(tmp_path):
+    (result, said, other, timed_out), log = stream(tmp_path, "fast", 30)
+    assert not timed_out
+    assert result["result"] == "done" and result["session_id"] == "s1"
+    assert said == "working on fast"
+    assert "rate limit" in other and '"type": "result"' in log
+
+
+def test_a_timed_out_run_keeps_what_it_said(tmp_path):
+    (result, said, _, timed_out), log = stream(tmp_path, "slow", 2)
+    assert timed_out and result is None
+    assert said == "working on slow"
+    assert "working on slow" in log and log.endswith("(timed out)\n")

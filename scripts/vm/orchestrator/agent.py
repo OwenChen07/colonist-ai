@@ -21,8 +21,10 @@ import fcntl
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -252,6 +254,68 @@ def record_usage(role, workstream, agent, model, cost, started, status):
     append(STATE / "usage.jsonl", json.dumps(row) + "\n")
 
 
+def stream_claude(command, prompt, *, cwd, env, log, timeout=None):
+    """Runs `claude -p` in stream-json mode, writing each line to the log as
+    it arrives, so a run killed by the timeout still leaves its trail.
+    Returns (result event or None, the assistant's text so far, the lines
+    that weren't JSON, timed out?)."""
+    command = [*command]
+    i = command.index("--output-format")
+    command[i + 1 : i + 2] = ["stream-json", "--verbose"]
+    timeout = TIMEOUT if timeout is None else timeout
+    process = subprocess.Popen(
+        command,
+        cwd=cwd,
+        env=env,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        start_new_session=True,
+    )
+    expired = threading.Event()
+
+    def kill():
+        expired.set()
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except OSError:
+            pass
+
+    timer = threading.Timer(timeout, kill)
+    timer.start()
+    result, said, other = None, [], []
+    try:
+        try:
+            process.stdin.write(prompt)
+            process.stdin.close()
+        except OSError:
+            pass
+        with open(log, "w") as stream:
+            for line in process.stdout:
+                stream.write(line)
+                stream.flush()
+                try:
+                    event = json.loads(line)
+                except ValueError:
+                    other.append(line)
+                    continue
+                if not isinstance(event, dict):
+                    continue
+                if event.get("type") == "result":
+                    result = event
+                elif event.get("type") == "assistant":
+                    for part in (event.get("message") or {}).get("content") or []:
+                        if isinstance(part, dict) and part.get("type") == "text":
+                            said.append(part.get("text") or "")
+            if expired.is_set():
+                stream.write("\n(timed out)\n")
+        process.wait()
+    finally:
+        timer.cancel()
+    return result, "\n\n".join(said), "".join(other), expired.is_set()
+
+
 def run_agent(prompt, *, role, workstream=None, model, cwd, log, env=None, resume=None):
     """Runs Claude (Codex on its limit). Returns (text, session_id, agent)."""
     started = time.time()
@@ -274,28 +338,19 @@ def run_agent(prompt, *, role, workstream=None, model, cwd, log, env=None, resum
         command += ["--add-dir", str(ROOT)]
         command += ["--allowedTools", *allowed_tools(role)]
         command += ["--disallowedTools", *disallowed_tools(role)]
-        try:
-            out = subprocess.run(
-                command,
-                input=prompt,
-                cwd=cwd,
-                env=full_env,
-                capture_output=True,
-                text=True,
-                timeout=TIMEOUT,
-            )
-            raw = out.stdout + out.stderr
-        except subprocess.TimeoutExpired as error:
-            raw = (error.stdout or b"").decode(errors="replace")
-            Path(log).write_text(raw + "\n(timed out)\n")
+        result, said, other, timed_out = stream_claude(
+            command, prompt, cwd=cwd, env=full_env, log=log
+        )
+        if timed_out:
             record_usage(
                 role, workstream, "claude", model, TIMEOUT_COST, started, "timeout"
             )
-            return raw, None, "claude"
-        Path(log).write_text(raw)
-        result = final_json(out.stdout) or {}
+            return said, None, "claude"
+        result = result or {}
         cost = float(result.get("total_cost_usd") or 0)
-        limited = bool(LIMIT.search(raw)) and (result.get("is_error") or not result)
+        # Not the whole stream: tool output quoting "rate limit" isn't a limit.
+        seen = other + str(result.get("result") or "")
+        limited = bool(LIMIT.search(seen)) and (result.get("is_error") or not result)
         record_usage(
             role,
             workstream,
@@ -306,7 +361,8 @@ def run_agent(prompt, *, role, workstream=None, model, cwd, log, env=None, resum
             "limit" if limited else "ok",
         )
         if not limited:
-            return result.get("result") or "", result.get("session_id"), "claude"
+            text = result.get("result") or said
+            return text, result.get("session_id"), "claude"
         until = now() + dt.timedelta(hours=1)
         (STATE / "claude-blocked.json").write_text(
             json.dumps({"until": until.isoformat(timespec="seconds")})
@@ -633,7 +689,14 @@ def worker(name):
     data = final_json(text) or {}
     status = data.get("status") if data.get("status") in core.COOLDOWN else "failed"
     when = core.local(now())
-    note = data.get("progress") or f"(task ended without a summary; see {log.name})"
+    note = data.get("progress")
+    if not note:
+        note = f"(task ended without a summary; see {log.name})"
+        if text.strip():
+            # A run killed by the timeout: keep what it had said for the next.
+            partial = d / "runs" / f"{tag}-partial.md"
+            partial.write_text(text)
+            note += f"\nIts last words (all in runs/{partial.name}):\n" + text[-1500:]
     append(d / "progress.md", f"\n## {when:%b %d %H:%M} ({agent}, {status})\n{note}\n")
     if apply_outputs(data, name) and status == "progress":
         status = "idle"  # rests until the owner answers, not two minutes
