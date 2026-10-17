@@ -214,3 +214,30 @@ def test_decision_options_fit_a_phone():
     assert core.chosen(options, "option 2") == "Keep it as is"
     assert core.chosen(options, "3") is None
     assert core.chosen(options, "2 but only for training") is None
+
+
+def test_permission_requests_never_reach_the_owner(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent, "STATE", tmp_path)
+    data = {
+        "decisions": [
+            {"id": "bash", "question": "Bash is denied for the worker. Allow it?"},
+            {"id": "rules", "question": "Can the allow list include git clean?"},
+            {"id": "real", "question": "Deploy E15 to all accounts tonight?"},
+        ],
+        "blocked_commands": ["git clean -f tests/tmp.py"],
+    }
+    assert agent.apply_outputs(data, "efficiency") == 1
+    assert [d["id"] for d in core.read_jsonl(tmp_path / "decisions.jsonl")] == ["real"]
+    log = (tmp_path / "permission-requests.md").read_text()
+    assert "git clean -f" in log and "Bash is denied" in log and "E15" not in log
+
+
+def test_workers_run_any_module_but_never_the_live_bots():
+    worker, denied = agent.allowed_tools("worker"), agent.disallowed_tools("worker")
+    assert "Bash(.venv/bin/python -m catanatron.colonist.*)" in worker
+    assert "Bash(.venv/bin/python data/orchestrator/scratch/*)" in worker
+    assert "Bash(.venv/bin/python -m catanatron.colonist.bridge*)" in denied
+    assert (
+        "Bash(nohup .venv/bin/python -m catanatron.colonist.ranked_runner*)" in denied
+    )
+    assert any(t.startswith("Bash(~/") and "safe_restart_account" in t for t in worker)

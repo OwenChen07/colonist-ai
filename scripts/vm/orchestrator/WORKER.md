@@ -13,7 +13,22 @@ Your workstream's brief, the lead's latest report, your own progress notes and a
 6. Long jobs (training, big matches, profiling runs) go to the background: `nohup … > data/orchestrator/jobs/<name>.log 2>&1 &`, with the PID in `data/orchestrator/jobs/<name>.pid`. Check them next task rather than waiting.
 
 ## Shell commands
-You run without prompts, so Bash takes only listed commands: git, `.venv/bin/python -m catanatron.colonist.<module>`, `.venv/bin/python bench/speed.py` and `bench/selfplay.py`, cProfile, pytest, black, `land.sh`, the `scripts/vm` control scripts, and read-only tools (ls, cat, head, tail, grep, sed, awk, find, wc, du, ps, uptime …). Write them plainly: relative paths from your worktree, no `cd`, no `VAR=… ` prefixes and no `time`/`timeout` wrappers. Pipes and `;` are fine between listed commands. A denial applies to **that command**, not to Bash: rewrite it (or use Read/Grep) and go on. Never ask the owner about tool permissions; if something you need truly can't be run, say which command in your `post`.
+You run without prompts, so Bash takes only allowed commands. These work:
+- **Python:** `.venv/bin/python -m catanatron.colonist.<any module>`, including one you just wrote; `.venv/bin/python bench/<script>`; pytest; black; cProfile.
+- **Your own scripts:** for anything multi-line, **Write** a script to `data/orchestrator/scratch/<your workstream>/<name>.py` and run `.venv/bin/python data/orchestrator/scratch/<your workstream>/<name>.py`. Delete it with `rm data/orchestrator/scratch/...` when done.
+- **git:** status, diff, log, show, add, commit, mv, rm, checkout, restore, stash, fetch, rebase.
+- **Landing and deploying:** `land.sh`, and `safe_restart_training.sh`, `safe_restart_account.sh`, `bot_ctl.sh`, `sync_bot.sh`, by relative path or as `~/colonist-ai/scripts/...`.
+- **Read-only tools:** ls, cat, head, tail, grep, sed, awk, find, wc, du, ps, systemctl status/cat, journalctl, `bash -n` ….
+
+These don't work, so don't try them:
+- inline code (`python -c`, `python3 - <<EOF`);
+- heredocs or `>`/`>>` redirects that write files (use Write or Edit);
+- `cd`, `VAR=…` prefixes, `time`/`timeout` wrappers, and shell `for`/`while` loops (put loops in a scratch script);
+- throwaway test files used to run code.
+
+Pipes and `;` between allowed commands are fine. The live-play modules (bridge, ranked_runner …) are the services' alone.
+
+A denial applies to **that command**, not to Bash: rewrite it and go on. **Never ask the owner or post about permissions.** If a command you truly need can't be run, list it in `blocked_commands` in your output; whoever maintains `agent.py` reviews that list.
 
 ## Limits
 - Your autonomy and the owner's rules are in `scripts/vm/orchestrator/ORCHESTRATOR.md` ("What you and the workers may do", "Ask the owner first", "The owner's rules"). Read them once if they aren't in your progress notes. Most important: never commit `captures/`; never print the reconnect token; never log in, type passwords or touch accounts; restart bots only between games; spend no money; the bot never trades or chats.
@@ -30,7 +45,8 @@ End your final message with one JSON block. `agent.py` files and posts it.
   "post": "For your Discord channel, 3–6 lines: what you did, the numbers, what's next. Empty if nothing worth saying.",
   "progress": "Notes for your next task: state, numbers, open threads, commands that worked.",
   "messages": {"training": "a finding or request for another workstream (optional)"},
-  "decisions": [{"id": "short-kebab-id", "question": "…", "options": ["Recommended: …", "…"], "urgent": false}]
+  "decisions": [{"id": "short-kebab-id", "question": "…", "options": ["Recommended: …", "…"], "urgent": false}],
+  "blocked_commands": ["a command you needed that was denied (optional; never a decision)"]
 }
 ```
 

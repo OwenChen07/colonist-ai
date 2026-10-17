@@ -47,12 +47,24 @@ LIMIT = re.compile(
 )
 # Ignored by git in the main checkout and shared with every worktree.
 SHARED = (".venv", "data", "runs", "models", "captures", "real_replays")
-# Modules the agents may run; the live-play ones are left to the bots' services.
+# Ignored config the control scripts read (bot hosts, worker list).
+SHARED_FILES = ("scripts/vm/bot.env", "scripts/vm/workers.env")
+# Modules only the bots' services run (denied to agents).
 LIVE_ONLY = {"__init__", "bridge", "ranked_runner", "live", "client", "capture"}
-MODULES = sorted(
-    p.stem
-    for p in (ROOT / "catanatron/catanatron/colonist").glob("*.py")
-    if p.stem not in LIVE_ONLY
+
+
+# Ways the main checkout is written in commands: relative from it, by its
+# absolute path, or from the home directory.
+HOME_ROOT = (
+    "~/" + str(ROOT.relative_to(Path.home()))
+    if ROOT.is_relative_to(Path.home())
+    else str(ROOT)
+)
+CONTROL = (
+    "scripts/vm/orchestrator/safe_restart_training.sh",
+    "scripts/vm/orchestrator/safe_restart_account.sh",
+    "scripts/vm/bot_ctl.sh",
+    "scripts/vm/sync_bot.sh",
 )
 
 
@@ -72,19 +84,27 @@ def allowed_tools(role):
         "Bash(git diff:*)",
         "Bash(git log:*)",
         "Bash(git show:*)",
+        "Bash(git ls-files:*)",
+        "Bash(git branch:*)",
         "Bash(.venv/bin/python -m pytest:*)",
         "Bash(.venv/bin/python -m black:*)",
+        "Bash(.venv/bin/black:*)",
         "Bash(ssh -i ~/.ssh/colonist_worker_ed25519:*)",
         "Bash(scp -i ~/.ssh/colonist_worker_ed25519:*)",
         "Bash(rsync:*)",
-        "Bash(scripts/vm/orchestrator/safe_restart_training.sh:*)",
-        "Bash(scripts/vm/orchestrator/safe_restart_account.sh:*)",
-        "Bash(scripts/vm/bot_ctl.sh:*)",
-        "Bash(scripts/vm/sync_bot.sh:*)",
+        # Any module of the package, including one a worker has just written;
+        # the live-play ones are denied in disallowed_tools.
+        "Bash(.venv/bin/python -m catanatron.colonist.*)",
+        "Bash(nohup .venv/bin/python -m catanatron.colonist.*)",
+        # Multi-line code goes in a script here (WORKER.md), not inline.
+        "Bash(.venv/bin/python data/orchestrator/scratch/*)",
+        "Bash(nohup .venv/bin/python data/orchestrator/scratch/*)",
+        "Bash(rm data/orchestrator/scratch/*)",
+        "Bash(bash -n:*)",
     ]
-    for module in MODULES:
-        tools.append(f"Bash(.venv/bin/python -m catanatron.colonist.{module}:*)")
-        tools.append(f"Bash(nohup .venv/bin/python -m catanatron.colonist.{module}:*)")
+    for script in CONTROL:
+        for root in ("", f"{ROOT}/", f"{HOME_ROOT}/"):
+            tools.append(f"Bash({root}{script}:*)")
     for script in (
         "scripts/vm/orchestrator/context.py",
         "scripts/vm/orchestrator/status.py",
@@ -96,12 +116,13 @@ def allowed_tools(role):
     for command in (
         "tail head cat ls grep wc df free nproc date mkdir echo sleep "
         "ps pgrep top nvidia-smi sed awk cut sort uniq find du stat diff "
-        "uptime which basename dirname realpath readlink"
+        "uptime which basename dirname realpath readlink tr xargs test true"
     ).split():
         tools.append(f"Bash({command}:*)")
     tools += [
         "Bash(systemctl status:*)",
         "Bash(systemctl is-active:*)",
+        "Bash(systemctl cat:*)",
         "Bash(journalctl:*)",
     ]
     if role == "worker":
@@ -113,13 +134,26 @@ def allowed_tools(role):
             "Bash(git stash:*)",
             "Bash(git fetch:*)",
             "Bash(git rebase:*)",
-            "Bash(scripts/vm/orchestrator/land.sh:*)",
+            "Bash(git mv:*)",
+            "Bash(git rm:*)",
             "Bash(.venv/bin/python -m cProfile:*)",
             "Bash(.venv/bin/python -m pyinstrument:*)",
             "Bash(.venv/bin/python bench/speed.py:*)",
             "Bash(.venv/bin/python bench/selfplay.py:*)",
+            "Bash(.venv/bin/python bench/*)",
         ]
+        for root in ("", f"{ROOT}/", f"{HOME_ROOT}/"):
+            tools.append(f"Bash({root}scripts/vm/orchestrator/land.sh:*)")
     return tools
+
+
+def disallowed_tools(role):
+    """The live bots' own processes: the services run them, never an agent."""
+    return [
+        f"Bash({prefix}.venv/bin/python -m catanatron.colonist.{module}*)"
+        for module in sorted(LIVE_ONLY - {"__init__"})
+        for prefix in ("", "nohup ")
+    ]
 
 
 def now():
@@ -217,6 +251,7 @@ def run_agent(prompt, *, role, workstream=None, model, cwd, log, env=None, resum
         # checkout; without it every read of them is denied.
         command += ["--add-dir", str(ROOT)]
         command += ["--allowedTools", *allowed_tools(role)]
+        command += ["--disallowedTools", *disallowed_tools(role)]
         try:
             out = subprocess.run(
                 command,
@@ -285,13 +320,38 @@ def run_agent(prompt, *, role, workstream=None, model, cwd, log, env=None, resum
     return raw, None, "codex"
 
 
+# A "decision" that is really a request for a shell command: the owner can't
+# act on those (the allowlist is in this file), so they go to
+# permission-requests.md for whoever maintains it, not to Discord.
+PERMISSION = re.compile(
+    r"\bbash\b|allow ?list|allowed ?tools|don.?t.?ask|dontask|"
+    r"(tool|bash|command) permission|permission (rule|mode|setting)|"
+    r"(command|call)s? (was |were |is |are )?denied|denied (bash|command)",
+    re.I,
+)
+
+
+def note_permissions(source, items):
+    if items:
+        when = core.local(now())
+        lines = "".join(f"- {str(i)[:400]}\n" for i in items)
+        append(
+            STATE / "permission-requests.md",
+            f"\n## {when:%b %d %H:%M} {source}\n{lines}",
+        )
+
+
 def apply_outputs(data, source):
     """Writes decisions and messages to workers carried by a run's JSON.
     Returns how many decisions were filed."""
     known = {d.get("id") for d in core.read_jsonl(STATE / "decisions.jsonl")}
     filed = 0
+    note_permissions(source, data.get("blocked_commands") or [])
     for d in data.get("decisions") or []:
         if not isinstance(d, dict) or not d.get("question"):
+            continue
+        if PERMISSION.search(d["question"]):
+            note_permissions(source, [d["question"]])
             continue
         base = d.get("id") or re.sub(r"[^a-z0-9]+", "-", d["question"].lower())[:30]
         ident, n = base, 2
@@ -483,9 +543,10 @@ def worktree(name):
         ) / "info/exclude"
         have = read(exclude)
         append(exclude, "".join(f"/{s}\n" for s in SHARED if f"/{s}\n" not in have))
-    for shared in SHARED:
-        if (ROOT / shared).exists() and not (path / shared).exists():
-            (path / shared).symlink_to(ROOT / shared)
+    for shared in SHARED + SHARED_FILES:
+        if (ROOT / shared).exists() and not (path / shared).is_symlink():
+            if not (path / shared).exists():
+                (path / shared).symlink_to(ROOT / shared)
     sh(["git", "fetch", "-q", "origin", "main-9mnmbh"], cwd=path)
     clean = not sh(["git", "status", "--porcelain"], cwd=path).stdout.strip()
     unlanded = sh(
