@@ -61,7 +61,11 @@ def _game(path, nets):
     rep = replay(rec, observer=obs)
     if not rep.ok or not obs.values:
         return None
-    return {"capture": path, "won": game_winner(rec, rep) == you[0], "values": obs.values}
+    return {
+        "capture": path,
+        "won": game_winner(rec, rep) == you[0],
+        "values": obs.values,
+    }
 
 
 def _init(net_paths):
