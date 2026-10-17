@@ -164,7 +164,16 @@ def main(argv=None):
     parser.add_argument("--index", default="data/human/index.jsonl")
     parser.add_argument("--captures", default="captures")
     parser.add_argument("--last", type=int, default=0, help="window of latest games")
+    parser.add_argument(
+        "--fast",
+        action="store_true",
+        help="index-only breakdown (length, endings, buildings), no replay",
+    )
     args = parser.parse_args(argv)
+    if args.fast:
+        from catanatron.colonist import loss_breakdown
+
+        return loss_breakdown.main(["--last", str(args.last or 300)])
     with open(args.index) as stream:
         rows = [json.loads(line) for line in stream if line.strip()]
     # Rebuilds append rows, so keep one per capture; names are UTC timestamps.
