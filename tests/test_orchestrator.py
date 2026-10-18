@@ -258,6 +258,63 @@ def test_rank_watch_queues_once_and_releases_by_day(tmp_path, monkeypatch):
     assert json.loads((tmp_path / "rank-watch.json").read_text())["queue"] == []
 
 
+def test_rank_watch_posts_each_new_rating_record(tmp_path, monkeypatch):
+    import rank_watch
+
+    monkeypatch.setattr(rank_watch, "STATE", tmp_path)
+    monkeypatch.setattr(rank_watch, "SHOTS", tmp_path / "shots")
+    monkeypatch.setattr(rank_watch, "accounts", lambda: ["Petra4620", "Dilly6283"])
+    ratings = {"Petra4620": 2353, "Dilly6283": 2344}
+
+    def fetch(url):
+        page = url.split("/profile/")[1]
+        if page == "ranked-seasons":
+            return [{"seasonType": 21}]
+        name = page.split("/")[0]
+        standing = [
+            {"name": {"key": "strings:leaderboardPage.tabs.global"}, "rank": "61"}
+        ]
+        return [
+            {"modeType": 2, "skillRating": 9999},
+            {"modeType": 1, "skillRating": ratings[name], "rankedStanding": standing},
+        ]
+
+    monkeypatch.setattr(rank_watch, "fetch", fetch)
+    shots, fail = [], []
+
+    def screenshot(name, path):
+        if fail:
+            raise RuntimeError("no browser")
+        shots.append(name)
+        path.touch()
+
+    monkeypatch.setattr(rank_watch, "screenshot", screenshot)
+
+    def state():
+        return json.loads((tmp_path / "rank-watch.json").read_text())
+
+    rank_watch.main([])  # no record yet: seeded silently
+    assert shots == [] and state()["queue"] == []
+    assert state()["record"]["rating"] == 2353
+    assert state()["record"]["name"] == "Petra4620"
+    ratings["Dilly6283"] = 2353  # a tie is not a new high
+    rank_watch.main([])
+    assert shots == []
+    ratings["Dilly6283"] = 2361
+    fail.append(True)  # screenshot fails: record kept, retried next run
+    rank_watch.main([])
+    assert state()["record"]["rating"] == 2353 and state()["queue"] == []
+    fail.clear()
+    rank_watch.main([])
+    rank_watch.main([])  # same rating again: one post per record
+    assert shots == ["Dilly6283"]
+    assert state()["record"]["rating"] == 2361
+    [post] = state()["queue"]
+    assert post["text"].startswith("📈 **New high: Dilly6283 at 2361** (previous ")
+    assert "record 2353 by Petra4620" in post["text"]
+    assert "global #61" in post["text"] and post["text"].endswith(" Toronto")
+
+
 def test_decision_options_fit_a_phone():
     options = [
         "Recommended: allow Bash for worker sessions in agent.py",
