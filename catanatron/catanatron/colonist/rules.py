@@ -1,8 +1,10 @@
 """colonist.io's ranked 1v1 rules, as Catanatron options.
 
-Sources: colonist's 1v1 guide (2023) and the colonist-tracker extension. The
-number layout is not confirmed yet; colonist boards look random, so that is
-the default until recorded games say otherwise (see PLAN.md, Phase 0).
+Sources: colonist's 1v1 guide (2023) and the colonist-tracker extension.
+Numbers follow the official spiral: all 228 recorded colonist boards do (from
+any of the 6 corners, either direction; the 12 board symmetries in training
+cover those), with no 6-8 or equal-number neighbours. Resources and port types
+are shuffled, as on colonist.
 """
 
 from typing import Optional, Sequence
@@ -23,7 +25,7 @@ def new_game(
     players: Sequence[Player],
     seed: Optional[int] = None,
     catan_map: Optional[CatanMap] = None,
-    number_placement: str = "random",
+    number_placement: str = "official_spiral",
     **overrides,
 ) -> Game:
     """A Game under colonist's 1v1 rules. Any rule can be overridden, e.g.

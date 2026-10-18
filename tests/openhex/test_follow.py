@@ -9,7 +9,7 @@ from catanatron.models.enums import RESOURCES, ActionType
 from catanatron.models.player import Color, RandomPlayer
 from catanatron.openhex import board as B
 from catanatron.openhex.follow import CARD, Follower, to_openhex
-from catanatron.state_functions import player_key
+from catanatron.state_functions import get_actual_victory_points, player_key
 
 from tests.openhex.test_board import land, ports
 
@@ -157,7 +157,13 @@ def test_followed_games_match():
                     s.player_state[k]
                 )
         assert len(r.action_records) == len(s.action_records)
-        assert replayed.winning_color() == game.winning_color()
+        winner = game.winning_color()
+        if winner is not None and winner != me:
+            # the opponent's VP cards are hidden: a win that needs them can't be seen
+            hidden = s.player_state[f"{player_key(s, winner)}_VICTORY_POINT_IN_HAND"]
+            if get_actual_victory_points(s, winner) - hidden < game.vps_to_win:
+                winner = None
+        assert replayed.winning_color() == winner
     # the games covered every kind of move OpenHex has
     assert seen >= {
         A.BUILD_CITY,

@@ -91,7 +91,8 @@ def test_the_mixture_is_only_at_the_opponents_nodes(ticks):
         legal = E.legal_indices(node.actions)
         logits, values = net.forward(static, dynamic[None, :])
         main = logits[0, legal].astype(np.float64)
-        assert node.value == pytest.approx(float(values[0]))  # the main net's
+        # the main net's; float32 batched vs single forward differ by ~1e-6
+        assert node.value == pytest.approx(float(values[0]), rel=1e-4, abs=1e-6)
         if node.color == root.color:
             assert np.allclose(node.logits, main)
         else:
