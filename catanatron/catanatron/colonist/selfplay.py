@@ -57,6 +57,7 @@ from catanatron.colonist import encode as E
 from catanatron.colonist.datagen import shard_path
 from catanatron.colonist.graph import AUX_TARGETS
 from catanatron.colonist.mcts import TURNS_LIMIT, Search
+from catanatron.models.enums import ActionType
 
 
 def load_opponent(spec):
@@ -69,30 +70,51 @@ def load_opponent(spec):
     return spec
 
 
+PLAY_DEV_CARD = frozenset(
+    (
+        ActionType.PLAY_KNIGHT_CARD,
+        ActionType.PLAY_YEAR_OF_PLENTY,
+        ActionType.PLAY_MONOPOLY,
+        ActionType.PLAY_ROAD_BUILDING,
+    )
+)
+
+
 class HumanModel:
     """A seat that plays like people (E13): each move is sampled from the
     human opponent model's policy over the legal moves, with no search.
-    Shared by the games of a shard; each game gets its own seat()."""
+    Shared by the games of a shard; each game gets its own seat().
+
+    A model file with `meta_dev_play_bias` adds that much to the logits of
+    playing an action card (negative: the seat holds its cards longer, as
+    people hold knights late; the plain model plays them like the net)."""
 
     def __init__(self, net):
         self.net = net
+        meta = getattr(net, "meta", {})
+        self.dev_play_bias = float(meta.get("meta_dev_play_bias", 0.0))
 
     def seat(self, seed):
-        return _HumanSeat(self.net, random.Random(seed ^ 0x4A11))
+        return _HumanSeat(self.net, random.Random(seed ^ 0x4A11), self.dev_play_bias)
 
 
 class _HumanSeat:
     """A HumanModel's seat in one game. Has decide() like a bot, so _Game
     plays it without a search and records none of its moves."""
 
-    def __init__(self, net, rng):
+    def __init__(self, net, rng, dev_play_bias=0.0):
         self.net = net
         self.rng = rng
+        self.dev_play_bias = dev_play_bias
 
     def decide(self, game, actions):
         static, dynamic = E.encode(game, game.state.current_color())
         logits, _ = self.net.forward_rows([static], np.asarray(dynamic)[None])
         x = logits[0, E.legal_indices(actions)].astype(np.float64)
+        if self.dev_play_bias:
+            x += self.dev_play_bias * np.fromiter(
+                (a.action_type in PLAY_DEV_CARD for a in actions), float, len(actions)
+            )
         p = np.exp(x - x.max())
         cdf = np.cumsum(p / p.sum())
         pick = int(np.searchsorted(cdf, self.rng.random(), side="right"))

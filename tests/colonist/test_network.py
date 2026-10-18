@@ -488,6 +488,30 @@ def test_human_opponent_samples_from_its_policy():
     assert len(picks) > 1  # sampled, not the argmax
 
 
+def test_human_opponent_dev_play_bias_from_the_model_file():
+    from catanatron.colonist.selfplay import HumanModel
+    from catanatron.models.enums import Action, ActionType
+
+    game = new_game([RandomPlayer(Color.RED), RandomPlayer(Color.BLUE)], seed=0)
+    color = game.state.current_color()
+    knight = Action(color, ActionType.PLAY_KNIGHT_CARD, None)
+    actions = [Action(color, ActionType.END_TURN, None), knight]
+
+    class Flat:
+        def __init__(self, meta):
+            self.meta = meta
+
+        def forward_rows(self, statics, dynamic):
+            return np.zeros((len(dynamic), E.NUM_ACTIONS), np.float32), None
+
+    assert HumanModel(Flat({})).dev_play_bias == 0
+    picks = [HumanModel(Flat({})).seat(s).decide(game, actions) for s in range(40)]
+    assert knight in picks and actions[0] in picks
+    for bias, want in ((-50, actions[0]), (50, knight)):
+        model = HumanModel(Flat({"meta_dev_play_bias": np.asarray(bias)}))
+        assert all(model.seat(s).decide(game, actions) == want for s in range(20))
+
+
 def test_human_opponent_seat_plan():
     from catanatron.colonist.selfplay import HumanModel, seat_plan
 
