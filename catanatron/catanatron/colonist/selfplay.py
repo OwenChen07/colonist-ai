@@ -357,10 +357,12 @@ def _play_games(
             calls += 1
             if calls % GC_EVERY == 0:
                 gc.collect()
+            # Widened once per call (exact) rather than once per row.
+            logits = logits.astype(np.float64)
+            values = values.tolist()
             for row, node in enumerate(nodes):
-                legal = E.legal_indices(node.actions)
                 node.set_evaluation(
-                    logits[row, legal].astype(np.float64), float(values[row])
+                    logits[row].take(E.legal_indices(node.actions)), values[row]
                 )
         for g in list(pending):
             step = g.advance()

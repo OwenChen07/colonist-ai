@@ -371,7 +371,7 @@ class Search:
         total = node.N.sum()
         pi = self.improved_policy(node, total)
         pi -= node.N / (1 + total)
-        return int(np.argmax(pi))
+        return int(pi.argmax())
 
     # ----- simulation
     def descend(self, root, first):
@@ -396,7 +396,7 @@ class Search:
             if isinstance(node, Decision):
                 i = self.pick(node)
             else:
-                i = int(np.argmax(node.probs - node.N / (1 + node.N.sum())))
+                i = int((node.probs - node.N / (1 + node.N.sum())).argmax())
             path.append((node, i))
         while isinstance(leaf, Chance):
             # A chance node as a leaf: value it through its likeliest outcome.
