@@ -155,3 +155,6 @@ recorder/node_modules/
 /scripts/vm/bot.env
 /scripts/vm/bot/accounts/
 /scripts/vm/bot/own_accounts.env
+# trial packages installed with pip --target (WORKER.md), and Cython build output
+/.pkgs/
+/build/

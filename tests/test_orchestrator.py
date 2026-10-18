@@ -423,6 +423,9 @@ def test_workers_manage_gcp_workers_but_not_the_machines_we_run_on():
     assert "Bash(gcloud compute *)" in worker
     assert "Bash(gcloud beta quotas *)" in worker  # quota requests, Oct 18
     assert "Bash(gcloud beta quotas *)" in agent.allowed_tools("lead")
+    # Trial packages go in a --target directory, never into the shared .venv.
+    assert "Bash(.venv/bin/pip install --target:*)" in worker
+    assert not any(t.startswith("Bash(.venv/bin/pip install:") for t in worker)
     assert "Bash(gcloud compute instances delete*colonist-selfplay-1*)" in denied
     assert "Bash(gcloud compute instances stop*colonist-selfplay-worker-4*)" in denied
     assert "Bash(gcloud iam *)" in denied

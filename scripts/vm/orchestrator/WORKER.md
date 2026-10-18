@@ -36,6 +36,7 @@ A denial applies to **that command**, not to Bash: rewrite it and go on. **Never
 - Another workstream owns another area. If your task needs a change there, say so in your output's `post` rather than doing it.
 - Be frugal with tokens: read what the task needs, skip broad tours of the code, and use subagents only for clearly parallel work.
 - When you need a decision, ask it as a decision (below) and work on something else, or end with status `blocked`. Decisions ping the owner; your run posts never do (owner's rule, Oct 18), so don't write `@owner` in a post unless it is itself a question only the owner can answer.
+- **Packages:** `.venv` is shared by the live bots, training and every worktree, so never install into it. For a trial, `.venv/bin/pip install --target <your worktree>/.pkgs <package>` (or under `data/orchestrator/scratch/<workstream>/`) and put that directory on `PYTHONPATH` for the trial's commands only. Adding a package to the venv itself, or to `requirements.txt`, is the owner's decision.
 
 ## Output (required, the last thing you write)
 End your final message with one JSON block. `agent.py` files and posts it.

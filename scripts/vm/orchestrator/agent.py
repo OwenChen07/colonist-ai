@@ -168,6 +168,13 @@ def allowed_tools(role):
             "Bash(gcloud beta quotas *)",
             "Bash(gcloud alpha quotas *)",
             "Bash(gcloud quotas *)",
+            # Packages for a trial go in a --target directory of the worktree
+            # or scratch (WORKER.md), never into .venv, which the live bots and
+            # training share (owner's decision, Oct 18, 6:14 PM Toronto).
+            "Bash(.venv/bin/pip install --target:*)",
+            "Bash(.venv/bin/python -m pip install --target:*)",
+            "Bash(.venv/bin/pip list:*)",
+            "Bash(.venv/bin/pip show:*)",
         ]
         for root in ("", f"{ROOT}/", f"{HOME_ROOT}/"):
             tools.append(f"Bash({root}scripts/vm/orchestrator/land.sh:*)")
