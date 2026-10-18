@@ -102,6 +102,10 @@ def allowed_tools(role):
         # the live-play ones are denied in disallowed_tools.
         "Bash(.venv/bin/python -m catanatron.colonist.*)",
         "Bash(nohup .venv/bin/python -m catanatron.colonist.*)",
+        # The OpenHex client (workstream openhex): a separate package, no
+        # colonist account involved.
+        "Bash(.venv/bin/python -m catanatron.openhex.*)",
+        "Bash(nohup .venv/bin/python -m catanatron.openhex.*)",
         # Multi-line code goes in a script here (WORKER.md), not inline.
         "Bash(.venv/bin/python data/orchestrator/scratch/*)",
         "Bash(nohup .venv/bin/python data/orchestrator/scratch/*)",

@@ -293,6 +293,7 @@ def test_permission_requests_never_reach_the_owner(tmp_path, monkeypatch):
 def test_workers_run_any_module_but_never_the_live_bots():
     worker, denied = agent.allowed_tools("worker"), agent.disallowed_tools("worker")
     assert "Bash(.venv/bin/python -m catanatron.colonist.*)" in worker
+    assert "Bash(nohup .venv/bin/python -m catanatron.openhex.*)" in worker
     assert "Bash(.venv/bin/python data/orchestrator/scratch/*)" in worker
     assert "Bash(.venv/bin/python -m catanatron.colonist.bridge*)" in denied
     assert (
