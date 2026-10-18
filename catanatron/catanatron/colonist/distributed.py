@@ -262,16 +262,19 @@ def run(
         ]
     here = [sys.executable, "-m", "catanatron.colonist.selfplay", net_path, out_dir]
 
+    def prepare(host):
+        argv = _prepare(host, key, root, remote_data, remote_nets, net_path)
+        argv += _remote_opponents(host, key, remote_nets, opponents)
+        if human_starts and human_start_rate > 0:
+            _rsync(key, human_starts, f"{host}:{remote_starts}")
+        if human_opponent and human_opponent_rate > 0:
+            _rsync(key, human_opponent, f"{host}:{remote_human}")
+        return argv
+
     prepared = {}  # host -> the start of its self-play command
-    for host, _ in hosts:
-        try:
-            argv = _prepare(host, key, root, remote_data, remote_nets, net_path)
-            argv += _remote_opponents(host, key, remote_nets, opponents)
-            if human_starts and human_start_rate > 0:
-                _rsync(key, human_starts, f"{host}:{remote_starts}")
-            if human_opponent and human_opponent_rate > 0:
-                _rsync(key, human_opponent, f"{host}:{remote_human}")
-        except subprocess.CalledProcessError:
+    # All hosts at once: one after another took 3.3 minutes for 22 (round 77).
+    for host, argv in _each_host(prepare, [host for host, _ in hosts]):
+        if argv is None:
             log(f"could not prepare {host}; its range runs elsewhere")
             continue
         prepared[host] = argv
@@ -519,6 +522,23 @@ def _safe(host):
     return "".join(c if c.isalnum() or c in "-." else "_" for c in host)
 
 
+def _each_host(prepare, hosts, errors=(subprocess.CalledProcessError,)):
+    """(host, prepare(host)) for every host, in order, with all of them run
+    at once; None for a host whose prepare raised one of `errors`."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    def attempt(host):
+        try:
+            return prepare(host)
+        except errors:
+            return None
+
+    if not hosts:
+        return []
+    with ThreadPoolExecutor(max_workers=len(hosts)) as pool:
+        return list(zip(hosts, pool.map(attempt, hosts)))
+
+
 def _prepare(host, key, root, remote_data, remote_nets, net_path):
     """Makes the worker's folders and copies the net; returns the start of
     its self-play command."""
@@ -658,17 +678,23 @@ def run_tasks(tasks, workers=None, hosts=None, log=print):
         for i in range(len(weights) + 1)
     ]
     chunks = list(zip(cuts, cuts[1:]))
+    span = {host: (p, ab) for (host, p), ab in zip(hosts, chunks[1:]) if ab[0] < ab[1]}
+
+    def prepare(host):
+        a, b = span[host][1]
+        _sync_code(host, key, root)
+        return "".join(
+            json.dumps(list(t)) + "\n"
+            for t in _remote_specs(host, key, root, tasks[a:b])
+        )
+
     remote = []
-    for (host, processes), (a, b) in zip(hosts, chunks[1:]):
-        if a == b:
-            continue
-        try:
-            _sync_code(host, key, root)
-            lines = "".join(
-                json.dumps(list(t)) + "\n"
-                for t in _remote_specs(host, key, root, tasks[a:b])
-            )
-        except (subprocess.CalledProcessError, OSError):
+    # All hosts at once, so the first ones don't finish while the last start.
+    for host, lines in _each_host(
+        prepare, list(span), (subprocess.CalledProcessError, OSError)
+    ):
+        processes, (a, b) = span[host]
+        if lines is None:
             log(f"could not prepare {host}; its games run here")
             continue
         argv = [

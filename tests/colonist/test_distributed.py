@@ -20,6 +20,30 @@ def test_worker_hosts_from_the_environment():
         worker_hosts({"COLONIST_WORKER_HOSTS": "owen@10.0.0.4"})
 
 
+def test_hosts_are_prepared_at_once_in_order_with_failures_as_none():
+    import subprocess
+    import threading
+
+    from catanatron.colonist.distributed import _each_host
+
+    hosts = ["a", "b", "c", "d"]
+    barrier = threading.Barrier(len(hosts), timeout=5)  # breaks if one at a time
+
+    def prepare(host):
+        barrier.wait()
+        if host == "c":
+            raise subprocess.CalledProcessError(1, "ssh")
+        return host.upper()
+
+    assert _each_host(prepare, hosts) == [
+        ("a", "A"),
+        ("b", "B"),
+        ("c", None),
+        ("d", "D"),
+    ]
+    assert _each_host(prepare, []) == []
+
+
 @pytest.mark.parametrize("games", [5000, 640, 65, 3])
 def test_split_covers_every_seed_once_in_whole_shards(games):
     ranges = split(games, 1000, 8, [("a", 4), ("b", 4)])
