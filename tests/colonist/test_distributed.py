@@ -209,29 +209,42 @@ def test_later_evaluation_calls_split_by_the_measured_evaluation_speed(
 
 # A stand-in for `selfplay --parts-stream`: plays each 'first count' line by
 # writing the part's file (after `delay` seconds), logs "label first", and
-# prints the file name; exits 1 after `limit` parts.
+# prints the file name; exits 1 after `limit` parts. Up to `width` parts are
+# in play at once, as the real one keeps STREAM_GAMES games going.
 FAKE_WORKER = """
-import os, sys, time
-out, label, delay, limit, played = sys.argv[1:6]
+import os, sys, threading, time
+out, label, delay, limit, played, width = sys.argv[1:7]
 os.makedirs(out, exist_ok=True)
-for n, line in enumerate(iter(sys.stdin.readline, "")):
-    if n == int(limit):
-        sys.exit(1)
-    first, count = map(int, line.split())
+room, lock = threading.Semaphore(int(width)), threading.Lock()
+
+def play(first, count):
     time.sleep(float(delay))
     name = f"shard_{first:07d}_{count}.npz"
     open(os.path.join(out, name), "w").close()
-    with open(played, "a") as stream:
-        stream.write(f"{label} {first}\\n")
-    print(name, flush=True)
+    with lock:
+        with open(played, "a") as stream:
+            stream.write(f"{label} {first}\\n")
+        print(name, flush=True)
+    room.release()
+
+threads = []
+for n, line in enumerate(iter(sys.stdin.readline, "")):
+    if n == int(limit):
+        os._exit(1)
+    room.acquire()
+    threads.append(threading.Thread(target=play, args=tuple(map(int, line.split()))))
+    threads[-1].start()
+for thread in threads:
+    thread.join()
 """
 
 
 def _queue_fleet(tmp_path, monkeypatch, hosts, behaviour, lossy=()):
     """distributed.run's machines as FAKE_WORKERs: behaviour[host] is
-    (seconds per part, parts before it exits); hosts not in it fail to
-    prepare. Returns out_dir, the run's log, the file of where each part
-    was played, and the (seed, games) played here after the queue."""
+    (seconds per part, parts before it exits[, parts in play at once]);
+    hosts not in it fail to prepare. Returns out_dir, the run's log, the
+    file of where each part was played, and the (seed, games) played here
+    after the queue."""
     import shutil
     import subprocess
     import sys
@@ -242,8 +255,18 @@ def _queue_fleet(tmp_path, monkeypatch, hosts, behaviour, lossy=()):
     played = tmp_path / "played.txt"
 
     def fake(label, parts):
-        delay, limit = behaviour.get(label, (0, 10**6))
-        return [sys.executable, "-c", FAKE_WORKER, parts, label, delay, limit, played]
+        delay, limit, width = (behaviour.get(label, (0, 10**6)) + (1,))[:3]
+        return [
+            sys.executable,
+            "-c",
+            FAKE_WORKER,
+            parts,
+            label,
+            delay,
+            limit,
+            played,
+            width,
+        ]
 
     def prepare(host, *a):
         if host not in behaviour:
@@ -380,6 +403,25 @@ def test_a_slow_machine_s_last_part_is_also_played_by_an_idle_one(
     assert len(_where(played)) == 2 * 8
     assert any("stopping w@stuck" in line for line in logs)
     assert "w@stuck 0 in" in next(l for l in logs if l.startswith("self-play games by"))
+
+
+def test_busy_machines_do_not_copy_each_other_s_parts(tmp_path, monkeypatch):
+    # Round 96: with 5 parts per process held, the queue was empty a third
+    # of the way in, and every free slot took a copy of a part another busy
+    # machine held: 6,640 games played for 5,000.
+    from catanatron.colonist import distributed
+
+    behaviour = {h: (0.2, 10**6, 4) for h in ("here", "w@a", "w@b")}
+    out, logs, played, here = _queue_fleet(
+        tmp_path, monkeypatch, ["w@a:1", "w@b:1"], behaviour
+    )
+    distributed.run("net.npz", out, games=3 * 64, seed=0, workers=1, log=logs.append)
+
+    assert distributed._complete(out, 0, 3 * 64)
+    where = _where(played)
+    assert len(where) == 3 * 8
+    # Only an idle machine copies: at most one copy each, at the end.
+    assert sum(len(labels) for labels in where.values()) <= 3 * 8 + 3
 
 
 def test_shards_and_parts_already_here_are_not_played_again(tmp_path, monkeypatch):

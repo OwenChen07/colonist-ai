@@ -296,9 +296,10 @@ def run(
     started = time.monotonic()
 
     def take(state):
-        """The next part for a machine: one nobody has started, else one a
-        single other machine is playing (the copy that lands first is kept),
-        else None once all are here. Waits while others might fail."""
+        """The next part for a machine: one nobody has started, else, once
+        it has less than a part per process, one a single other machine is
+        playing (the copy that lands first is kept), else None once all are
+        here. Waits while others might fail."""
         with cond:
             while not state["dead"] and len(arrived) < total:
                 while queue:
@@ -306,14 +307,22 @@ def run(
                     if part not in arrived:
                         break
                 else:
-                    part = next(
-                        (
-                            p
-                            for p, n in playing.items()
-                            if n == 1 and p not in state["sent"] and p not in arrived
-                        ),
-                        None,
-                    )
+                    # A busy machine's copies play beside its own parts: in
+                    # round 96 (5 parts per process held) the queue was empty
+                    # a third of the way in, and 6,640 games were played for
+                    # 5,000.
+                    part = None
+                    if len(state["sent"]) < state["processes"]:
+                        part = next(
+                            (
+                                p
+                                for p, n in playing.items()
+                                if n == 1
+                                and p not in state["sent"]
+                                and p not in arrived
+                            ),
+                            None,
+                        )
                 if part is not None:
                     playing[part] += 1
                     state["sent"].add(part)
@@ -448,6 +457,7 @@ def run(
     def launch(host, processes, argv):
         argv = argv + ["--parts-stream", "--workers", processes]
         state = {"sent": set(), "dead": False, "failed": False, "games": 0}
+        state["processes"] = processes
         state["seconds"] = 0.0
         thread = threading.Thread(
             target=serve, args=(host, processes, argv, state), daemon=True
