@@ -558,6 +558,10 @@ class Orchestrator(discord.Client):
     async def on_message(self, message):
         if message.author.bot or message.author.id != self.owner_id:
             return
+        # Pinning, thread and other system messages arrive in the owner's name;
+        # only what they typed is a request (owner's rule, Oct 18).
+        if message.type not in (discord.MessageType.default, discord.MessageType.reply):
+            return
         name = getattr(message.channel, "name", "")
         text = message.content.strip()
         if text.startswith("!"):
