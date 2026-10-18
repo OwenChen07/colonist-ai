@@ -68,6 +68,44 @@ def test_build_reads_only_the_training_split(tmp_path, monkeypatch):
     assert len(S.load(out)) == 1
 
 
+def test_a_rebuild_converts_only_new_games_and_writes_the_same_file(
+    tmp_path, monkeypatch
+):
+    captures = tmp_path / "captures" / "acct"
+    captures.mkdir(parents=True)
+    for name in ("a.json", "b.json", "c.json"):
+        shutil.copy(FULL_GAME, captures / name)
+    (captures / "bad.json").write_text("{}")
+    dataset = tmp_path / "human"
+    dataset.mkdir()
+    row = lambda name: {"capture": name, "account": "acct", "status": "ok"}
+    rows = [{**row("a.json"), "split": "train"}, {**row("bad.json"), "split": "train"}]
+    index = dataset / "index.jsonl"
+    index.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    monkeypatch.setenv("COLONIST_CAPTURES", str(tmp_path / "captures"))
+    out = str(dataset / "starts.jsonl.gz")
+    full_out = str(dataset / "full.jsonl.gz")
+    assert S.build(str(dataset), out, log=lambda _: None)[0] == 1
+    rows[1:1] = [{**row("b.json"), "split": "train"}]
+    rows.append({**row("c.json"), "split": "train"})
+    index.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    converted = []
+    real = S.start_entry
+    monkeypatch.setattr(
+        S, "start_entry", lambda record, *a: converted.append(1) or real(record, *a)
+    )
+    messages = []
+    games, cuts = S.build(str(dataset), out, log=messages.append)
+    assert games == 3 and len(converted) == 2
+    assert "(3 new)" in messages[0]  # b, c and the unreadable one, tried again
+    assert S.build(str(dataset), full_out, log=lambda _: None) == (games, cuts)
+    with gzip.open(out, "rt") as a, gzip.open(full_out, "rt") as b:
+        assert a.read() == b.read()
+    converted.clear()
+    S.build(str(dataset), out, min_turn=20, log=lambda _: None)  # other cuts
+    assert len(converted) == 3
+
+
 def test_selfplay_from_human_starts_records_aux_targets(tmp_path, entry):
     from catanatron.colonist.selfplay import run_shard
 

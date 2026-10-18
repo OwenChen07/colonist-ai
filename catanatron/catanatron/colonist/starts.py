@@ -82,30 +82,65 @@ def start_entry(record, min_turn=MIN_TURN, max_turn=MAX_TURN):
     return entry
 
 
-def build(dataset, out, min_turn=MIN_TURN, max_turn=MAX_TURN, log=print):
-    """Writes the starts file from DATASET/index.jsonl's training games."""
+def _cached(out, min_turn, max_turn):
+    """The last build's lines by capture ({key: line}) and the captures it
+    skipped, from OUT and its .keys file; empty if they don't match."""
+    try:
+        with open(out + ".keys") as stream:
+            keys = json.load(stream)
+        with gzip.open(out, "rt") as stream:
+            lines = stream.read().splitlines(keepends=True)
+    except (OSError, ValueError):
+        return {}, set()
+    if (keys.get("min_turn"), keys.get("max_turn")) != (min_turn, max_turn) or len(
+        keys["lines"]
+    ) != len(lines):
+        return {}, set()
+    return dict(zip(keys["lines"], lines)), set(keys["skipped"])
+
+
+def build(dataset, out, min_turn=MIN_TURN, max_turn=MAX_TURN, log=print, full=False):
+    """Writes the starts file from DATASET/index.jsonl's training games.
+    Captures the last build already converted (OUT.keys) are reused, so a
+    round only replays its new games; FULL rebuilds every game."""
     with open(os.path.join(dataset, "index.jsonl")) as stream:
         rows = [json.loads(line) for line in stream]
     rows = [r for r in rows if r.get("status") == "ok" and r.get("split") == "train"]
     root = os.environ.get("COLONIST_CAPTURES", "captures")
-    games = cuts = 0
+    cached, skipped = ({}, set()) if full else _cached(out, min_turn, max_turn)
+    keys = {"min_turn": min_turn, "max_turn": max_turn, "lines": [], "skipped": []}
+    games = cuts = new = 0
     tmp = out + ".tmp"
     with gzip.open(tmp, "wt") as stream:
         for row in rows:
-            path = os.path.join(root, row["account"], row["capture"])
-            try:
-                entry = start_entry(
-                    convert(load_capture(path)).record, min_turn, max_turn
-                )
-            except Exception:  # one bad capture must not stop the rest
-                entry = None
-            if entry is None:
+            key = row["account"] + "/" + row["capture"]
+            line = cached.get(key)
+            if line is None and key in skipped:
+                keys["skipped"].append(key)
                 continue
-            stream.write(json.dumps(entry, separators=(",", ":")) + "\n")
+            if line is None:
+                new += 1
+                try:
+                    entry = start_entry(
+                        convert(load_capture(os.path.join(root, key))).record,
+                        min_turn,
+                        max_turn,
+                    )
+                except Exception:  # one bad capture must not stop the rest
+                    continue  # (and isn't remembered, so it is tried again)
+                if entry is None:
+                    keys["skipped"].append(key)
+                    continue
+                line = json.dumps(entry, separators=(",", ":")) + "\n"
+            stream.write(line)
+            keys["lines"].append(key)
             games += 1
-            cuts += len(entry["cuts"])
+            cuts += len(json.loads(line)["cuts"])
+    with open(out + ".keys.tmp", "w") as stream:
+        json.dump(keys, stream)
     os.replace(tmp, out)
-    log(f"{games} games, {cuts} starting positions -> {out}")
+    os.replace(out + ".keys.tmp", out + ".keys")
+    log(f"{games} games ({new} new), {cuts} starting positions -> {out}")
     return games, cuts
 
 
@@ -158,8 +193,11 @@ def main(argv=None):
     parser.add_argument("--out", required=True)
     parser.add_argument("--min-turn", type=int, default=MIN_TURN)
     parser.add_argument("--max-turn", type=int, default=MAX_TURN)
+    parser.add_argument(
+        "--full", action="store_true", help="convert every game again (no cache)"
+    )
     args = parser.parse_args(argv)
-    build(args.dataset, args.out, args.min_turn, args.max_turn)
+    build(args.dataset, args.out, args.min_turn, args.max_turn, full=args.full)
     return 0
 
 
