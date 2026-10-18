@@ -205,6 +205,29 @@ def test_free_roads_go_as_place_free_road():
     assert to_openhex(server.board, game, road)["type"] == "placeFreeRoad"
 
 
+def test_only_a_knight_before_the_roll():
+    # Live, games 0521979f and 41528f73: playRoadBuilding before the roll was
+    # refused with "Must resolve pending action: rollDice".
+    from catanatron.models.actions import generate_playable_actions
+
+    game = FakeServer(0, "red").game
+    while game.state.is_initial_build_phase:
+        game.execute(game.playable_actions[0])
+    s = game.state
+    key = player_key(s, s.current_color())
+    for card in ("KNIGHT", "ROAD_BUILDING", "MONOPOLY", "YEAR_OF_PLENTY"):
+        s.player_state[f"{key}_{card}_IN_HAND"] = 1
+        s.player_state[f"{key}_{card}_OWNED_AT_START"] = True
+    game.playable_actions = generate_playable_actions(s)
+    A = ActionType
+    kinds = {a.action_type for a in C.openhex_legal(game, game.playable_actions)}
+    assert kinds == {A.ROLL, A.PLAY_KNIGHT_CARD}
+    s.player_state[f"{key}_HAS_ROLLED"] = True
+    game.playable_actions = generate_playable_actions(s)
+    kinds = {a.action_type for a in C.openhex_legal(game, game.playable_actions)}
+    assert {A.PLAY_ROAD_BUILDING, A.PLAY_MONOPOLY, A.PLAY_YEAR_OF_PLENTY} <= kinds
+
+
 @pytest.mark.parametrize("seed,me", [(0, "red"), (1, "blue")])
 def test_client_plays_a_whole_game(seed, me, monkeypatch, tmp_path):
     monkeypatch.setattr(C, "GAMES_DIR", str(tmp_path))

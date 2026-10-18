@@ -78,6 +78,22 @@ def think_budget(game, remaining, simulations):
     return seconds, max(1, round(simulations * scale))
 
 
+# OpenHex refuses these before the roll ("Must resolve pending action:
+# rollDice"); a knight before the roll is fine (14 accepted in the first games).
+NOT_BEFORE_ROLL = {A.PLAY_ROAD_BUILDING, A.PLAY_MONOPOLY, A.PLAY_YEAR_OF_PLENTY}
+
+
+def openhex_legal(game, actions):
+    """`actions` without the ones OpenHex refuses at `game`'s position. The
+    search's root filter: deeper in the tree the simulator's rules stand."""
+    from catanatron.state_functions import player_has_rolled
+
+    state = game.state
+    if state.is_road_building or player_has_rolled(state, state.current_color()):
+        return list(actions)
+    return [a for a in actions if a.action_type not in NOT_BEFORE_ROLL]
+
+
 def stamp():
     return datetime.now(TORONTO).strftime("%b %d %I:%M:%S %p")
 
@@ -347,16 +363,22 @@ class Player:
     def search(self, game, remaining):
         from catanatron.colonist.mcts import Search
 
-        if len(game.playable_actions) == 1:
-            return game.playable_actions[0], 1
+        actions = openhex_legal(game, game.playable_actions)
+        if len(actions) == 1:
+            return actions[0], 1
         seconds, simulations = think_budget(game, remaining, self.simulations)
-        search = Search(self.net, simulations, rng=self.rng, noise=False)
+        search = Search(
+            self.net,
+            simulations,
+            rng=self.rng,
+            noise=False,
+            root_action_filter=openhex_legal,
+        )
         try:
             action, _ = search.run(game, time_limit=seconds)
         except ValueError:
             # The search redeals the opponent's hidden cards; a deal that gives
             # them 15 points leaves it no choice to make. Take the net's move.
-            actions = game.playable_actions
             priors, _ = self.net.evaluate(
                 game, game.state.current_color(), E.legal_indices(actions)
             )
