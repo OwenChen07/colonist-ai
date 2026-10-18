@@ -94,6 +94,11 @@ class Follower:
 
     def _event(self, e):
         t = e["type"]
+        if t == "robberMoved" and self.pending_robber == (
+            color(e["player"]),
+            as_hex(e["hex"]),
+        ):
+            return  # the knight already said where the robber goes
         if self.pending_robber and t != "resourceStolen":
             self._flush_robber()
         if t in DERIVED:
@@ -108,12 +113,15 @@ class Follower:
         elif t == "roadBuilt":
             self._add(who, A.BUILD_ROAD, list(b.edge(e["edge"])))
         elif t == "diceRolled":
-            self._add(who, A.ROLL, None, [e["die1"], e["die2"]])
+            dice = [e["die1"], e["die2"]] if "die1" in e else list(e["dice"])
+            self._add(who, A.ROLL, None, dice)
         elif t == "devCardBought":
             card = CARD[e["card"]] if e.get("card") else None
             self._add(who, A.BUY_DEVELOPMENT_CARD, None, card)
         elif t == "knightPlayed":
             self._add(who, A.PLAY_KNIGHT_CARD)
+            if e.get("hex") is not None:  # the guide lists it among the fields
+                self.pending_robber = (who, as_hex(e["hex"]))
         elif t == "roadBuildingPlayed":
             self._add(who, A.PLAY_ROAD_BUILDING)
         elif t == "monopolyPlayed":
@@ -143,6 +151,12 @@ class Follower:
             self._add(who, A.END_TURN)
         else:
             raise OutOfSync(f"unknown event type {t}")
+
+    def settle(self):
+        """No steal is coming (OpenHex has no steal pending): a robber move
+        still waiting for one stole nothing."""
+        if self.pending_robber:
+            self._flush_robber()
 
     # ----- log -> position -----
     def new_game(self):
