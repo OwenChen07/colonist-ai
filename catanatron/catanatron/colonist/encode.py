@@ -420,6 +420,23 @@ DYNAMIC_SIZE = (
 INPUT_SIZE = STATIC_SIZE + DYNAMIC_SIZE
 
 
+def _byte_scales():
+    """Per dynamic feature, the s that makes it a count k / s with k in 0..255,
+    or 0 for a feature that isn't one (the dice odds, and the turn number,
+    which reaches 300). Training stores k in a byte (train.load_split)."""
+    player = [15, 1, 1, 15, 5, 4, 15, 1, 10, 5] + [5] * 9 + [15] * 10 + [1] * 6
+    my_extra = [15, 1] + [3] * 5 + [1] * 4
+    phase = [1, 1, 5, 1, 1, 2, 1, 0, 25] + [19] * 5
+    dice = [1, 36, 1] + [6] * 11 + [1] * 55 + [5, 5, 1, 1, 3] + [0] * 22
+    s = [1] * (NUM_TILES + NUM_NODES * 4 + NUM_EDGES * 2)
+    s += player + my_extra + player + phase + dice
+    assert len(s) == DYNAMIC_SIZE
+    return np.array(s, np.float32)
+
+
+DYNAMIC_BYTE_SCALE = _byte_scales()
+
+
 def encode_flat(game, color):
     static, dynamic = encode(game, color)
     return np.concatenate([static, dynamic])

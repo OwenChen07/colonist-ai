@@ -168,14 +168,37 @@ def select_shards(paths, max_positions, seed=0):
     return sorted(chosen)
 
 
+_BYTES = np.flatnonzero(E.DYNAMIC_BYTE_SCALE)
+_WIDE = np.flatnonzero(E.DYNAMIC_BYTE_SCALE == 0)
+
+
+def byte_codes(dynamic, path=""):
+    """The byte features of float16 `dynamic` rows as their counts k (uint8),
+    which Data.batch turns back into the same float16 values. A value that
+    isn't such a count (an encoder change) is warned about and rounded."""
+    scale = E.DYNAMIC_BYTE_SCALE[_BYTES]
+    x = dynamic[:, _BYTES]
+    k = np.clip(np.rint(x.astype(np.float32) * scale), 0, 255)
+    bad = (k / scale).astype(np.float16) != x
+    if bad.any():
+        features = sorted(set(_BYTES[np.flatnonzero(bad.any(0))].tolist()))
+        print(
+            f"warning: {int(bad.sum())} dynamic values in {path} are not byte "
+            f"counts (features {features[:10]}); rounded",
+            flush=True,
+        )
+    return k.astype(np.uint8)
+
+
 def load_split(paths, val_fraction, value_mix=0.0):
     """Reads the shards into compact training and validation sets, split by
     game, as (static, train, validation, games).
 
     Compact, so many rounds of self-play fit in memory: legal moves stay
-    packed (8 per byte), and a search policy keeps only its legal moves'
-    shares, in row order (`pi`, with `pi_start` per row). Data.batch expands
-    them. The value target mixes the game result with the search's value:
+    packed (8 per byte), most position features are counts kept in a byte
+    (`dynamic`, encode.DYNAMIC_BYTE_SCALE; the rest stay float16 in `wide`),
+    and a search policy keeps only its legal moves' shares, in row order
+    (`pi`, with `pi_start` per row). Data.batch expands them. The value target mixes the game result with the search's value:
     (1 - value_mix) z + value_mix v, which is just z for rows without a search
     and for quick searches (`full` false: no policy target either; see
     datagen.load).
@@ -208,7 +231,8 @@ def load_split(paths, val_fraction, value_mix=0.0):
         n, n_pi = sizes[val]
         splits[val] = {
             "game": np.empty(n, np.int64),
-            "dynamic": np.empty((n, E.DYNAMIC_SIZE), np.float16),
+            "dynamic": np.empty((n, len(_BYTES)), np.uint8),
+            "wide": np.empty((n, len(_WIDE)), np.float16),
             "legal": np.empty((n, (E.NUM_ACTIONS + 7) // 8), np.uint8),
             "action": np.empty(n, np.int16),
             "value": np.empty(n, np.float32),
@@ -227,6 +251,7 @@ def load_split(paths, val_fraction, value_mix=0.0):
         if "full" in d:
             v = np.where(d["full"].astype(bool), v, z)
         value = (1 - value_mix) * z + value_mix * v
+        codes = byte_codes(d["dynamic"], path)
         static[offset : offset + len(d["static"])] = d["static"]
         for val in (False, True):
             rows = np.flatnonzero(is_val == val)
@@ -235,7 +260,8 @@ def load_split(paths, val_fraction, value_mix=0.0):
             split, (r, q) = splits[val], at[val]
             end = r + len(rows)
             split["game"][r:end] = d["game"][rows] + offset
-            split["dynamic"][r:end] = d["dynamic"][rows]
+            split["dynamic"][r:end] = codes[rows]
+            split["wide"][r:end] = d["dynamic"][rows][:, _WIDE]
             split["legal"][r:end] = d["legal"][rows]
             split["action"][r:end] = d["action"][rows]
             split["value"][r:end] = value[rows]
@@ -274,6 +300,9 @@ class Data:
             return
         self.game = t(split["game"])
         self.dynamic = t(split["dynamic"])
+        self.wide = t(split["wide"])
+        self.bytes, self.wide_at = t(_BYTES), t(_WIDE)
+        self.scale = t(E.DYNAMIC_BYTE_SCALE[_BYTES])
         self.legal = t(split["legal"])
         self.action = t(split["action"].astype(np.int64))
         self.value = t(split["value"].astype(np.float32))
@@ -287,7 +316,11 @@ class Data:
     def batch(self, idx):
         import torch
 
-        x = torch.cat([self.static[self.game[idx]], self.dynamic[idx].float()], dim=1)
+        dynamic = torch.empty(len(idx), E.DYNAMIC_SIZE, device=self.scale.device)
+        # through float16, to give exactly the values the shards hold
+        dynamic[:, self.bytes] = (self.dynamic[idx].float() / self.scale).half().float()
+        dynamic[:, self.wide_at] = self.wide[idx].float()
+        x = torch.cat([self.static[self.game[idx]], dynamic], dim=1)
         packed = self.legal[idx]
         legal = (packed.unsqueeze(-1) >> self.shifts) & 1
         legal = legal.reshape(len(idx), -1)[:, : E.NUM_ACTIONS].bool()
