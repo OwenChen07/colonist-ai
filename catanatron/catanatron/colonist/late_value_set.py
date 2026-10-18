@@ -113,26 +113,48 @@ def build(last, workers, out=SET):
     print(f"captures {len(paths)} games reaching turn {TURN}: {len(res)} -> {out}")
 
 
+def _half_width(xs):
+    """95% half-width of the mean of xs, a list of (value, game), with games as
+    clusters: positions in one game share its result, so the naive binomial
+    interval is several times too narrow."""
+    n = len(xs)
+    mean = sum(x for x, _ in xs) / n
+    per_game = {}
+    for x, g in xs:
+        per_game[g] = per_game.get(g, 0.0) + x - mean
+    k = len(per_game)
+    if k < 2:
+        return float("nan")
+    var = sum(s * s for s in per_game.values()) / n**2 * k / (k - 1)
+    return 1.96 * math.sqrt(var)
+
+
 def _stats(pairs):
     n = len(pairs)
     if not n:
         return "n=0"
-    bias = sum(v - z for v, z in pairs) / n
-    mse = sum((v - z) ** 2 for v, z in pairs) / n
-    return f"n={n} bias {bias:+.3f} mse {mse:.3f}"
+    bias = sum(v - z for v, z, _ in pairs) / n
+    mse = sum((v - z) ** 2 for v, z, _ in pairs) / n
+    h = _half_width([(v - z, g) for v, z, g in pairs])
+    return f"n={n} bias {bias:+.3f} (+-{h:.3f}) mse {mse:.3f}"
 
 
 def _confident(pairs):
-    hi = [(v, z) for v, z in pairs if v > 0.5]
+    """pairs: (value, result, game). The gap is implied minus actual win rate
+    on v > 0.5, with a game-clustered interval."""
+    hi = [(v, z, g) for v, z, g in pairs if v > 0.5]
     if not hi:
         return "n=0"
     n = len(hi)
-    mean_v = sum(v for v, _ in hi) / n
-    p = sum(z > 0 for _, z in hi) / n
-    h = 1.96 * math.sqrt(p * (1 - p) / n)
+    mean_v = sum(v for v, _, _ in hi) / n
+    p = sum(z > 0 for _, z, _ in hi) / n
+    h = _half_width([(float(z > 0), g) for _, z, g in hi])
+    gap = _half_width([((v + 1) / 2 - (z > 0), g) for v, z, g in hi])
+    games = len({g for _, _, g in hi})
     return (
-        f"n={n} mean v {mean_v:+.3f} -> implied win {50 * (mean_v + 1):.1f}%,"
-        f" actual {100 * p:.1f}% (+-{100 * h:.1f}, positions correlated within games)"
+        f"n={n} ({games} games) mean v {mean_v:+.3f} -> implied win"
+        f" {50 * (mean_v + 1):.1f}%, actual {100 * p:.1f}% (+-{100 * h:.1f}),"
+        f" gap {50 * (mean_v + 1) - 100 * p:.1f} pp (+-{100 * gap:.1f})"
     )
 
 
@@ -141,11 +163,18 @@ def evaluate(net_paths, workers, src=SET):
     with Pool(workers, _init, (net_paths,)) as pool:
         res = [r for r in pool.imap_unordered(_work, [r["capture"] for r in rows]) if r]
     print(f"games {len(res)} of {len(rows)} ({sum(r['won'] for r in res)} won)")
+    res.sort(key=lambda r: r["capture"])
     for i, path in enumerate(net_paths):
-        pairs = [(v[i], 1.0 if r["won"] else -1.0) for r in res for v in r["values"]]
+        pairs = [
+            (v[i], 1.0 if r["won"] else -1.0, g)
+            for g, r in enumerate(res)
+            for v in r["values"]
+        ]
         print(f"{path}: all {_stats(pairs)} | v>0.5 {_confident(pairs)}")
         # per-game: first position, so each game counts once
-        first = [(r["values"][0][i], 1.0 if r["won"] else -1.0) for r in res]
+        first = [
+            (r["values"][0][i], 1.0 if r["won"] else -1.0, g) for g, r in enumerate(res)
+        ]
         print(f"  first position per game: {_stats(first)} | v>0.5 {_confident(first)}")
         for name, keep in (
             ("person holds no dev card", ("",)),
@@ -153,12 +182,28 @@ def evaluate(net_paths, workers, src=SET):
             ("person holds army + dev cards", ("army_dev",)),
         ):
             sub = [
-                (v[i], 1.0 if r["won"] else -1.0)
-                for r in res
+                (v[i], 1.0 if r["won"] else -1.0, g)
+                for g, r in enumerate(res)
                 for v, s in zip(r["values"], r["slices"])
                 if s in keep
             ]
             print(f"  {name}: {_stats(sub)} | v>0.5 {_confident(sub)}")
+        if i:
+            # paired on the same positions: much tighter than two intervals
+            for name, keep in (("all", None), ("army + dev cards", ("army_dev",))):
+                d = [
+                    (v[i] - v[0], g)
+                    for g, r in enumerate(res)
+                    for v, s in zip(r["values"], r["slices"])
+                    if keep is None or s in keep
+                ]
+                if not d:
+                    continue
+                mean = sum(x for x, _ in d) / len(d)
+                print(
+                    f"  bias minus {net_paths[0]}, {name}:"
+                    f" {mean:+.4f} (+-{_half_width(d):.4f})"
+                )
 
 
 def main(argv=None):
@@ -167,14 +212,16 @@ def main(argv=None):
     b = sub.add_parser("build")
     b.add_argument("--last", type=int, default=150)
     b.add_argument("--workers", type=int, default=6)
+    b.add_argument("--set", default=SET, help="where to write the set")
     e = sub.add_parser("eval")
     e.add_argument("nets", nargs="+")
     e.add_argument("--workers", type=int, default=6)
+    e.add_argument("--set", default=SET, help="which set to score")
     a = ap.parse_args(argv)
     if a.cmd == "build":
-        build(a.last, a.workers)
+        build(a.last, a.workers, a.set)
     else:
-        evaluate(a.nets, a.workers)
+        evaluate(a.nets, a.workers, a.set)
 
 
 if __name__ == "__main__":
