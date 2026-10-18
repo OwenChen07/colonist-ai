@@ -52,6 +52,10 @@
 # Oct 16 (E12): --train-ema 0.9997 trains with a moving average of the
 # weights (about the last epoch's worth of steps), which is validated and
 # exported as the round's net: KataGo averages weight snapshots the same way.
+# TRAIN_WINDOW (E37) sets how many rounds of self-play training reads (6
+# unless set). The GPU host loads at most 4M positions (loop.py
+# --train-max-positions, its memory), drawn by shard afresh each round, so a
+# wider window means each round trains on a different subset, not on more.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 init=()
@@ -69,7 +73,7 @@ starts=()
 humanseat=()
 [ "${HUMAN_OPPONENT_RATE:-0}" != 0 ] && humanseat=(--human-opponent "${HUMAN_OPPONENT:-models/human/net.npz}" --human-opponent-rate "$HUMAN_OPPONENT_RATE")
 exec .venv/bin/python -m catanatron.colonist.loop runs/g1 "${init[@]}" \
-    --rounds 1000 --games "${SELFPLAY_GAMES:-3500}" --epochs "${TRAIN_EPOCHS:-3}" --window 6 --train-sample 4000000 \
+    --rounds 1000 --games "${SELFPLAY_GAMES:-3500}" --epochs "${TRAIN_EPOCHS:-3}" --window "${TRAIN_WINDOW:-6}" --train-sample 4000000 \
     --gate "${PROMOTION_GATE:-confidence}" --promote-at 0.51 --extend-games 2000 --futility-games 1000 --prefetch --train-from latest --selfplay-from latest --match-simulations 200 --train-ema 0.9997 --min-games 1000 --anchor runs/g1/nets/round_013.npz --anchor-games 2000 --guard-live 0.01 \
     --distribute-eval \
     --simulations "${SELFPLAY_SIMULATIONS:-400}" --full-rate 0.25 --fast-simulations 24 \
