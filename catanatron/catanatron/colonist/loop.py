@@ -278,6 +278,13 @@ def play(run, n, args):
 
     from catanatron.colonist import distributed
 
+    # Its early self-play played every shard: no hooks or host preparation
+    # (round 70 spent 19 min on them after its match, for 0 shards to play).
+    seed = args.seed + n * 1_000_000
+    if distributed._complete(run.dir(n, "data"), seed, args.games):
+        say(f"round {n}: self-play played early, {args.games} games")
+        say(f"  self-play complete early: {args.games} games")
+        return
     before_round(n, args)
     runner = selfplay.run
     if distributed.worker_hosts():  # read again every round
@@ -296,7 +303,7 @@ def play(run, n, args):
         net,
         run.dir(n, "data"),
         games=args.games,
-        seed=args.seed + n * 1_000_000,  # fresh boards every round
+        seed=seed,  # fresh boards every round
         simulations=args.simulations,
         workers=args.workers,
         opponents=opponents,

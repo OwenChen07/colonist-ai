@@ -594,6 +594,32 @@ def test_the_before_round_command_runs_and_a_failure_is_not_fatal(
     assert json.loads((run / "state.json").read_text())["round"] == 3
 
 
+def test_a_round_played_early_skips_its_hook_and_self_play(tiny_args, monkeypatch):
+    pytest.importorskip("torch")
+    import shutil
+
+    from catanatron.colonist import loop, selfplay
+
+    run, args, init = tiny_args
+    monkeypatch.setattr(evaluate, "sprt", lambda *a, **k: _fake_result(None, 0.5))
+    monkeypatch.setattr(evaluate, "match", lambda *a, **k: _fake_result(None, 0.6))
+    assert loop.main(args + ["--init", init, "--rounds", "1"]) == 0
+    # Another run whose round 1 shards are all on disk, as after early self-play.
+    other = run.parent / "other"
+    shutil.copytree(run / "round_001" / "data", other / "round_001" / "data")
+
+    def no_selfplay(*a, **k):
+        raise AssertionError("self-play ran for a complete round")
+
+    monkeypatch.setattr(selfplay, "run", no_selfplay)
+    marker = run.parent / "refreshed"
+    hook = ["--before-round", f"touch {marker}"]
+    argv = [str(other)] + args[1:] + hook + ["--init", init, "--rounds", "1"]
+    assert loop.main(argv) == 0
+    assert not marker.exists()
+    assert json.loads((other / "state.json").read_text())["round"] == 2
+
+
 def _match_result(score, games, seed=0):
     """A real MatchResult whose games score `score` on average."""
     wins = round(score * games)
