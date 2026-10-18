@@ -56,6 +56,12 @@
 # unless set). The GPU host loads at most 4M positions (loop.py
 # --train-max-positions, its memory), drawn by shard afresh each round, so a
 # wider window means each round trains on a different subset, not on more.
+# Oct 18 (E38, E39; owner): the progress gate (PROMOTION_GATE=progress) plays
+# 4000 games; 52% passes, 50-52% plays 4000 more and passes at 51% of all
+# 8000 (± 1.1%), under 50% fails. The confidence gate's 4000-game match would
+# extend from the same flags. Every round now trains from the best net
+# (--train-from best): chained nets drifted (late live error up about 0.003 a
+# round, E31), so each round is the best net plus one clean step.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 init=()
@@ -74,7 +80,7 @@ humanseat=()
 [ "${HUMAN_OPPONENT_RATE:-0}" != 0 ] && humanseat=(--human-opponent "${HUMAN_OPPONENT:-models/human/net.npz}" --human-opponent-rate "$HUMAN_OPPONENT_RATE")
 exec .venv/bin/python -m catanatron.colonist.loop runs/g1 "${init[@]}" \
     --rounds 1000 --games "${SELFPLAY_GAMES:-3500}" --epochs "${TRAIN_EPOCHS:-3}" --window "${TRAIN_WINDOW:-6}" --train-sample 4000000 \
-    --gate "${PROMOTION_GATE:-confidence}" --promote-at 0.51 --extend-games 2000 --futility-games 1000 --prefetch --train-from latest --selfplay-from latest --match-simulations 200 --train-ema 0.9997 --min-games 1000 --anchor runs/g1/nets/round_013.npz --anchor-games 2000 --guard-live 0.01 \
+    --gate "${PROMOTION_GATE:-confidence}" --promote-at 0.51 --max-games 4000 --extend-below 0.50 --extend-above 0.52 --extend-games 4000 --futility-games 1000 --prefetch --train-from best --selfplay-from latest --match-simulations 200 --train-ema 0.9997 --min-games 1000 --anchor runs/g1/nets/round_013.npz --anchor-games 2000 --guard-live 0.01 \
     --distribute-eval \
     --simulations "${SELFPLAY_SIMULATIONS:-400}" --full-rate 0.25 --fast-simulations 24 \
     --reference AB:2,F \
