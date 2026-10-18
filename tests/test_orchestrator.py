@@ -212,7 +212,7 @@ def test_a_worker_sees_its_open_questions(tmp_path, monkeypatch):
     assert agent.open_decisions("training") == []
 
 
-def test_rank_watch_finds_each_number_one():
+def test_rank_watch_counts_only_number_one_global():
     import rank_watch
 
     standing = [
@@ -221,7 +221,10 @@ def test_rank_watch_finds_each_number_one():
         {"name": "CA", "rank": "4"},
         {"name": "Ontario", "rank": "1"},
     ]
-    assert rank_watch.firsts(standing) == ["North America", "Ontario"]
+    assert rank_watch.firsts(standing) == []  # continent and region don't count
+    assert rank_watch.level_name(standing[1]) == "North America"
+    standing[0]["rank"] = "1"
+    assert rank_watch.firsts(standing) == ["Global"]
     assert rank_watch.firsts(None) == []
     assert rank_watch.level_name(standing[0]) == "Global"
 
@@ -238,7 +241,13 @@ def test_rank_watch_queues_once_and_releases_by_day(tmp_path, monkeypatch):
             {
                 "modeType": 1,
                 "skillRating": 2400,
-                "rankedStanding": [{"name": "Ontario", "rank": "1"}],
+                "rankedStanding": [
+                    {"name": "Ontario", "rank": "1"},
+                    {
+                        "name": {"key": "strings:leaderboardPage.tabs.global"},
+                        "rank": "1",
+                    },
+                ],
             }
         ],
     }
@@ -253,7 +262,7 @@ def test_rank_watch_queues_once_and_releases_by_day(tmp_path, monkeypatch):
     rank_watch.main([])  # already seen: no second shot
     assert len(shots) == 1
     state = json.loads((tmp_path / "rank-watch.json").read_text())
-    assert len(state["queue"]) == 1 and "Ontario" in state["queue"][0]["text"]
+    assert len(state["queue"]) == 1 and "#1 in Global" in state["queue"][0]["text"]
     rank_watch.main(["--release"])
     assert json.loads((tmp_path / "rank-watch.json").read_text())["queue"] == []
 
@@ -410,6 +419,8 @@ def test_workers_run_any_module_but_never_the_live_bots():
 def test_workers_manage_gcp_workers_but_not_the_machines_we_run_on():
     worker, denied = agent.allowed_tools("worker"), agent.disallowed_tools("worker")
     assert "Bash(gcloud compute *)" in worker
+    assert "Bash(gcloud beta quotas *)" in worker  # quota requests, Oct 18
+    assert "Bash(gcloud beta quotas *)" in agent.allowed_tools("lead")
     assert "Bash(gcloud compute instances delete*colonist-selfplay-1*)" in denied
     assert "Bash(gcloud compute instances stop*colonist-selfplay-worker-4*)" in denied
     assert "Bash(gcloud iam *)" in denied

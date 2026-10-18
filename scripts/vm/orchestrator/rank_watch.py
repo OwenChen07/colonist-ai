@@ -1,12 +1,13 @@
-"""Screenshots any bot account the moment it is #1 in one of its rankings,
+"""Screenshots any bot account the moment it is #1 Global in 1v1 ranked,
 or when it reaches the highest 1v1 rating any of the bots has had.
 
 colonist's public profile lists each account's 1v1 standing globally, on its
-continent, in its country and in its region (e.g. Ontario). When one of them
-is 1, this saves a screenshot of the profile's Ranked tab at once (the rank
-may not last) and queues it; the Discord bot runs this every 10 minutes and
-posts what's queued in daytime (--release). The rating record across the
-accounts is kept in rank-watch.json ("record").
+continent, in its country and in its region (e.g. Ontario); only the global
+one counts (owner, Oct 18). When it is 1, this saves a screenshot of the
+profile's Ranked tab at once (the rank may not last) and queues it; the
+Discord bot runs this every 10 minutes and posts what's queued in daytime
+(--release) to #milestones. The rating record across the accounts is kept in
+rank-watch.json ("record").
 
     .venv/bin/python scripts/vm/orchestrator/rank_watch.py [--release]
 
@@ -65,8 +66,13 @@ def level_name(entry):
 
 
 def firsts(standing):
-    """The levels at which a rankedStanding list says #1."""
-    return [level_name(e) for e in standing or [] if str(e.get("rank")) == "1"]
+    """The levels at which a rankedStanding list says #1: Global or nothing
+    (continent, country and region #1s don't count)."""
+    return [
+        level_name(e)
+        for e in standing or []
+        if str(e.get("rank")) == "1" and level_name(e) == "Global"
+    ]
 
 
 def standing(name, season):

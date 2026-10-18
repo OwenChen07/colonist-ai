@@ -163,6 +163,11 @@ def allowed_tools(role):
             "Bash(gcloud compute *)",
             "Bash(gcloud config list:*)",
             "Bash(gcloud auth list:*)",
+            # Quota requests (owner's decision, Oct 18, 6:04 PM Toronto): the
+            # coordinator's account holds the Cloud Quotas admin role for this.
+            "Bash(gcloud beta quotas *)",
+            "Bash(gcloud alpha quotas *)",
+            "Bash(gcloud quotas *)",
         ]
         for root in ("", f"{ROOT}/", f"{HOME_ROOT}/"):
             tools.append(f"Bash({root}scripts/vm/orchestrator/land.sh:*)")
