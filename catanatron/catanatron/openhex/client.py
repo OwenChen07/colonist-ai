@@ -433,9 +433,16 @@ class Player:
                 if action["type"] == "stealFromPlayer":
                     self.note(f"steal refused (none was due?): {e}")
                     continue
-                self.lost_sync(f"{action} rejected: {e}")
+                # Our move was wrong, not our view of the game: one fallback
+                # move now, the simulator again at the next turn.
+                self.note(f"refused, one fallback move: {action} {e}")
                 state = self.api.call("GET", f"/games/{self.gid}/state")["state"]
                 return self.fallback(state)
+
+    def edges(self):
+        """Every board edge in OpenHex's form, for fallbacks."""
+        values = self.follower.board.edge_of_nodes.values()
+        return [[xyz(a), xyz(b)] for a, b in values]
 
     def fallback(self, state):
         """A move OpenHex should accept, without the simulator: try candidates
@@ -461,12 +468,14 @@ class Player:
             self.rng.shuffle(hexes)
             options = [{"type": "moveRobber", "hex": xyz(h)} for h in hexes]
         elif kind == "roadBuilding":
-            options = [{"type": "buildRoad", "edge": e} for e in range(72)]
+            options = [{"type": "placeFreeRoad", "edge": e} for e in self.edges()]
         elif state.get("isSetupPhase"):
+            b = self.follower.board
             options = [
-                {"type": "placeInitialSettlement", "vertex": v} for v in range(54)
+                {"type": "placeInitialSettlement", "vertex": xyz(v)}
+                for v in b.vertex_of_node.values()
             ]
-            options += [{"type": "placeInitialRoad", "edge": e} for e in range(72)]
+            options += [{"type": "placeInitialRoad", "edge": e} for e in self.edges()]
         else:
             # A steal OpenHex may want without showing it pending.
             options = [
@@ -480,6 +489,8 @@ class Player:
         if self.tried[0] != seq:
             self.tried = (seq, [])
         options = [a for a in options if a not in self.tried[1]]
+        if not options and self.tried[1]:
+            return  # all tried here: wait for the game to move on, quietly
         for action in options:
             self.tried[1].append(action)
             try:

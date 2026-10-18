@@ -119,7 +119,10 @@ class FakeServer:
         elif t == "buildCity":
             node = b.node(a["vertex"])
             self.pick(lambda x: x.action_type == A.BUILD_CITY and x.value == node)
-        elif t in ("placeInitialRoad", "buildRoad"):
+        elif t in ("placeInitialRoad", "buildRoad", "placeFreeRoad"):
+            # As live: free roads must be placeFreeRoad, and only those.
+            if (t == "placeFreeRoad") != self.game.state.is_road_building:
+                raise C.Rejected(f"Must resolve pending action: {self.sent[-1]}")
             edge = frozenset(b.edge(a["edge"]))
             self.pick(
                 lambda x: x.action_type == A.BUILD_ROAD and frozenset(x.value) == edge
@@ -183,6 +186,23 @@ def test_pending_of_live_shape():
     assert C.pending_of(state) == {"players": {"blue": 5}, "type": "discard"}
     assert C.pending_of({"pending": {"type": "steal"}})["type"] == "steal"
     assert C.pending_of({"pendingAction": None, "pending": None}) == {}
+
+
+def test_free_roads_go_as_place_free_road():
+    # Live, game 389a42ca: buildRoad under road building was refused with
+    # "Must resolve pending action: placeFreeRoad".
+    from catanatron.models.actions import Action
+    from catanatron.openhex.follow import to_openhex
+
+    server = FakeServer(0, "red")
+    game = server.game
+    while game.state.is_initial_build_phase:
+        game.execute(game.playable_actions[0])
+    edge = tuple(next(iter(server.board.edge_of_nodes)))
+    road = Action(game.state.current_color(), ActionType.BUILD_ROAD, edge)
+    assert to_openhex(server.board, game, road)["type"] == "buildRoad"
+    game.state.is_road_building = True
+    assert to_openhex(server.board, game, road)["type"] == "placeFreeRoad"
 
 
 @pytest.mark.parametrize("seed,me", [(0, "red"), (1, "blue")])

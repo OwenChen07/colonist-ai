@@ -252,6 +252,8 @@ def to_openhex(board, game, action):
         return {"type": "buildCity", "vertex": board.vertex(v)}
     if t == A.BUILD_ROAD:
         kind = "placeInitialRoad" if setup else "buildRoad"
+        if game.state.is_road_building:  # live server: "Must resolve placeFreeRoad"
+            kind = "placeFreeRoad"
         return {"type": kind, "edge": board.road(v)}
     if t == A.ROLL:
         return {"type": "rollDice"}
