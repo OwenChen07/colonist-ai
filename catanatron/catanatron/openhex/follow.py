@@ -195,6 +195,11 @@ class Follower:
         s.colors = tuple(self.seats)
         s.color_to_index = {c: i for i, c in enumerate(self.seats)}
         s.random = None
+        # OpenHex rolls plain dice (the site says balanced; 56 of 56 logged
+        # games broke a 36-card deck). Search gets plain odds from the first
+        # roll. The dice object stays, not dice=None: the net was trained on
+        # its features, and an empty dice block moves its choices far more.
+        s.dice.mode = "random"
         if self.robber is not None:
             s.board.robber_coordinate = self.robber
         game.playable_actions = generate_playable_actions(s)

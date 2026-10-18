@@ -2,6 +2,8 @@
 (as we would see them: the opponent's card draws hidden), must replay to the
 same position."""
 
+import pytest
+
 from catanatron.colonist.rules import new_game
 from catanatron.models.enums import RESOURCES, ActionType
 from catanatron.models.player import Color, RandomPlayer
@@ -141,6 +143,10 @@ def test_followed_games_match():
         f.feed(events)  # repeats are skipped
         replayed = f.replay()
         s, r = game.state, replayed.state
+        assert r.dice.mode == "random"  # OpenHex rolls plain dice
+        assert r.dice.odds(me) == pytest.approx(
+            [(6 - abs(t - 7)) / 36 for t in range(2, 13)]
+        )
         assert r.board.buildings == s.board.buildings
         assert set(map(frozenset, r.board.roads)) == set(map(frozenset, s.board.roads))
         assert r.board.robber_coordinate == s.board.robber_coordinate
