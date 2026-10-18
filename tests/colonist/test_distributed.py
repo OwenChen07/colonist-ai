@@ -207,353 +207,194 @@ def test_later_evaluation_calls_split_by_the_measured_evaluation_speed(
     assert distributed._match_weights(names, [10, 20, 40]) == [1.0, 1.0, 4.0]
 
 
-def test_a_vanished_host_s_range_is_shared_with_the_hosts_that_finished(
-    tmp_path, monkeypatch
-):
+# A stand-in for `selfplay --parts-stream`: plays each 'first count' line by
+# writing the part's file (after `delay` seconds), logs "label first", and
+# prints the file name; exits 1 after `limit` parts.
+FAKE_WORKER = """
+import os, sys, time
+out, label, delay, limit, played = sys.argv[1:6]
+os.makedirs(out, exist_ok=True)
+for n, line in enumerate(iter(sys.stdin.readline, "")):
+    if n == int(limit):
+        sys.exit(1)
+    first, count = map(int, line.split())
+    time.sleep(float(delay))
+    name = f"shard_{first:07d}_{count}.npz"
+    open(os.path.join(out, name), "w").close()
+    with open(played, "a") as stream:
+        stream.write(f"{label} {first}\\n")
+    print(name, flush=True)
+"""
+
+
+def _queue_fleet(tmp_path, monkeypatch, hosts, behaviour, lossy=()):
+    """distributed.run's machines as FAKE_WORKERs: behaviour[host] is
+    (seconds per part, parts before it exits); hosts not in it fail to
+    prepare. Returns out_dir, the run's log, the file of where each part
+    was played, and the (seed, games) played here after the queue."""
+    import shutil
     import subprocess
+    import sys
 
     from catanatron.colonist import distributed
-    from catanatron.colonist.datagen import shard_path
 
     out = tmp_path / "run" / "round" / "data"
-    played = {}  # where each seed was played: "here", or a host
+    played = tmp_path / "played.txt"
 
-    def play(where, first, games):
-        # Like selfplay.run: shards already here are skipped.
-        for start in range(first, first + games, distributed.SHARD_SIZE):
-            path = shard_path(
-                out, start, min(distributed.SHARD_SIZE, first + games - start)
-            )
-            if not os.path.isfile(path):
-                played.setdefault(start, []).append(where)
-                open(path, "w").close()
+    def fake(label, parts):
+        delay, limit = behaviour.get(label, (0, 10**6))
+        return [sys.executable, "-c", FAKE_WORKER, parts, label, delay, limit, played]
 
-    def selfplay_run(net, out_dir, games, seed, **options):
-        play("here", seed, games)
-
-    def local(argv):
-        argv = [str(a) for a in argv]
-        selfplay_run(
-            None,
-            None,
-            int(argv[argv.index("--games") + 1]),
-            int(argv[argv.index("--seed") + 1]),
-        )
-        return ["true"]
-
-    remote = {}  # host -> the range it last played
+    def prepare(host, *a):
+        if host not in behaviour:
+            raise subprocess.CalledProcessError(255, "ssh")
+        return ["selfplay"]
 
     def ssh(host, key, argv):
-        argv = [str(a) for a in argv]
-        first = int(argv[argv.index("--seed") + 1])
-        games = int(argv[argv.index("--games") + 1])
-        remote[host] = (first, games)
-        return ["false" if host == "w@dead" else "true"]
+        if "--parts-stream" not in map(str, argv):
+            return ["true"]  # the pkill that stops it
+        return [str(a) for a in fake(host, str(tmp_path / host / "parts"))]
 
     def rsync(key, source, destination):
-        host = str(source).split(":")[0]
-        if host == "w@dead":
+        host, _, path = str(source).partition(":")
+        if host in lossy:
             raise subprocess.CalledProcessError(255, "rsync")
-        play(host, *remote[host])
+        shutil.copy(tmp_path / host / "parts" / os.path.basename(path), destination)
 
-    monkeypatch.setenv("COLONIST_WORKER_HOSTS", "w@dead:4,w@live:4")
+    def merge(path, parts):
+        open(path, "w").close()
+        for part in parts:
+            os.remove(part)
+
+    monkeypatch.setenv("COLONIST_WORKER_HOSTS", ",".join(hosts))
     monkeypatch.delenv("COLONIST_WORKERS_FILE", raising=False)
-    monkeypatch.delenv("COLONIST_SELFPLAY_CAPACITIES", raising=False)
-    monkeypatch.setattr(distributed, "_prepare", lambda *a: ["selfplay"])
+    monkeypatch.setattr(distributed, "_prepare", prepare)
     monkeypatch.setattr(distributed, "_remote_opponents", lambda *a: [])
     monkeypatch.setattr(distributed, "_ssh", ssh)
     monkeypatch.setattr(distributed, "_rsync", rsync)
-    monkeypatch.setattr(distributed, "_local", local)
-    monkeypatch.setattr(distributed.selfplay, "run", selfplay_run)
-    logs = []
-    distributed.run(
-        "net.npz", out, games=12 * 64 + 5, seed=0, workers=4, log=logs.append
+    monkeypatch.setattr(
+        distributed,
+        "_local",
+        lambda argv: [str(a) for a in fake("here", argv[4] + "/parts")],
     )
+    monkeypatch.setattr(distributed.selfplay, "merge_parts", merge)
+    here = []
+    monkeypatch.setattr(
+        distributed.selfplay,
+        "run",
+        lambda net, out_dir, games, seed, **o: here.append((seed, games))
+        or open(distributed.shard_path(out_dir, seed, games), "w").close(),
+    )
+    logs = []
+    return out, logs, played, here
 
-    assert distributed._complete(out, 0, 12 * 64 + 5)
-    dead_first, dead_games = distributed.split(12 * 64 + 5, 0, 4, [("a", 4), ("b", 4)])[
-        1
+
+def _where(played):
+    where = {}
+    for line in played.read_text().split("\n"):
+        if line:
+            label, first = line.split()
+            where.setdefault(int(first), []).append(label)
+    return where
+
+
+def test_every_machine_draws_parts_from_one_queue(tmp_path, monkeypatch):
+    from catanatron.colonist import distributed
+
+    behaviour = {"here": (0.02, 10**6), "w@fast": (0, 10**6), "w@slow": (0.3, 10**6)}
+    out, logs, played, here = _queue_fleet(
+        tmp_path, monkeypatch, ["w@fast:4", "w@slow:2"], behaviour
+    )
+    games = 4 * 64 + 5
+    distributed.run("net.npz", out, games=games, seed=0, workers=2, log=logs.append)
+
+    assert distributed._complete(out, 0, games)
+    where = _where(played)
+    parts = [
+        p
+        for s in range(0, games, 64)
+        for p in distributed.selfplay.parts_of(
+            s, min(64, games - s), min(64, games - s) // distributed.PART_SIZE
+        )
     ]
-    lost = range(dead_first, dead_first + dead_games, 64)
-    # The dead host's shards were played once, part here and part on w@live.
-    assert all(len(played[s]) == 1 for s in played)
-    assert {played[s][0] for s in lost} == {"here", "w@live"}
-    assert any("lost shards" in line for line in logs)
+    assert sorted(where) == sorted(first for first, _ in parts)
+    assert len(parts) == 4 * 8 + 1
+    counts = {}
+    for labels in where.values():
+        counts[labels[0]] = counts.get(labels[0], 0) + 1
+    assert counts.get("w@fast", 0) > counts.get("w@slow", 0)
+    assert not here
+    assert not os.listdir(out / "parts")  # all merged
+    assert any(line.startswith("self-play games by host: here") for line in logs)
 
 
-def test_idle_machines_take_a_straggler_s_unstarted_shards(tmp_path, monkeypatch):
-    from catanatron.colonist import distributed
-    from catanatron.colonist.datagen import shard_path
-
-    out = tmp_path / "run" / "round" / "data"
-    played = {}  # where each seed was played
-    assigned = {}  # host -> the ranges it was given
-
-    def play(where, first, games):
-        for start in range(first, first + games, distributed.SHARD_SIZE):
-            path = shard_path(
-                out, start, min(distributed.SHARD_SIZE, first + games - start)
-            )
-            if not os.path.isfile(path):
-                played.setdefault(start, []).append(where)
-                open(path, "w").close()
-
-    def seed_range(argv):
-        argv = [str(a) for a in argv]
-        return int(argv[argv.index("--seed") + 1]), int(argv[argv.index("--games") + 1])
-
-    def ssh(host, key, argv):
-        if "--seed" not in map(str, argv):
-            return ["true"]  # the pkill that stops the straggler
-        assigned.setdefault(host, []).append(seed_range(argv))
-        return ["sleep", "60"] if host == "w@slow" else ["true"]
-
-    def local(argv):
-        play("here", *seed_range(argv))
-        return ["true"]
-
-    def rsync(key, source, destination):
-        host = str(source).split(":")[0]
-        first, games = assigned[host][0]
-        if host == "w@fast":
-            for first, games in assigned[host]:
-                play(host, first, games)
-        elif all(
-            os.path.isfile(shard_path(out, s, 64))
-            for s in range(first + 4 * 64, first + games, 64)
-        ):
-            play(host, first, 4 * 64)  # its 4 processes' first shards end
-
-    monkeypatch.setenv("COLONIST_WORKER_HOSTS", "w@slow:4,w@fast:2")
-    monkeypatch.delenv("COLONIST_WORKERS_FILE", raising=False)
-    monkeypatch.delenv("COLONIST_SELFPLAY_CAPACITIES", raising=False)
-    monkeypatch.setattr(distributed, "STEAL_POLL", 0)
-    monkeypatch.setattr(distributed, "_prepare", lambda *a: ["selfplay"])
-    monkeypatch.setattr(distributed, "_remote_opponents", lambda *a: [])
-    monkeypatch.setattr(distributed, "_ssh", ssh)
-    monkeypatch.setattr(distributed, "_local", local)
-    monkeypatch.setattr(distributed, "_rsync", rsync)
-    monkeypatch.setattr(
-        distributed.selfplay,
-        "run",
-        lambda net, out_dir, games, seed, **o: play("here", seed, games),
-    )
-    logs = []
-    distributed.run("net.npz", out, games=16 * 64, seed=0, workers=2, log=logs.append)
-
-    assert distributed._complete(out, 0, 16 * 64)
-    slow_first, slow_games = assigned["w@slow"][0]
-    assert slow_games == 8 * 64
-    tail = range(slow_first + 4 * 64, slow_first + slow_games, 64)
-    assert all(len(where) == 1 for where in played.values())
-    assert {played[s][0] for s in tail} == {"here", "w@fast"}
-    assert any("stopping w@slow" in line for line in logs)
-
-
-def test_a_fast_idle_host_also_plays_a_slow_host_s_started_shard(tmp_path, monkeypatch):
-    from catanatron.colonist import distributed
-    from catanatron.colonist.datagen import shard_path
-
-    out = tmp_path / "run" / "round" / "data"
-    played = {}
-    assigned = {}
-
-    def play(where, first, games):
-        for start in range(first, first + games, distributed.SHARD_SIZE):
-            path = shard_path(
-                out, start, min(distributed.SHARD_SIZE, first + games - start)
-            )
-            if not os.path.isfile(path):
-                played.setdefault(start, []).append(where)
-                open(path, "w").close()
-
-    def seed_range(argv):
-        argv = [str(a) for a in argv]
-        return int(argv[argv.index("--seed") + 1]), int(argv[argv.index("--games") + 1])
-
-    def ssh(host, key, argv):
-        if "--seed" not in map(str, argv):
-            return ["true"]
-        assigned.setdefault(host, []).append(seed_range(argv))
-        return ["sleep", "60"] if host == "w@slow" else ["true"]
-
-    def rsync(key, source, destination):
-        host = str(source).split(":")[0]
-        if host == "w@fast":  # the slow host's one shard never ends
-            for first, games in assigned[host]:
-                play(host, first, games)
-
-    monkeypatch.setenv("COLONIST_WORKER_HOSTS", "w@slow:2,w@fast:4")
-    monkeypatch.setenv("COLONIST_SELFPLAY_CAPACITIES", "local:10,w@slow:5,w@fast:40")
-    monkeypatch.delenv("COLONIST_WORKERS_FILE", raising=False)
-    monkeypatch.setattr(distributed, "STEAL_POLL", 0)
-    monkeypatch.setattr(distributed, "_prepare", lambda *a: ["selfplay"])
-    monkeypatch.setattr(distributed, "_remote_opponents", lambda *a: [])
-    monkeypatch.setattr(distributed, "_ssh", ssh)
-    monkeypatch.setattr(
-        distributed, "_local", lambda argv: play("here", *seed_range(argv)) or ["true"]
-    )
-    monkeypatch.setattr(distributed, "_rsync", rsync)
-    monkeypatch.setattr(
-        distributed.selfplay,
-        "run",
-        lambda net, out_dir, games, seed, **o: play("here", seed, games),
-    )
-    logs = []
-    distributed.run("net.npz", out, games=6 * 64, seed=0, workers=2, log=logs.append)
-
-    assert distributed._complete(out, 0, 6 * 64)
-    (slow_first, slow_games), *_ = assigned["w@slow"]
-    assert slow_games == 64
-    assert played[slow_first] == ["w@fast"]
-    assert assigned["w@fast"][-1] == (slow_first, 64)
-    assert any("w@fast also plays 64 games" in line for line in logs)
-    assert not any("here also plays" in line for line in logs)
-    assert any("stopping w@slow" in line for line in logs)
-
-
-def test_an_unprepared_host_s_range_is_taken_while_a_straggler_plays(
+def test_a_failed_or_unprepared_host_s_parts_are_played_by_the_others(
     tmp_path, monkeypatch
 ):
     # Round 71: a preempted spot VM's 9 shards waited 16 min for the
     # slowest host, then were played in a second wave.
-    import subprocess
     import time
 
     from catanatron.colonist import distributed
-    from catanatron.colonist.datagen import shard_path
 
-    out = tmp_path / "run" / "round" / "data"
-    played = {}  # where each seed was played
-    assigned = {}  # host -> the ranges it was given
-
-    def play(where, first, games):
-        for start in range(first, first + games, distributed.SHARD_SIZE):
-            path = shard_path(
-                out, start, min(distributed.SHARD_SIZE, first + games - start)
-            )
-            if not os.path.isfile(path):
-                played.setdefault(start, []).append(where)
-                open(path, "w").close()
-
-    def seed_range(argv):
-        argv = [str(a) for a in argv]
-        return int(argv[argv.index("--seed") + 1]), int(argv[argv.index("--games") + 1])
-
-    def prepare(host, *a):
-        if host == "w@dead":
-            raise subprocess.CalledProcessError(255, "ssh")
-        return ["selfplay"]
-
-    def ssh(host, key, argv):
-        if "--seed" not in map(str, argv):
-            return ["true"]  # the pkill that stops the straggler
-        assigned.setdefault(host, []).append(seed_range(argv))
-        return ["sleep", "60"]  # still playing its last games
-
-    def local(argv):
-        play("here", *seed_range(argv))
-        return ["true"]
-
-    def rsync(key, source, destination):
-        host = str(source).split(":")[0]
-        if host == "w@slow":
-            play(host, *assigned[host][0])
-
-    monkeypatch.setenv("COLONIST_WORKER_HOSTS", "w@dead:4,w@slow:4")
-    monkeypatch.delenv("COLONIST_WORKERS_FILE", raising=False)
-    monkeypatch.delenv("COLONIST_SELFPLAY_CAPACITIES", raising=False)
-    monkeypatch.setattr(distributed, "STEAL_POLL", 0)
-    monkeypatch.setattr(distributed, "_prepare", prepare)
-    monkeypatch.setattr(distributed, "_remote_opponents", lambda *a: [])
-    monkeypatch.setattr(distributed, "_ssh", ssh)
-    monkeypatch.setattr(distributed, "_local", local)
-    monkeypatch.setattr(distributed, "_rsync", rsync)
-    monkeypatch.setattr(
-        distributed.selfplay,
-        "run",
-        lambda net, out_dir, games, seed, **o: play("here", seed, games),
+    behaviour = {"here": (0.01, 10**6), "w@live": (0, 10**6), "w@dies": (0, 3)}
+    out, logs, played, here = _queue_fleet(
+        tmp_path,
+        monkeypatch,
+        ["w@dead:4", "w@dies:4", "w@lossy:4", "w@live:4"],
+        dict(behaviour, **{"w@lossy": (0, 10**6)}),
+        lossy=("w@lossy",),
     )
-    logs = []
     started = time.monotonic()
-    distributed.run("net.npz", out, games=12 * 64, seed=0, workers=2, log=logs.append)
+    distributed.run("net.npz", out, games=6 * 64, seed=0, workers=2, log=logs.append)
 
-    assert distributed._complete(out, 0, 12 * 64)
-    assert time.monotonic() - started < 30  # not after the straggler's 60 s
-    dead_first, dead_games = distributed.split(12 * 64, 0, 2, [("a", 4), ("b", 4)])[1]
-    lost = range(dead_first, dead_first + dead_games, 64)
-    assert all(len(where) == 1 for where in played.values())
-    assert {played[s][0] for s in lost} == {"here"}
-    assert any("takes" in line and "from w@dead" in line for line in logs)
-    assert any("stopping w@slow" in line for line in logs)
-    assert not any("lost shards" in line for line in logs)
+    assert distributed._complete(out, 0, 6 * 64)
+    assert time.monotonic() - started < 30
+    assert not here
+    assert any("could not prepare w@dead" in line for line in logs)
+    assert any("w@dies stopped with parts unfinished" in line for line in logs)
+    where = _where(played)
+    assert len(where) == 6 * 8
+    # The parts w@lossy played but couldn't copy back were played again.
+    assert all(set(labels) - {"w@lossy"} for labels in where.values())
 
 
-def test_idle_hosts_take_orphans_while_the_coordinator_plays(tmp_path, monkeypatch):
-    # Round 72: six VMs sat idle 25 min while the loaded coordinator played.
-    import subprocess
+def test_a_slow_machine_s_last_part_is_also_played_by_an_idle_one(
+    tmp_path, monkeypatch
+):
+    # Round 76 waited 4 minutes on a 2-core AWS worker's last shard after
+    # the fleet was done.
     import time
 
     from catanatron.colonist import distributed
-    from catanatron.colonist.datagen import shard_path
 
-    out = tmp_path / "run" / "round" / "data"
-    played = {}  # where each seed was played
-    assigned = {}  # host -> the ranges it was given
-
-    def play(where, first, games):
-        for start in range(first, first + games, distributed.SHARD_SIZE):
-            path = shard_path(
-                out, start, min(distributed.SHARD_SIZE, first + games - start)
-            )
-            if not os.path.isfile(path):
-                played.setdefault(start, []).append(where)
-                open(path, "w").close()
-
-    def seed_range(argv):
-        argv = [str(a) for a in argv]
-        return int(argv[argv.index("--seed") + 1]), int(argv[argv.index("--games") + 1])
-
-    def prepare(host, *a):
-        if host == "w@dead":
-            raise subprocess.CalledProcessError(255, "ssh")
-        return ["selfplay"]
-
-    def ssh(host, key, argv):
-        if "--seed" in map(str, argv):
-            assigned.setdefault(host, []).append(seed_range(argv))
-        return ["true"]
-
-    def local(argv):
-        play("here", *seed_range(argv))
-        return ["sleep", "60"]  # its shards are on disk, its process still runs
-
-    def rsync(key, source, destination):
-        host = str(source).split(":")[0]
-        for first, games in assigned.get(host, []):
-            play(host, first, games)
-
-    monkeypatch.setenv("COLONIST_WORKER_HOSTS", "w@dead:4,w@fast:4")
-    monkeypatch.delenv("COLONIST_WORKERS_FILE", raising=False)
-    monkeypatch.delenv("COLONIST_SELFPLAY_CAPACITIES", raising=False)
-    monkeypatch.setattr(distributed, "STEAL_POLL", 0)
-    monkeypatch.setattr(distributed, "_prepare", prepare)
-    monkeypatch.setattr(distributed, "_remote_opponents", lambda *a: [])
-    monkeypatch.setattr(distributed, "_ssh", ssh)
-    monkeypatch.setattr(distributed, "_local", local)
-    monkeypatch.setattr(distributed, "_rsync", rsync)
-    logs = []
+    behaviour = {"here": (0, 10**6), "w@fast": (0, 10**6), "w@stuck": (60, 10**6)}
+    out, logs, played, here = _queue_fleet(
+        tmp_path, monkeypatch, ["w@stuck:1", "w@fast:4"], behaviour
+    )
     started = time.monotonic()
-    distributed.run("net.npz", out, games=12 * 64, seed=0, workers=4, log=logs.append)
+    distributed.run("net.npz", out, games=2 * 64, seed=0, workers=2, log=logs.append)
 
-    assert distributed._complete(out, 0, 12 * 64)
-    assert time.monotonic() - started < 30  # not after the coordinator's 60 s
-    dead_first, dead_games = distributed.split(12 * 64, 0, 4, [("a", 4), ("b", 4)])[1]
-    lost = range(dead_first, dead_first + dead_games, 64)
-    assert all(len(where) == 1 for where in played.values())
-    assert {played[s][0] for s in lost} == {"w@fast"}
-    assert any("w@fast takes" in line and "from w@dead" in line for line in logs)
-    assert any("stopping here" in line for line in logs)
+    assert distributed._complete(out, 0, 2 * 64)
+    assert time.monotonic() - started < 30  # not after the stuck host's 60 s
+    assert len(_where(played)) == 2 * 8
+    assert any("stopping w@stuck" in line for line in logs)
+    assert "w@stuck 0 in" in next(l for l in logs if l.startswith("self-play games by"))
+
+
+def test_shards_and_parts_already_here_are_not_played_again(tmp_path, monkeypatch):
+    from catanatron.colonist import distributed
+
+    out, logs, played, here = _queue_fleet(
+        tmp_path, monkeypatch, ["w@x:2"], {"here": (0, 10**6), "w@x": (0, 10**6)}
+    )
+    os.makedirs(out / "parts")
+    open(distributed.shard_path(out, 0, 64), "w").close()
+    open(distributed.shard_path(out / "parts", 64, 8), "w").close()
+    distributed.run("net.npz", out, games=2 * 64, seed=0, workers=2, log=logs.append)
+
+    assert distributed._complete(out, 0, 2 * 64)
+    assert sorted(_where(played)) == list(range(72, 128, 8))
 
 
 def test_human_opponent_reaches_local_and_remote_self_play(tmp_path, monkeypatch):
@@ -579,6 +420,7 @@ def test_human_opponent_reaches_local_and_remote_self_play(tmp_path, monkeypatch
     monkeypatch.setattr(distributed, "_rsync", lambda k, s, d: copied.append(str(s)))
     monkeypatch.setattr(distributed, "_complete", lambda *a: True)
     monkeypatch.setattr(distributed, "_local", local_argv)
+    monkeypatch.setattr(distributed.selfplay, "run", lambda *a, **k: None)
     distributed.run(
         "net.npz",
         out,

@@ -5,20 +5,23 @@ separated list of `user@host:processes` (COLONIST_WORKER_HOST, one host, still
 works), or point COLONIST_WORKERS_FILE at a file with a COLONIST_WORKER_HOSTS=
 line, which is read again every round, so workers can be added or removed
 while the loop runs. Each round also copies this checkout's code to every
-worker first. Each host gets a disjoint, shard-aligned seed range in proportion to
-its processes. Workers write to their own disks; the coordinator copies their
-complete shards back, and plays any range a worker failed to finish, before
-training may start. A worker can be any machine reachable over SSH with the
+worker first. The round's games are a queue of small parts that every machine,
+the coordinator included, draws from as its processes free up. Workers write
+to their own disks; the coordinator copies each part back as it is reported,
+merges them into shards, and plays any shard still missing before training
+may start. A worker can be any machine reachable over SSH with the
 repository at COLONIST_WORKER_ROOT (the same path on every worker) and its
 virtualenv, e.g. a GCP or an Azure VM.
 """
 
 import argparse
+import collections
 import os
 import shlex
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -26,11 +29,11 @@ from catanatron.colonist import selfplay
 from catanatron.colonist.datagen import shard_path
 
 SHARD_SIZE = 64
-# Once its own range is done, a machine takes the unstarted shards of a
-# host still playing: round 69's fleet waited over 30 minutes on one 2-core
-# AWS worker that had slowed to 42 s a game from 26. Seconds between looks
-# (each rsyncs the running hosts' shards here).
-STEAL_POLL = 180
+# Games in a queued part: a machine's last part ends about this many games
+# after the others (8 s each on a t2d VM, about 30 s on a 2-core AWS one, and
+# another machine also plays it once the queue is empty). Parts of 16 were
+# no slower per game than whole shards (round 82, 10.142.0.8).
+PART_SIZE = 8
 HERE = "here"  # the coordinator, as a job's host
 
 
@@ -193,11 +196,6 @@ def run(
     if not hosts:
         raise ValueError("distributed self-play needs COLONIST_WORKER_HOSTS")
     local_processes = workers or os.cpu_count() or 1
-    weights = selfplay_capacities(local_processes, hosts)
-    ranges = split(games, seed, local_processes, hosts, weights)
-    log(f"self-play allocation weights: {weights} (local, then configured hosts)")
-    capacity = dict(zip([HERE] + [host for host, _ in hosts], weights))
-    (local_seed, local_games), remote_ranges = ranges[0], ranges[1:]
     round_name = Path(out_dir).parent.name
     run_name = Path(out_dir).parent.parent.name
     remote = root / "distributed" / run_name / round_name
@@ -229,8 +227,7 @@ def run(
     ]
     if fast_simulations:
         flags += ["--fast-simulations", fast_simulations]
-    # The coordinator's own command line, for the shards it takes over from
-    # a straggler once its range is done.
+    # The coordinator's own command line, with its own paths.
     local_flags = flags + ["--opponents", ",".join(map(str, opponents))]
     remote_starts = remote_nets / "starts.jsonl.gz"
     if human_starts and human_start_rate > 0:
@@ -271,37 +268,142 @@ def run(
             _rsync(key, human_opponent, f"{host}:{remote_human}")
         return argv
 
-    prepared = {}  # host -> the start of its self-play command
-    # All hosts at once: one after another took 3.3 minutes for 22 (round 77).
-    for host, argv in _each_host(prepare, [host for host, _ in hosts]):
-        if argv is None:
-            log(f"could not prepare {host}; its range runs elsewhere")
-            continue
-        prepared[host] = argv
+    # The round is a queue of PART_SIZE-game parts that every machine draws
+    # from, one per process at a time, so all of them finish within about a
+    # part of each other. Split by measured speed, round 82's identical t2d
+    # VMs still ranged 7.0-9.2 s a game, and the fleet waited 2.3 minutes on
+    # the last ones. A game is a pure function of its seed, so where it is
+    # played changes nothing.
+    parts_dir = os.path.join(out_dir, "parts")
+    shards = {}  # shard -> its parts, for the shards not yet on disk
+    for first in range(seed, seed + games, SHARD_SIZE):
+        shard = (first, min(SHARD_SIZE, seed + games - first))
+        if not os.path.isfile(shard_path(out_dir, *shard)):
+            shards[shard] = selfplay.parts_of(*shard, shard[1] // PART_SIZE)
+    every = [part for parts in shards.values() for part in parts]
+    names = {os.path.basename(shard_path(parts_dir, *p)): p for p in every}
+    # Parts in parts_dir (or merged into their shard); some may be left from
+    # a restarted loop.
+    arrived = {p for p in every if os.path.isfile(shard_path(parts_dir, *p))}
+    queue = collections.deque(p for p in every if p not in arrived)
+    total = len(every)
+    playing = collections.Counter()  # part -> machines playing it
+    cond = threading.Condition()
+    started = time.monotonic()
 
-    def launch(host, count, first, size):
-        """A self-play job: a host's over SSH, or HERE's as a local process."""
-        if host == HERE:
-            argv = here + ["--games", size, "--seed", first]
-            argv = [str(a) for a in argv + ["--workers", count] + local_flags]
-            stream = open(Path(out_dir).parent / "here.log", "a", 1)
-            process = subprocess.Popen(
-                _local(argv),
-                stdout=stream,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,  # to stop its pool with it
-            )
-        else:
-            argv = prepared[host] + ["--games", size, "--seed", first]
-            argv += ["--workers", count] + flags
-            stream = open(Path(out_dir).parent / f"remote-{_safe(host)}.log", "a", 1)
-            process = subprocess.Popen(
-                _ssh(host, key, argv), stdout=stream, stderr=subprocess.STDOUT
-            )
-        return [host, count, first, size, process, stream]
+    def take(state):
+        """The next part for a machine: one nobody has started, else one a
+        single other machine is playing (the copy that lands first is kept),
+        else None once all are here. Waits while others might fail."""
+        with cond:
+            while not state["dead"] and len(arrived) < total:
+                while queue:
+                    part = queue.popleft()
+                    if part not in arrived:
+                        break
+                else:
+                    part = next(
+                        (
+                            p
+                            for p, n in playing.items()
+                            if n == 1 and p not in state["sent"] and p not in arrived
+                        ),
+                        None,
+                    )
+                if part is not None:
+                    playing[part] += 1
+                    state["sent"].add(part)
+                    return part
+                cond.wait(5)
+            return None
 
-    def stop(job):
-        host, process = job[0], job[4]
+    def serve(host, processes, argv, state):
+        log_path = Path(out_dir).parent / (
+            "here.log" if host == HERE else f"remote-{_safe(host)}.log"
+        )
+        with open(log_path, "a", 1) as stream:
+            if host == HERE:
+                process = subprocess.Popen(
+                    _local([str(a) for a in argv]),
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=stream,
+                    text=True,
+                    start_new_session=True,  # to stop its pool with it
+                )
+            else:
+                process = subprocess.Popen(
+                    _ssh(host, key, argv),
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=stream,
+                    text=True,
+                )
+            state["process"] = process
+            slots = threading.Semaphore(processes)
+
+            def feed():
+                try:
+                    while True:
+                        slots.acquire()
+                        part = take(state)
+                        if part is None:
+                            break
+                        process.stdin.write(f"{part[0]} {part[1]}\n")
+                        process.stdin.flush()
+                    process.stdin.close()
+                except (OSError, ValueError):
+                    pass  # it died; serve gives its parts back
+
+            threading.Thread(target=feed, daemon=True).start()
+            try:
+                for line in process.stdout:
+                    part = names.get(line.strip())
+                    if part is None:
+                        break
+                    if host != HERE and part not in arrived:
+                        try:
+                            name = line.strip()
+                            _rsync(key, f"{host}:{remote_data}/parts/{name}", parts_dir)
+                        except subprocess.CalledProcessError:
+                            break
+                    with cond:
+                        state["sent"].discard(part)
+                        playing[part] -= 1
+                        if part not in arrived:
+                            arrived.add(part)
+                            state["games"] += part[1]
+                        state["seconds"] = time.monotonic() - started
+                        cond.notify_all()
+                    slots.release()
+            except OSError:
+                pass
+            with cond:  # still-running machines take them; the rest are played here
+                state["dead"] = True
+                for part in state["sent"]:
+                    playing[part] -= 1
+                    if part not in arrived and not playing[part]:
+                        queue.append(part)
+                state["failed"] = any(p not in arrived for p in state["sent"])
+                cond.notify_all()
+            for _ in range(processes):
+                slots.release()
+            if process.poll() is None:
+                stop(host, state)
+            process.wait()
+
+    def stop(host, state):
+        """Ends a machine's self-play, once: its pool here, or over SSH."""
+        process = state["process"]
+        if state.get("stopped") or process.poll() is not None:
+            return
+        state["stopped"] = True
+        # Its pool's task thread waits on stdin, and SIGTERM's exit waits
+        # on that thread: a stopped worker hung until its input ended.
+        try:
+            process.stdin.close()
+        except (OSError, ValueError):
+            pass
         if host == HERE:
             try:
                 os.killpg(process.pid, signal.SIGTERM)
@@ -309,213 +411,82 @@ def run(
                 pass
         else:
             process.terminate()
-            # Ending ssh leaves the remote self-play running.
+            # Ending ssh leaves the remote self-play running, and the match
+            # that follows needs its cores.
             subprocess.run(
                 _ssh(host, key, ["pkill", "-f", "[c]atanatron.colonist.selfplay"]),
                 check=False,
             )
-        process.wait()
-        job[5].close()
 
-    def shards_of(first, size):
-        return [
-            (start, min(SHARD_SIZE, first + size - start))
-            for start in range(first, first + size, SHARD_SIZE)
-        ]
+    def merge_ready():
+        for shard, parts in list(shards.items()):
+            if all(p in arrived for p in parts):
+                paths = [shard_path(parts_dir, *p) for p in parts]
+                selfplay.merge_parts(shard_path(out_dir, *shard), paths)
+                del shards[shard]
 
-    def wave(local_range, jobs):
-        """Plays local_range here while each (host, processes, first, size)
-        job runs remotely; returns the hosts that finished and were copied."""
-        running = []
-        # Ranges nobody plays: a host that could not be prepared, or that
-        # failed. Idle machines take them before any straggler's tail.
-        orphans = []
-        for host, count, first, size in jobs:
-            if size and host not in prepared:
-                orphans.append([host, 0, first, size])
-            if not size or host not in prepared:
-                continue
-            running.append(launch(host, count, first, size))
-            log(f"self-play: {size} games (seeds {first}+) on {host}")
-        # The coordinator's range is a job like the others, so that idle
-        # hosts take orphans and stragglers' tails while it plays: round 72's
-        # six fastest VMs sat idle 25 minutes waiting on it (load 38 on 8
-        # cores), and round 71's lost shards waited 38.
-        first, size = local_range
-        log(f"self-play: {size} games here")
-        idle = [] if size else [HERE]
-        if size:
-            running.append(launch(HERE, local_processes, first, size))
-        wanted = shards_of(*local_range) + [
-            s for _, _, first, size in jobs for s in shards_of(first, size)
-        ]
-        finished, taken = [], set()
-        looked = time.monotonic()
-        try:
-            while running:
-                for job in [job for job in running if job[4].poll() is not None]:
-                    running.remove(job)
-                    host, code = job[0], job[4].returncode
-                    job[5].close()
-                    if code:
-                        log(
-                            f"{host} exited with status {code}; its range runs elsewhere"
-                        )
-                        orphans.append([host, 0, job[2], job[3]])
-                    if host != HERE:
-                        try:
-                            _rsync(key, f"{host}:{remote_data}/", f"{out_dir}/")
-                        except subprocess.CalledProcessError:
-                            log(
-                                f"copying shards from {host} failed; its range runs elsewhere"
-                            )
-                            if not code:
-                                orphans.append([host, 0, job[2], job[3]])
-                            continue
-                    if not code:
-                        finished.append(host)
-                        idle.append(host)
-                if not running:
-                    break
-                if all(os.path.isfile(shard_path(out_dir, *s)) for s in wanted):
-                    for job in running:
-                        log(f"self-play: stopping {job[0]}, its shards are here")
-                        stop(job)
-                        finished.append(job[0])
-                    running = []
-                    break
-                if idle and time.monotonic() - looked >= STEAL_POLL:
-                    looked = time.monotonic()
-                    for host in list(idle):
-                        job = steal(host, running, taken, orphans)
-                        if job:
-                            idle.remove(host)
-                            running.append(job)
-                time.sleep(1)
-        except BaseException:
-            for job in running:
-                stop(job)
-            raise
-        return [host for host in dict.fromkeys(finished) if host != HERE]
+    machines = []  # (host, thread, state)
 
-    def steal(host, running, taken, orphans=()):
-        """A job for an idle host: shards of a range nobody plays, else the
-        unstarted tail of the slowest job's range. Its processes play a
-        job's first missing shards, so those are under way; a later one may
-        get played twice, which gives the same games, and the first copy
-        here is kept."""
-        count = local_processes if host == HERE else dict(hosts)[host]
-        if host != HERE and host not in prepared:
-            return None
-        best = []
-        # Orphans first, so that they win ties. Nothing of theirs is under
-        # way (procs 0), and the host that lost them is not asked for shards.
-        for job in list(orphans) + running:
-            victim, procs, first, size = job[:4]
-            if victim != HERE and procs:
-                try:
-                    _rsync(key, f"{victim}:{remote_data}/", f"{out_dir}/")
-                except subprocess.CalledProcessError:
-                    continue
-            missing = [
-                s
-                for s in shards_of(first, size)
-                if not os.path.isfile(shard_path(out_dir, *s))
-            ]
-            unstarted = [s for s in missing[procs:] if s[0] not in taken]
-            # The contiguous tail, so that one --seed/--games range covers it.
-            tail = []
-            for s in reversed(unstarted):
-                if tail and s[0] + SHARD_SIZE != tail[0][0]:
-                    break
-                tail.insert(0, s)
-            share = (len(tail) + 1) // 2 if procs else len(tail)
-            tail = tail[-min(count, share) :] if tail else []
-            if len(tail) > len(best):
-                best, source = tail, victim
-        verb = "takes"
-        if not best:
-            best, source = duplicate(host, running, taken)
-            verb = "also plays"
-        if not best:
-            return None
-        taken.update(s[0] for s in best)
-        first, size = best[0][0], sum(n for _, n in best)
-        log(f"self-play: {host} {verb} {size} games (seeds {first}+) from {source}")
-        return launch(host, count, first, size)
-
-    def duplicate(host, running, taken):
-        """With nothing unstarted left, a shard that a host under half this
-        one's capacity is playing: round 76 waited 4 minutes on a 2-core AWS
-        worker's last shard (30 s a game per process) after the fleet was
-        done. The slowest such host's shard; the copy that lands first is
-        kept, and wave() stops the other once every shard is here."""
-        best, source, slowest = [], None, capacity[host] / 2
-        for victim, _, first, size in (job[:4] for job in running):
-            if victim == host or capacity[victim] >= slowest:
-                continue
-            missing = [
-                s
-                for s in shards_of(first, size)
-                if s[0] not in taken and not os.path.isfile(shard_path(out_dir, *s))
-            ]
-            if missing:
-                best, source, slowest = missing[-1:], victim, capacity[victim]
-        return best, source
-
-    jobs = [
-        (host, count, first, size)
-        for (host, count), (first, size) in zip(hosts, remote_ranges)
-    ]
-    finished = wave(ranges[0], jobs)
-    machines = 1 + len(finished)
-
-    # A host that vanished (a preempted spot VM) loses its range. Share it
-    # among the coordinator and the hosts that finished, by capacity, rather
-    # than playing it all here after everyone else is done.
-    missing = [
-        first
-        for first in range(seed, seed + games, SHARD_SIZE)
-        if not _complete(out_dir, first, min(SHARD_SIZE, seed + games - first))
-    ]
-    if missing and finished:
-        log(f"self-play: {len(missing)} lost shards shared with {finished}")
-        weight = dict(zip([host for host, _ in hosts], weights[1:]))
-        alive = [(host, count) for host, count in hosts if host in finished]
-        counts = [
-            size // SHARD_SIZE + (size % SHARD_SIZE > 0)
-            for _, size in split(
-                len(missing) * SHARD_SIZE,
-                0,
-                local_processes,
-                alive,
-                [weights[0]] + [weight[host] for host, _ in alive],
-            )
-        ]
-        chunks, start = [], 0
-        for count in counts:
-            shards = missing[start : start + count]
-            start += count
-            # One range per machine; it may span shards already here, which
-            # replay to the same games (fixed seeds), and only when a host's
-            # copy-back partly worked.
-            end = min(shards[-1] + SHARD_SIZE, seed + games) if shards else 0
-            chunks.append((shards[0], end - shards[0]) if shards else (0, 0))
-        wave(
-            chunks[0],
-            [
-                (host, count, first, size)
-                for (host, count), (first, size) in zip(alive, chunks[1:])
-            ],
+    def launch(host, processes, argv):
+        argv = argv + ["--parts-stream", "--workers", processes]
+        state = {"sent": set(), "dead": False, "failed": False, "games": 0}
+        state["seconds"] = 0.0
+        thread = threading.Thread(
+            target=serve, args=(host, processes, argv, state), daemon=True
         )
+        thread.start()
+        machines.append((host, thread, state))
 
-    for first, size in remote_ranges:
-        if size and not _complete(out_dir, first, size):
-            log(f"self-play: {size} additional games here")
-            selfplay.run(net_path, out_dir, games=size, seed=first, **options)
+    try:
+        if queue:
+            os.makedirs(parts_dir, exist_ok=True)
+            log(f"self-play: {total} parts of {PART_SIZE} games in a queue")
+            # This machine plays while the hosts are prepared.
+            launch(HERE, local_processes, here + local_flags)
+            # All hosts at once: one after another took 3.3 minutes for 22
+            # (round 77).
+            for host, argv in _each_host(prepare, [host for host, _ in hosts]):
+                if argv is None:
+                    log(f"could not prepare {host}; the others play its share")
+                else:
+                    launch(host, dict(hosts)[host], argv + flags)
+        while any(thread.is_alive() for _, thread, _ in machines):
+            merge_ready()
+            if len(arrived) == total:
+                # Every part is here: stop the machines still playing a copy.
+                for host, thread, state in machines:
+                    process = state.get("process")
+                    if process and not state.get("stopped") and process.poll() is None:
+                        log(f"self-play: stopping {host}, its parts are here")
+                        stop(host, state)
+            time.sleep(1)
+    except BaseException:
+        for host, _, state in machines:
+            if state.get("process"):
+                stop(host, state)
+        raise
+    for _, thread, _ in machines:
+        thread.join()
+    merge_ready()
+    if machines:
+        log(
+            "self-play games by host: "
+            + ", ".join(
+                f"{host} {state['games']} in {state['seconds']:.0f} s"
+                for host, _, state in machines
+            )
+        )
+    for host, _, state in machines:
+        if state["failed"]:
+            log(f"{host} stopped with parts unfinished; they were played elsewhere")
+
+    for shard in list(shards):
+        log(f"self-play: {shard[1]} additional games here")
+        selfplay.run(net_path, out_dir, games=shard[1], seed=shard[0], **options)
     if not _complete(out_dir, seed, games):
         raise RuntimeError("self-play round has missing shards; training cannot start")
-    log(f"self-play complete across {machines} machines: {games} games")
+    worked = sum(1 for _, _, state in machines if state["games"])
+    log(f"self-play complete across {worked} machines: {games} games")
 
 
 def _safe(host):
