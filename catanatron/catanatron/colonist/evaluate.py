@@ -296,6 +296,21 @@ def _run(tasks, workers, hosts=None):
         yield from pool.imap(play_game, tasks, chunksize=1)
 
 
+def _indexed(item):
+    return item[0], play_game(item[1])
+
+
+def _stream(items, workers):
+    """Plays (index, task) pairs as they arrive, yielding (index, result) as
+    each finishes, in any order."""
+    if workers == 1:
+        yield from map(_indexed, items)
+        return
+    ctx = multiprocessing.get_context("spawn")
+    with ctx.Pool(workers) as pool:
+        yield from pool.imap_unordered(_indexed, items, chunksize=1)
+
+
 def _name(spec):
     return spec if isinstance(spec, str) else getattr(spec, "__name__", repr(spec))
 
@@ -312,7 +327,14 @@ def main(argv=None):
         "--tasks-stdin",
         action="store_true",
         help="play game tasks given as JSON lines on stdin, one result per line "
-        "on stdout (how distributed.run_tasks uses a worker)",
+        "on stdout",
+    )
+    parser.add_argument(
+        "--tasks-stream",
+        action="store_true",
+        help="play [index, task] JSON lines from stdin as they arrive, printing "
+        "each result with its index as it finishes (how distributed.run_tasks "
+        "uses a worker)",
     )
     parser.add_argument("--games", type=int, default=1000)
     parser.add_argument("--seed", type=int, default=0, help="first board seed")
@@ -339,6 +361,14 @@ def main(argv=None):
         tasks = [tuple(json.loads(line)) for line in sys.stdin if line.strip()]
         for game in _run(tasks, args.workers):
             print(json.dumps(dataclasses.asdict(game)), flush=True)
+        return 0
+    if args.tasks_stream:
+        import dataclasses
+        import json
+
+        lines = (json.loads(line) for line in sys.stdin if line.strip())
+        for i, game in _stream(((i, tuple(t)) for i, t in lines), args.workers):
+            print(json.dumps({"i": i, **dataclasses.asdict(game)}), flush=True)
         return 0
     if not (args.a and args.b):
         parser.error("bots A and B are required")

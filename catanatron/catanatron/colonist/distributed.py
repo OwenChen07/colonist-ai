@@ -676,11 +676,13 @@ def _match_weights(names, selfplay):
 
 
 def run_tasks(tasks, workers=None, hosts=None, log=print):
-    """Plays evaluate.py's game tasks here and on the worker hosts, in
-    proportion to their measured self-play speeds (or processes), and returns
-    the results in task order. A game is a pure function of its task, so where
-    it is played changes nothing. A worker's games that don't come back are
-    played here."""
+    """Plays evaluate.py's game tasks here and on the worker hosts, and returns
+    the results in task order. This machine plays its share by measured speed;
+    the rest are a queue the hosts draw from, one game per process at a time,
+    so they all finish within about a game of each other. A game is a pure
+    function of its task, so where it is played changes nothing. Games that
+    don't come back are played here."""
+    import collections
     import json
     import threading
 
@@ -696,35 +698,23 @@ def run_tasks(tasks, workers=None, hosts=None, log=print):
     names = ["local"] + [host for host, _ in hosts]
     weights = _match_weights(names, selfplay_capacities(local, hosts))
     started = time.monotonic()
-    cuts = [
-        round(len(tasks) * sum(weights[:i]) / sum(weights))
-        for i in range(len(weights) + 1)
-    ]
-    chunks = list(zip(cuts, cuts[1:]))
-    span = {host: (p, ab) for (host, p), ab in zip(hosts, chunks[1:]) if ab[0] < ab[1]}
+    here = round(len(tasks) * weights[0] / sum(weights)) if hosts else len(tasks)
+    # Split by speed, round 80's identical t2d VMs still took 283-372 s for
+    # 57 games each, and the 2-core hosts up to 407 s against a median of 318.
+    queue = collections.deque(range(here, len(tasks)))
+    lock = threading.Lock()
+    results = [None] * len(tasks)
 
     def prepare(host):
-        a, b = span[host][1]
         _sync_code(host, key, root)
-        return "".join(
-            json.dumps(list(t)) + "\n"
-            for t in _remote_specs(host, key, root, tasks[a:b])
-        )
+        return [json.dumps(list(t)) for t in _remote_specs(host, key, root, tasks)]
 
-    remote = []
-    # All hosts at once, so the first ones don't finish while the last start.
-    for host, lines in _each_host(
-        prepare, list(span), (subprocess.CalledProcessError, OSError)
-    ):
-        processes, (a, b) = span[host]
-        if lines is None:
-            log(f"could not prepare {host}; its games run here")
-            continue
+    def serve(host, processes, lines, out):
         argv = [
             root / ".venv/bin/python",
             "-m",
             "catanatron.colonist.evaluate",
-            "--tasks-stdin",
+            "--tasks-stream",
             "--workers",
             processes,
         ]
@@ -735,39 +725,71 @@ def run_tasks(tasks, workers=None, hosts=None, log=print):
             stderr=subprocess.DEVNULL,
             text=True,
         )
-        out = {}
-        thread = threading.Thread(
-            target=lambda p=process, o=out, s=lines: o.update(
-                zip(("stdout", "stderr"), p.communicate(s)),
-                seconds=time.monotonic() - started,
-            )
-        )
+        sent = set()
+
+        def send():
+            if process.stdin.closed:
+                return
+            with lock:
+                i = queue.popleft() if queue else None
+            if i is None:
+                process.stdin.close()
+                return
+            sent.add(i)
+            process.stdin.write(f"[{i}, {lines[i]}]\n")
+            process.stdin.flush()
+
+        try:
+            for _ in range(processes):
+                send()
+            for line in process.stdout:
+                try:
+                    game = json.loads(line)
+                    i = game.pop("i")
+                    results[i] = evaluate.GameResult(**game)
+                except (ValueError, TypeError, KeyError, IndexError):
+                    break
+                sent.discard(i)
+                out["games"] += 1
+                send()
+        except OSError:
+            pass
+        process.kill()
+        process.wait()
+        out["seconds"] = time.monotonic() - started
+        out["failed"] = bool(sent)
+        with lock:  # still-running hosts may take them; the rest are played here
+            queue.extend(sorted(sent))
+
+    threads = []
+    # All hosts at once, so the first ones don't finish while the last start.
+    for (host, processes), (_, lines) in zip(
+        hosts,
+        _each_host(
+            prepare, [h for h, _ in hosts], (subprocess.CalledProcessError, OSError)
+        ),
+    ):
+        if lines is None:
+            log(f"could not prepare {host}; the others play its games")
+            continue
+        out = {"games": 0}
+        thread = threading.Thread(target=serve, args=(host, processes, lines, out))
         thread.start()
-        remote.append((host, (a, b), process, thread, out))
-    results = [None] * len(tasks)
-    a, b = chunks[0]
-    for i, game in zip(range(a, b), evaluate._run(tasks[a:b], local)):
+        threads.append((host, thread, out))
+    for i, game in zip(range(here), evaluate._run(tasks[:here], local)):
         results[i] = game
     seconds = time.monotonic() - started
-    times = [f"here {b - a} in {seconds:.0f} s"]
-    if b > a:
-        _match_rates["local"] = (b - a) / max(seconds, 1)
-    for host, (a, b), process, thread, out in remote:
+    times = [f"here {here} in {seconds:.0f} s"]
+    if here:
+        _match_rates["local"] = here / max(seconds, 1)
+    for host, thread, out in threads:
         thread.join()
-        times.append(f"{host} {b - a} in {out.get('seconds', 0):.0f} s")
-        games = []
-        for line in (out.get("stdout") or "").splitlines():
-            try:
-                games.append(evaluate.GameResult(**json.loads(line)))
-            except (ValueError, TypeError):
-                break
-        if process.returncode or len(games) != b - a:
-            log(f"{host} returned {len(games)} of {b - a} games; playing the rest here")
+        times.append(f"{host} {out['games']} in {out['seconds']:.0f} s")
+        if out["failed"]:
+            log(f"{host} stopped with games unfinished; they are played elsewhere")
             _match_rates.pop(host, None)
-        else:
-            _match_rates[host] = (b - a) / max(out["seconds"], 1)
-        for i, game in zip(range(a, b), games):
-            results[i] = game
+        elif out["games"]:
+            _match_rates[host] = out["games"] / max(out["seconds"], 1)
     log("evaluation games by host: " + ", ".join(times))
     missing = [i for i, game in enumerate(results) if game is None]
     for i, game in zip(missing, evaluate._run([tasks[i] for i in missing], local)):

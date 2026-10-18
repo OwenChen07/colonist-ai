@@ -128,7 +128,7 @@ def test_evaluation_games_on_workers_match_local_play(tmp_path, monkeypatch):
     monkeypatch.setattr(distributed, "_sync_code", lambda *a: None)
     tasks = list(evaluate.tasks_for(f"Z:{net}:2", f"ZE:{net}:2", range(5, 8), {}))
     here = list(evaluate._run(tasks, 1))
-    spread = distributed.run_tasks(tasks, 1, [("w@x", 1), ("w@y", 1)], log=print)
+    spread = distributed.run_tasks(tasks, 1, [("w@x", 1), ("w@y", 2)], log=print)
     assert spread == here
 
 
@@ -142,6 +142,30 @@ def test_a_failed_worker_s_games_are_played_here(tmp_path, monkeypatch):
     games = distributed.run_tasks(tasks, 1, [("w@x", 2)], log=logs.append)
     assert games == list(evaluate._run(tasks, 1))
     assert logs
+
+
+def test_a_failed_worker_s_queued_games_go_to_the_other_workers(monkeypatch):
+    import sys
+
+    from catanatron.colonist import distributed, evaluate
+
+    def ssh(host, key, argv):
+        if host == "w@x":
+            return ["false"]
+        return [sys.executable, *map(str, argv[1:])]
+
+    monkeypatch.setattr(distributed, "_sync_code", lambda *a: None)
+    monkeypatch.setattr(distributed, "_remote_specs", lambda h, k, r, tasks: tasks)
+    monkeypatch.setattr(distributed, "_ssh", ssh)
+    monkeypatch.setattr(distributed, "_match_rates", {})
+    monkeypatch.delenv("COLONIST_WORKERS_FILE", raising=False)
+    monkeypatch.setenv("COLONIST_SELFPLAY_CAPACITIES", "local:1,w@x:1,w@y:8")
+    tasks = list(evaluate.tasks_for("R", "W", range(4), {}))
+    logs = []
+    games = distributed.run_tasks(tasks, 1, [("w@x", 1), ("w@y", 1)], log=logs.append)
+    assert games == list(evaluate._run(tasks, 1))
+    assert any(line.startswith("w@x stopped") for line in logs)
+    assert list(distributed._match_rates) == ["local", "w@y"]
 
 
 def test_evaluation_games_are_split_by_measured_speed(tmp_path, monkeypatch):
@@ -162,7 +186,7 @@ def test_evaluation_games_are_split_by_measured_speed(tmp_path, monkeypatch):
     tasks = list(evaluate.tasks_for("R", "W", range(5), {}))
     logs = []
     games = distributed.run_tasks(tasks, 4, [("w@x", 4), ("w@y", 4)], log=logs.append)
-    assert sent == {"w@x": 1, "w@y": 8}  # 10 tasks: 1 here, then 1 and 8
+    assert sent == {"w@x": 10, "w@y": 10}  # the hosts draw from a queue
     assert games == list(evaluate._run(tasks, 1))
     assert any(line.startswith("evaluation games by host: here 1") for line in logs)
     # Only the hosts that returned all their games keep a measured speed.
