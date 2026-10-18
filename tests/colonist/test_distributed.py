@@ -263,6 +263,68 @@ def test_idle_machines_take_a_straggler_s_unstarted_shards(tmp_path, monkeypatch
     assert any("stopping w@slow" in line for line in logs)
 
 
+def test_a_fast_idle_host_also_plays_a_slow_host_s_started_shard(tmp_path, monkeypatch):
+    from catanatron.colonist import distributed
+    from catanatron.colonist.datagen import shard_path
+
+    out = tmp_path / "run" / "round" / "data"
+    played = {}
+    assigned = {}
+
+    def play(where, first, games):
+        for start in range(first, first + games, distributed.SHARD_SIZE):
+            path = shard_path(
+                out, start, min(distributed.SHARD_SIZE, first + games - start)
+            )
+            if not os.path.isfile(path):
+                played.setdefault(start, []).append(where)
+                open(path, "w").close()
+
+    def seed_range(argv):
+        argv = [str(a) for a in argv]
+        return int(argv[argv.index("--seed") + 1]), int(argv[argv.index("--games") + 1])
+
+    def ssh(host, key, argv):
+        if "--seed" not in map(str, argv):
+            return ["true"]
+        assigned.setdefault(host, []).append(seed_range(argv))
+        return ["sleep", "60"] if host == "w@slow" else ["true"]
+
+    def rsync(key, source, destination):
+        host = str(source).split(":")[0]
+        if host == "w@fast":  # the slow host's one shard never ends
+            for first, games in assigned[host]:
+                play(host, first, games)
+
+    monkeypatch.setenv("COLONIST_WORKER_HOSTS", "w@slow:2,w@fast:4")
+    monkeypatch.setenv("COLONIST_SELFPLAY_CAPACITIES", "local:10,w@slow:5,w@fast:40")
+    monkeypatch.delenv("COLONIST_WORKERS_FILE", raising=False)
+    monkeypatch.setattr(distributed, "STEAL_POLL", 0)
+    monkeypatch.setattr(distributed, "_prepare", lambda *a: ["selfplay"])
+    monkeypatch.setattr(distributed, "_remote_opponents", lambda *a: [])
+    monkeypatch.setattr(distributed, "_ssh", ssh)
+    monkeypatch.setattr(
+        distributed, "_local", lambda argv: play("here", *seed_range(argv)) or ["true"]
+    )
+    monkeypatch.setattr(distributed, "_rsync", rsync)
+    monkeypatch.setattr(
+        distributed.selfplay,
+        "run",
+        lambda net, out_dir, games, seed, **o: play("here", seed, games),
+    )
+    logs = []
+    distributed.run("net.npz", out, games=6 * 64, seed=0, workers=2, log=logs.append)
+
+    assert distributed._complete(out, 0, 6 * 64)
+    (slow_first, slow_games), *_ = assigned["w@slow"]
+    assert slow_games == 64
+    assert played[slow_first] == ["w@fast"]
+    assert assigned["w@fast"][-1] == (slow_first, 64)
+    assert any("w@fast also plays 64 games" in line for line in logs)
+    assert not any("here also plays" in line for line in logs)
+    assert any("stopping w@slow" in line for line in logs)
+
+
 def test_an_unprepared_host_s_range_is_taken_while_a_straggler_plays(
     tmp_path, monkeypatch
 ):

@@ -196,6 +196,7 @@ def run(
     weights = selfplay_capacities(local_processes, hosts)
     ranges = split(games, seed, local_processes, hosts, weights)
     log(f"self-play allocation weights: {weights} (local, then configured hosts)")
+    capacity = dict(zip([HERE] + [host for host, _ in hosts], weights))
     (local_seed, local_games), remote_ranges = ranges[0], ranges[1:]
     round_name = Path(out_dir).parent.name
     run_name = Path(out_dir).parent.parent.name
@@ -429,12 +430,35 @@ def run(
             tail = tail[-min(count, share) :] if tail else []
             if len(tail) > len(best):
                 best, source = tail, victim
+        verb = "takes"
+        if not best:
+            best, source = duplicate(host, running, taken)
+            verb = "also plays"
         if not best:
             return None
         taken.update(s[0] for s in best)
         first, size = best[0][0], sum(n for _, n in best)
-        log(f"self-play: {host} takes {size} games (seeds {first}+) from {source}")
+        log(f"self-play: {host} {verb} {size} games (seeds {first}+) from {source}")
         return launch(host, count, first, size)
+
+    def duplicate(host, running, taken):
+        """With nothing unstarted left, a shard that a host under half this
+        one's capacity is playing: round 76 waited 4 minutes on a 2-core AWS
+        worker's last shard (30 s a game per process) after the fleet was
+        done. The slowest such host's shard; the copy that lands first is
+        kept, and wave() stops the other once every shard is here."""
+        best, source, slowest = [], None, capacity[host] / 2
+        for victim, _, first, size in (job[:4] for job in running):
+            if victim == host or capacity[victim] >= slowest:
+                continue
+            missing = [
+                s
+                for s in shards_of(first, size)
+                if s[0] not in taken and not os.path.isfile(shard_path(out_dir, *s))
+            ]
+            if missing:
+                best, source, slowest = missing[-1:], victim, capacity[victim]
+        return best, source
 
     jobs = [
         (host, count, first, size)
