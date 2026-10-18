@@ -564,18 +564,29 @@ def run(
             )
     processes = workers or os.cpu_count() or 1
     parts = {}  # shard path -> its part paths, when played in parts
-    if 0 < len(tasks) < processes:
+    # The shards past the last full wave are cut into parts for every
+    # process: round 76's 4-process VMs each had 5 shards, and played the
+    # fifth on one process for 8 of their 16 minutes, three processes idle.
+    rest = len(tasks) % processes
+    if rest:
         parts_dir = os.path.join(out_dir, "parts")
-        pieces = -(-processes // len(tasks))
-        whole, tasks = tasks, []
-        for task in whole:
+        pieces = -(-processes // rest)
+        shards, tasks = tasks, tasks[: len(tasks) - rest]
+        for task in shards[len(tasks) :]:
             paths = []
             for first, count in parts_of(task[2], task[3], pieces):
                 paths.append(shard_path(parts_dir, first, count))
                 if not os.path.exists(paths[-1]):
                     tasks.append((parts_dir, task[1], first, count, *task[4:]))
             parts[shard_path(out_dir, task[2], task[3])] = paths
-        log(f"{len(whole)} shards to play, in {len(tasks)} parts")
+        if rest == len(shards):
+            log(f"{len(shards)} shards to play, in {len(tasks)} parts")
+        else:
+            whole = len(shards) - rest
+            log(
+                f"{len(shards)} shards to play, the last {rest} in "
+                f"{len(tasks) - whole} parts"
+            )
     else:
         log(f"{len(tasks)} shards to play")
 

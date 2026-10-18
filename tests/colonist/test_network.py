@@ -278,6 +278,34 @@ def test_a_lone_shard_is_played_in_parts_and_merged_to_the_same_data(tmp_path):
             assert np.array_equal(a[key], b[key]), key
 
 
+def test_shards_past_the_last_full_wave_are_played_in_parts(tmp_path):
+    from catanatron.colonist import selfplay
+
+    net_path = str(tmp_path / "net.npz")
+    random_net(hidden=(16,)).save(net_path)
+    last, *_ = selfplay.run_shard(
+        (str(tmp_path / "one"), net_path, 18, 8, {"simulations": 4})
+    )
+    lines = []
+    selfplay.run(
+        net_path,
+        str(tmp_path / "sp"),
+        games=24,
+        seed=2,
+        simulations=4,
+        shard_size=8,
+        workers=2,
+        log=lines.append,
+    )
+    assert "3 shards to play, the last 1 in 2 parts" in lines
+    assert os.listdir(tmp_path / "sp" / "parts") == []
+    names = sorted(os.path.basename(p) for p in glob.glob(str(tmp_path / "sp/*.npz")))
+    assert len(names) == 3 and os.path.basename(last) in names
+    with np.load(last) as a, np.load(tmp_path / "sp" / os.path.basename(last)) as b:
+        for key in a.files:
+            assert np.array_equal(a[key], b[key]), key
+
+
 def test_selfplay_shard_and_mixed_training(tmp_path):
     from catanatron.colonist.datagen import load, run_shard as bot_shard
     from catanatron.colonist.selfplay import run_shard
