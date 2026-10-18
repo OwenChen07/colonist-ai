@@ -377,6 +377,11 @@ if prompt == "watcher":
     print(json.dumps({"type": "result", "result": "the watcher fired",
                       "session_id": "s1", "total_cost_usd": 0.6,
                       "origin": {"kind": "task-notification"}}), flush=True)
+if prompt == "waiter":
+    summary = 'Round done.\\n```json\\n{"status": "progress", "post": "p"}\\n```'
+    print(json.dumps({"type": "result", "result": summary,
+                      "session_id": "s1", "total_cost_usd": 0.7,
+                      "origin": {"kind": "task-notification"}}), flush=True)
 """
 
 
@@ -405,6 +410,15 @@ def test_a_background_watcher_s_wakeup_does_not_replace_the_real_result(tmp_path
     (result, said, _, _), _ = stream(tmp_path, "watcher", 30)
     assert result["result"] == "done" and result["total_cost_usd"] == 0.5
     assert said.endswith("the watcher fired")
+
+
+def test_a_summary_that_arrives_with_the_watcher_s_wakeup_is_kept(tmp_path):
+    # Oct 18: four efficiency runs ended their first turn with "waiting for the
+    # round", wrote the JSON summary when the watcher fired, and were filed as
+    # failed because the first result was kept.
+    (result, _, _, _), _ = stream(tmp_path, "waiter", 30)
+    assert result["total_cost_usd"] == 0.7
+    assert agent.final_json(result["result"]) == {"status": "progress", "post": "p"}
 
 
 def test_a_timed_out_run_keeps_what_it_said(tmp_path):

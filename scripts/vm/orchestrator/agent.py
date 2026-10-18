@@ -318,11 +318,15 @@ def stream_claude(command, prompt, *, cwd, env, log, timeout=None):
                 if event.get("type") == "result":
                     # A background watcher (Monitor, run_in_background) can wake
                     # the agent after its final message and add a result of its
-                    # own, a one-liner without the JSON summary. Keep the real one.
+                    # own. Either order happens: the JSON summary first and then
+                    # a one-liner, or "waiting for the round" first and the
+                    # summary once the watcher fires. Keep the result that has
+                    # the summary; among the agent's own, the last one.
                     wakeup = (event.get("origin") or {}).get(
                         "kind"
                     ) == "task-notification"
-                    if result is None or not wakeup:
+                    summary = final_json(str(event.get("result") or "")) is not None
+                    if result is None or not wakeup or summary:
                         result = event
                 elif event.get("type") == "assistant":
                     for part in (event.get("message") or {}).get("content") or []:
