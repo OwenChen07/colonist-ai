@@ -67,6 +67,24 @@ def test_input_sizes(positions):
             assert np.isfinite(dynamic).all()
 
 
+def test_dice_block_shared_by_state_matches_a_fresh_one(positions):
+    """The dice block is looked up by the dice's state, so equal dice reached
+    on different branches share it; it must match one computed afresh."""
+    dice_at = E.DYNAMIC_SIZE - E.DICE_SIZE
+    E._dice_memo.clear()
+    for game in positions[::3]:
+        dice = game.state.dice
+        assert dice is not None
+        for color in game.state.colors:
+            them = [c for c in game.state.colors if c != color][0]
+            for _ in range(2):  # the second time, the memo answers
+                dice._cache.clear()
+                dynamic = E.encode(game, color)[1]
+                fresh = np.array(E._dice_features(dice, color, them), np.float32)
+                assert np.array_equal(dynamic[dice_at:], fresh)
+    assert E._dice_memo
+
+
 def _set_dev_hand(game, color, cards):
     key = player_key(game.state, color) + "_"
     ps = game.state.player_state

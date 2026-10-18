@@ -294,8 +294,31 @@ def _dice_block(v, dice, me, them):
     key = ("encoded", me, them)
     cached = dice._cache.get(key)
     if cached is None:
-        cached = dice._cache[key] = _dice_features(dice, me, them)
+        # Most rolls in a search repeat one made on another branch (the same
+        # total from the same dice), so also look the block up by the state.
+        state = (
+            dice.mode,
+            dice.cards_left,
+            tuple(map(len, dice.deck)),
+            tuple(dice.recent),
+            frozenset(dice.sevens.items()),
+            dice.streak_color,
+            dice.streak_count,
+            dice.num_players,
+            me,
+            them,
+        )
+        cached = _dice_memo.get(state)
+        if cached is None:
+            if len(_dice_memo) >= _DICE_MEMO_SIZE:
+                _dice_memo.clear()
+            cached = _dice_memo[state] = _dice_features(dice, me, them)
+        dice._cache[key] = cached
     v += cached
+
+
+_dice_memo = {}
+_DICE_MEMO_SIZE = 20_000  # about 50 MB
 
 
 def _dice_features(dice, me, them):
