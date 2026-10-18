@@ -126,10 +126,23 @@ def action_index(action):
     return _action_index()[action_key(action)]
 
 
+_index_of_action = {}
+
+
 def legal_indices(actions):
     """Indices of these actions, in the same order."""
-    index = _action_index()
-    return [index[action_key(a)] for a in actions]
+    # Keyed on the Action itself (a few hundred distinct ones per game), so
+    # the search's repeat lookups skip action_key.
+    memo = _index_of_action
+    out = []
+    for a in actions:
+        i = memo.get(a)
+        if i is None:
+            if len(memo) > 100_000:
+                memo.clear()
+            i = memo[a] = _action_index()[action_key(a)]
+        out.append(i)
+    return out
 
 
 # ===== the board (static)

@@ -296,6 +296,11 @@ def forward_np(params, statics, dynamic, layers):
     def per(index):
         return x[:, index].transpose(1, 0, 2)
 
+    def mean0(h):
+        # h.mean(0)'s own two ufunc calls, without its Python wrapper.
+        s = np.add.reduce(h, 0)
+        return np.true_divide(s, np.intp(h.shape[0]), out=s, casting="unsafe")
+
     t = relu(linear("tile_in", per(topo["tile_in"])))
     n = relu(linear("node_in", per(topo["node_in"])))
     e = relu(linear("edge_in", per(topo["edge_in"])))
@@ -318,7 +323,7 @@ def forward_np(params, statics, dynamic, layers):
         )
         e2 = relu(linear_g(f"edge{l}", cat([e, gather("edge_node", n)], -1)))
         t2 = relu(linear_g(f"tile{l}", cat([t, gather("tile_node", n)], -1)))
-        pooled = cat([g, n.mean(0), e.mean(0), t.mean(0)], -1)
+        pooled = cat([g, mean0(n), mean0(e), mean0(t)], -1)
         g2 = relu(pooled @ params[f"glob{l}"][0] + params[f"glob{l}"][1])
         n, e, t, g = n + n2, e + e2, t + t2, g + g2
 
