@@ -137,6 +137,19 @@ def split_by_game(seeds, val_fraction):
     return h < val_fraction * 1000
 
 
+def shard_paths(folders):
+    """The shard files in `folders` (a folder listed twice is listed twice),
+    without the temporary files shards are written through
+    (shard_*.npz.tmp.npz): one a writer didn't finish stays behind and isn't a
+    readable npz (round 83's data held two)."""
+    return sorted(
+        p
+        for d in folders
+        for p in glob.glob(os.path.join(d, "shard_*.npz"))
+        if not p.endswith(".tmp.npz")
+    )
+
+
 def select_shards(paths, max_positions, seed=0):
     """A random subset of shard files holding at most about `max_positions`
     positions (rounded up to a whole shard), for a machine whose memory can't
@@ -505,9 +518,7 @@ def main(argv=None):
 
     torch.manual_seed(args.seed)
     device = pick_device(args.device)
-    paths = sorted(
-        p for d in args.data for p in glob.glob(os.path.join(d, "shard_*.npz"))
-    )
+    paths = shard_paths(args.data)
     if not paths:
         print("no shards found", file=sys.stderr)
         return 1

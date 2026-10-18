@@ -454,6 +454,21 @@ def test_a_shard_subset_stays_near_the_position_limit(tmp_path):
     assert len(select_shards(paths + paths[:1], 10_000)) == 11  # a repeat counts
 
 
+def test_an_unfinished_shard_write_is_not_a_shard(tmp_path):
+    """Round 83's data held shard_*.npz.tmp.npz files a writer didn't finish
+    next to the finished shards; training failed reading them."""
+    import numpy as np
+
+    from catanatron.colonist.train import shard_paths
+
+    np.savez(tmp_path / "shard_0_64.npz", game=np.zeros(3, np.int32))
+    (tmp_path / "shard_0_64.npz.tmp.npz").write_bytes(b"PK\x03\x04trunc")
+    (tmp_path / "parts").mkdir()
+    folder = str(tmp_path)
+    assert shard_paths([folder]) == [str(tmp_path / "shard_0_64.npz")]
+    assert len(shard_paths([folder, folder])) == 2  # a repeat counts
+
+
 def test_training_on_a_gpu_host_and_falling_back_here(tiny_args, monkeypatch):
     pytest.importorskip("torch")
     import shutil
