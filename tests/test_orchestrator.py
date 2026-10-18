@@ -603,6 +603,77 @@ def test_a_restarted_bot_follows_its_workers_and_posts_what_they_left(
     assert not discord_bot.alive(worker.pid)
 
 
+def test_attachment_names():
+    mb = 1024 * 1024
+    assert core.attachment_name("s", 1, "Shot.PNG", "image/png", mb) == "s-1.png"
+    assert core.attachment_name("s", 2, "image", "image/jpeg", mb) == "s-2.jpg"
+    assert (
+        core.attachment_name("s", 3, "notes", "text/plain; charset=utf-8", 5)
+        == "s-3.txt"
+    )
+    assert core.attachment_name("s", 4, "a.log", None, 5) == "s-4.log"
+    assert core.attachment_name("s", 5, "big.png", "image/png", 9 * mb) is None
+    assert core.attachment_name("s", 6, "run.exe", "application/x-msdos", 5) is None
+    assert core.with_attachments("", ["/x/s-1.png"]) == "[attachment: /x/s-1.png]"
+    text = core.with_attachments("look", ["/x/s-1.png"], ["run.exe"])
+    assert text.splitlines()[:2] == ["look", "[attachment: /x/s-1.png]"]
+    assert "run.exe" in text.splitlines()[2]
+
+
+def test_an_image_only_message_reaches_the_inbox_and_the_lead(tmp_path, monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    import discord
+    import discord_bot
+
+    monkeypatch.setattr(discord_bot, "STATE", tmp_path)
+    monkeypatch.setattr(discord_bot, "WORKSTREAMS", ["live-loss"])
+    orchestrator = discord_bot.Orchestrator(1, 2)
+    chats = []
+
+    async def chat(message, text):
+        chats.append(text)
+
+    orchestrator.chat = chat
+
+    class Attachment:
+        def __init__(self, filename, content_type, size):
+            self.filename, self.content_type, self.size = filename, content_type, size
+
+        async def save(self, path):
+            Path(path).write_bytes(b"\x89PNG")
+
+    def message(channel, attachments):
+        async def react(emoji):
+            pass
+
+        return SimpleNamespace(
+            author=SimpleNamespace(bot=False, id=2),
+            type=discord.MessageType.default,
+            channel=SimpleNamespace(name=channel),
+            content="",
+            attachments=attachments,
+            reference=None,
+            add_reaction=react,
+        )
+
+    png = Attachment("shot.png", "image/png", 4)
+    asyncio.run(orchestrator.on_message(message("live-loss", [png])))
+    inbox = (tmp_path / "workstreams" / "live-loss" / "inbox.md").read_text()
+    saved = re.search(r"\[attachment: (\S+)\]", inbox).group(1)
+    assert Path(saved).is_absolute() and Path(saved).read_bytes() == b"\x89PNG"
+    assert Path(saved).parent == (tmp_path / "chat").resolve()
+    asyncio.run(orchestrator.on_message(message(discord_bot.LEAD, [png])))
+    assert len(chats) == 1 and chats[0].startswith("[attachment: ")
+    # Nothing to pass on: no text and no file that could be saved.
+    exe = Attachment("run.exe", "application/x-msdos", 4)
+    asyncio.run(orchestrator.on_message(message(discord_bot.LEAD, [exe])))
+    assert len(chats) == 2 and "not saved" in chats[1]
+    asyncio.run(orchestrator.on_message(message(discord_bot.LEAD, [])))
+    assert len(chats) == 2
+
+
 def test_only_the_lead_may_restart_the_bot():
     restart = "Bash(scripts/vm/orchestrator/restart_bot.sh:*)"
     assert restart in agent.allowed_tools("lead")

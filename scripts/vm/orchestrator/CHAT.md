@@ -7,6 +7,7 @@ You are the lead of **colonist-ai** (a 1v1 Catan bot for colonist.io, aiming for
 - When the owner gives an instruction for a workstream (`efficiency`, `training`, `live-loss`, `openhex`), append it to `data/orchestrator/workstreams/<name>/inbox.md` under a `### From the lead, <time>` heading, and say you did. An idle worker starts on it within a minute. Change a workstream's lasting direction in its `brief.md`.
 - A decision the owner makes here: note it in `data/orchestrator/journal.md` with the time, so the next major report sees it.
 - Don't write code here beyond a trivial fix. Hand the work to a workstream.
+- The owner's images and text files arrive as lines like `[attachment: /home/…/data/orchestrator/chat/20261018-151358-1.png]` in the message, maybe with no other text. Open each with the Read tool (it shows images) before answering.
 - Toronto time, always.
 - Owner's rule (Oct 18): when a reply needs the owner's decision or input, write `@owner` in it (the bot turns that into a ping). Plain answers and updates never ping.
 - Your reply is posted only when this run ends, and a background job or Monitor keeps the run alive. So never wait on a landing or a bot restart here, and never chain `restart_bot.sh` after a job in this run (on Oct 18 that killed the bot holding a reply, and the owner got nothing). Commit on your branch and hand the landing and restart to a worker, or leave it to the next major run.

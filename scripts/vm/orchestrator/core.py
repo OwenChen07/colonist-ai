@@ -269,6 +269,49 @@ def button_label(i, option):
     return f"{i + 1} ★" if re.match(r"\s*recommended:", option, re.I) else str(i + 1)
 
 
+ATTACHMENT_MAX = 8 * 1024 * 1024
+TEXT_SUFFIXES = {
+    ".txt",
+    ".md",
+    ".log",
+    ".json",
+    ".jsonl",
+    ".csv",
+    ".py",
+    ".yaml",
+    ".yml",
+}
+IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+
+
+def attachment_name(stamp, n, filename, content_type, size):
+    """Where an owner's attachment is saved ('<stamp>-<n><ext>'), or None if
+    it isn't an image or text file up to ATTACHMENT_MAX."""
+    suffix = Path(filename or "").suffix.lower()
+    kind = (content_type or "").split(";")[0].strip().lower()
+    if size > ATTACHMENT_MAX:
+        return None
+    if suffix in IMAGE_SUFFIXES | TEXT_SUFFIXES:
+        return f"{stamp}-{n}{suffix}"
+    if kind.startswith("image/") and kind[6:] in ("png", "jpeg", "gif", "webp"):
+        return f"{stamp}-{n}.{'jpg' if kind == 'image/jpeg' else kind[6:]}"
+    if kind.startswith("text/"):
+        return f"{stamp}-{n}.txt"
+    return None
+
+
+def with_attachments(text, paths, skipped=()):
+    """The message text with a line per saved attachment (the reader opens
+    the path with its Read tool) and per one left out."""
+    lines = [text] if text else []
+    lines += [f"[attachment: {p}]" for p in paths]
+    lines += [
+        f"[attachment not saved (not an image or text file, or over 8 MB): {s}]"
+        for s in skipped
+    ]
+    return "\n".join(lines)
+
+
 def chosen(options, reply):
     """The option a reply picks by number ('2', '#2', 'option 2'), else None."""
     match = re.fullmatch(r"\s*(?:option\s*|#)?(\d+)\s*\.?\s*", reply, re.I)

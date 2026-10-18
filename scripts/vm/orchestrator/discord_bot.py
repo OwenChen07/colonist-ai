@@ -567,6 +567,10 @@ class Orchestrator(discord.Client):
         if text.startswith("!"):
             await self.command(message, text)
             return
+        if name in WORKSTREAMS or name == LEAD:
+            text = await self.attachments(message, text)
+            if not text:
+                return
         if name in WORKSTREAMS:
             self.to_inbox(name, f"From the owner: {text}")
             await message.add_reaction("📥")
@@ -594,6 +598,30 @@ class Orchestrator(discord.Client):
                 await message.add_reaction("✅")
                 return
         await self.chat(message, text)
+
+    async def attachments(self, message, text):
+        """Saves the message's images and text files to data/orchestrator/chat
+        and returns the text with a line per file: an image-only message
+        used to arrive empty."""
+        paths, skipped = [], []
+        stamp = f"{utcnow():%Y%m%d-%H%M%S}"
+        for n, attachment in enumerate(message.attachments, 1):
+            file = core.attachment_name(
+                stamp, n, attachment.filename, attachment.content_type, attachment.size
+            )
+            if not file:
+                skipped.append(attachment.filename)
+                continue
+            path = STATE / "chat" / file
+            path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                await attachment.save(path)
+            except (discord.HTTPException, OSError):
+                log.exception("could not save attachment %s", attachment.filename)
+                skipped.append(attachment.filename)
+                continue
+            paths.append(path.resolve())  # the Read tool takes absolute paths
+        return core.with_attachments(text, paths, skipped)
 
     async def chat(self, message, text):
         async with self.chat_lock:
