@@ -168,6 +168,23 @@ class FakeServer:
             raise C.Rejected(f"unknown action {t}")
 
 
+def test_refused_replies():
+    assert C.refused({"success": False, "error": "not your turn"})
+    assert C.refused({"error": "invalid vertex"})
+    assert C.refused({"ok": False})
+    assert not C.refused({})
+    assert not C.refused({"success": True, "events": [], "error": None})
+    assert not C.refused([])
+
+
+def test_pending_of_live_shape():
+    # As the live server sent it (Oct 17, game 86d4348b).
+    state = {"pendingAction": {"players": {"blue": 5}, "type": "discardResources"}}
+    assert C.pending_of(state) == {"players": {"blue": 5}, "type": "discard"}
+    assert C.pending_of({"pending": {"type": "steal"}})["type"] == "steal"
+    assert C.pending_of({"pendingAction": None, "pending": None}) == {}
+
+
 @pytest.mark.parametrize("seed,me", [(0, "red"), (1, "blue")])
 def test_client_plays_a_whole_game(seed, me, monkeypatch, tmp_path):
     monkeypatch.setattr(C, "GAMES_DIR", str(tmp_path))

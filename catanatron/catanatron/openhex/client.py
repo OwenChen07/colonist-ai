@@ -87,7 +87,52 @@ def say(*parts):
 
 
 class Rejected(Exception):
-    """OpenHex refused an action (4xx)."""
+    """OpenHex refused an action (4xx, or a 200 that says it failed)."""
+
+
+def refused(reply):
+    """A 2xx action reply that still reports a failure."""
+    if not isinstance(reply, dict):
+        return False
+    return (
+        reply.get("success") is False
+        or reply.get("ok") is False
+        or reply.get("valid") is False
+        or bool(reply.get("error"))
+    )
+
+
+def pending_of(state):
+    """What OpenHex waits for, as {type: discard | steal | moveRobber |
+    roadBuilding, ...}. The live state says pendingAction (type
+    discardResources, players {color: n}); the guide says pending."""
+    raw = (state or {}).get("pendingAction") or (state or {}).get("pending") or {}
+    t = str(raw.get("type", "")).lower()
+    for word, kind in (
+        ("discard", "discard"),
+        ("steal", "steal"),
+        ("robber", "moveRobber"),
+        ("road", "roadBuilding"),
+    ):
+        if word in t:
+            return dict(raw, type=kind)
+    return dict(raw)
+
+
+def steal(move):
+    """The steal that follows a robber move with a victim. OpenHex's state
+    didn't show it pending in game 1, so it is sent unasked (a refusal is
+    harmless)."""
+    if move.action_type != A.MOVE_ROBBER or move.value[1] is None:
+        return []
+    return [{"type": "stealFromPlayer", "target": openhex_color(move.value[1])}]
+
+
+def short(reply, n=300):
+    """A reply cut for the game file, without the bulky state."""
+    if isinstance(reply, dict):
+        reply = {k: v for k, v in reply.items() if k != "state"}
+    return json.dumps(reply)[:n]
 
 
 class Api:
@@ -138,6 +183,10 @@ class Player:
         self.broken = False  # the simulator lost the game: fallback moves only
         self.mismatch = 0  # polls where OpenHex says we move, the simulator not
         self.pending_seen = set()
+        self.reply_seen = set()
+        self.stole = False  # the last action's reply carried a steal
+        self.dumped = False  # the raw state was saved after a stuck fallback
+        self.tried = (None, [])  # (event seq, fallback actions sent at it)
 
     # ----- logging -----
     def note(self, text):
@@ -153,6 +202,13 @@ class Player:
 
     # ----- the loop -----
     def play(self):
+        try:
+            return self._play()
+        finally:  # a stop or crash keeps the game file up to date
+            if self.follower is not None:
+                self.save()
+
+    def _play(self):
         last_save = time.monotonic()
         while True:
             reply = self.api.call("GET", f"/games/{self.gid}/state")
@@ -167,10 +223,10 @@ class Player:
                 self.note(f"over: {info['status']}, winner {info.get('winner')}")
                 self.save()
                 return info
-            pending = state.get("pending")
-            if pending and pending.get("type") not in self.pending_seen:
-                self.pending_seen.add(pending.get("type"))
-                self.record["notes"].append([stamp(), "pending", pending])
+            raw = state.get("pendingAction") or state.get("pending")
+            if raw and raw.get("type") not in self.pending_seen:
+                self.pending_seen.add(raw.get("type"))
+                self.record["notes"].append([stamp(), "pending", raw])
             if self.must_act(info, state):
                 self.act(info, state)
             if time.monotonic() - last_save > 30:
@@ -214,10 +270,13 @@ class Player:
         if self.broken:
             f.seq = max([f.seq] + [e["seq"] for e in events])
             return
+        known = set(f.unknown)
         try:
             f.feed(events)
         except (OutOfSync, KeyError, ValueError) as e:
             self.lost_sync(e)
+        for t in sorted(f.unknown - known):
+            self.note(f"skipped an unknown event type: {t}")
 
     def lost_sync(self, why):
         self.broken = True
@@ -226,14 +285,14 @@ class Player:
             self.record["notes"].append([stamp(), traceback.format_exc()])
 
     def must_act(self, info, state):
-        pending = state.get("pending") or {}
+        pending = pending_of(state)
         if pending.get("type") == "discard":
             return self.discard_count(state) > 0
         return info.get("current_player_color") == self.me
 
     def discard_count(self, state):
         """Cards we still owe for a 7 (0 if none), from OpenHex's state."""
-        pending = state.get("pending") or {}
+        pending = pending_of(state)
         for key in ("players", "remaining", "discards", "amounts", "counts"):
             v = pending.get(key)
             if isinstance(v, dict) and self.me in v:
@@ -264,7 +323,7 @@ class Player:
     def act(self, info, state):
         started = time.monotonic()
         clock = self.remaining(info)
-        pending = state.get("pending") or {}
+        pending = pending_of(state)
         if pending.get("type") == "steal":
             # In 1v1 the only one to steal from is the opponent.
             return self.send({"type": "stealFromPlayer", "target": self.opponent()})
@@ -329,8 +388,8 @@ class Player:
             g.execute(move, validate_action=False)
             robber, used = self.search(g, left())
             self.moves.append((str(robber), used))
-            return [{"type": "playKnight", "hex": xyz(robber.value[0])}]
-        return [to_openhex(b, game, move)]
+            return [{"type": "playKnight", "hex": xyz(robber.value[0])}] + steal(robber)
+        return [to_openhex(b, game, move)] + steal(move)
 
     @property
     def moves(self):
@@ -345,21 +404,35 @@ class Player:
         if started is not None:
             body["duration_ms"] = int((time.monotonic() - started) * 1000)
         reply = self.api.call("POST", f"/games/{self.gid}/actions", body)
+        if action["type"] not in self.reply_seen:  # the guide doesn't show replies
+            self.reply_seen.add(action["type"])
+            self.record["notes"].append([stamp(), "reply", action, short(reply)])
+        if refused(reply):
+            raise Rejected(f"200 {short(reply)}")
         self.after_send(reply)
         return reply
 
     def after_send(self, reply):
         """A robber move or knight that leaves a steal pending: steal now."""
-        state = (reply or {}).get("state") or {}
-        pending = state.get("pending") or {}
+        reply = reply if isinstance(reply, dict) else {}
+        events = [e.get("event", {}) for e in reply.get("events") or []]
+        self.stole = any(e.get("type") == "resourceStolen" for e in events)
+        state = reply.get("state") or {}
+        pending = pending_of(state)
         if pending.get("type") == "steal":
             self.send({"type": "stealFromPlayer", "target": self.opponent()})
+            self.stole = True
 
     def send_all(self, actions, started):
         for action in actions:
+            if action["type"] == "stealFromPlayer" and self.stole:
+                continue  # the robber move's reply already stole
             try:
                 self.send(action, started)
             except Rejected as e:
+                if action["type"] == "stealFromPlayer":
+                    self.note(f"steal refused (none was due?): {e}")
+                    continue
                 self.lost_sync(f"{action} rejected: {e}")
                 state = self.api.call("GET", f"/games/{self.gid}/state")["state"]
                 return self.fallback(state)
@@ -367,7 +440,7 @@ class Player:
     def fallback(self, state):
         """A move OpenHex should accept, without the simulator: try candidates
         until one is taken."""
-        pending = state.get("pending") or {}
+        pending = pending_of(state)
         kind = pending.get("type")
         me = self.my_state(state)
         robber = state.get("board", {}).get("robberHex", state.get("robberHex"))
@@ -395,8 +468,20 @@ class Player:
             ]
             options += [{"type": "placeInitialRoad", "edge": e} for e in range(72)]
         else:
-            options = [{"type": "rollDice"}, {"type": "endTurn"}]
+            # A steal OpenHex may want without showing it pending.
+            options = [
+                {"type": "rollDice"},
+                {"type": "stealFromPlayer", "target": self.opponent()},
+                {"type": "endTurn"},
+            ]
+        # An action taken without anything happening (no new event) was not
+        # really taken: don't send it again, try the next one.
+        seq = self.follower.seq
+        if self.tried[0] != seq:
+            self.tried = (seq, [])
+        options = [a for a in options if a not in self.tried[1]]
         for action in options:
+            self.tried[1].append(action)
             try:
                 self.send(action)
                 self.moves.append(("fallback", action))
@@ -404,6 +489,11 @@ class Player:
             except Rejected:
                 continue
         self.note(f"no fallback move was accepted (pending {pending})")
+        if not self.dumped:  # what is OpenHex waiting for? keep its state
+            self.dumped = True
+            raw = {k: v for k, v in state.items() if k != "board"}
+            self.record["notes"].append([stamp(), "stuck state", raw])
+            self.save()
 
 
 def load_key():

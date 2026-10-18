@@ -36,9 +36,13 @@ CARD = {
 #: Events the replay derives by itself (it checks them instead).
 DERIVED = {
     "setupResourcesCollected",
+    "setupResourcesGranted",
     "resourcesProduced",
     "longestRoadClaimed",
     "largestArmyClaimed",
+    "longestRoadAwarded",
+    "largestArmyAwarded",
+    "victoryPointRevealed",
     "gameWon",
 }
 
@@ -69,6 +73,7 @@ class Follower:
         self.pending_robber = None  # (mover, hex) waiting for its steal event
         self.over = False
         self.game = None
+        self.unknown = set()  # event types skipped
 
     # ----- events -> log -----
     def feed(self, events):
@@ -106,12 +111,16 @@ class Follower:
             return
         who = color(e["player"])
         b = self.board
-        if t == "settlementBuilt":
+        # The site's own replayer names setup and free road placements apart
+        # (setupSettlementPlaced, setupRoadPlaced, freeRoadPlaced) and may give
+        # a road as its two vertices; its guide lists only the plain names.
+        if t in ("settlementBuilt", "setupSettlementPlaced"):
             self._add(who, A.BUILD_SETTLEMENT, b.node(e["vertex"]))
         elif t == "cityBuilt":
             self._add(who, A.BUILD_CITY, b.node(e["vertex"]))
-        elif t == "roadBuilt":
-            self._add(who, A.BUILD_ROAD, list(b.edge(e["edge"])))
+        elif t in ("roadBuilt", "setupRoadPlaced", "freeRoadPlaced"):
+            where = e["edge"] if e.get("edge") is not None else e["vertices"]
+            self._add(who, A.BUILD_ROAD, list(b.edge(where)))
         elif t == "diceRolled":
             dice = [e["die1"], e["die2"]] if "die1" in e else list(e["dice"])
             self._add(who, A.ROLL, None, dice)
@@ -150,7 +159,9 @@ class Follower:
         elif t == "turnEnded":
             self._add(who, A.END_TURN)
         else:
-            raise OutOfSync(f"unknown event type {t}")
+            # The site has more event names than its guide lists. Skip one we
+            # don't know; if it mattered, the replay's legality check says so.
+            self.unknown.add(t)
 
     def settle(self):
         """No steal is coming (OpenHex has no steal pending): a robber move

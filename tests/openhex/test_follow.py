@@ -23,18 +23,23 @@ def events_of(game, board, me):
     def add(e):
         out.append({"seq": len(out), "event": e})
 
+    # The site names the 2 x 2 setup placements apart, as its replayer does.
+    setup = {A.BUILD_SETTLEMENT: 4, A.BUILD_ROAD: 4}
     for i, record in enumerate(game.state.action_records):
         a, result = record.action, record.result
         who = a.color.value.lower()
         idx = i % 2 == 0
+        first = setup.get(a.action_type, 0) > 0
+        if first:
+            setup[a.action_type] -= 1
         if a.action_type in (A.BUILD_SETTLEMENT, A.BUILD_CITY):
             v = board.vertex_of_node[a.value]
             add(
                 {
                     "type": (
-                        "settlementBuilt"
-                        if a.action_type == A.BUILD_SETTLEMENT
-                        else "cityBuilt"
+                        "cityBuilt"
+                        if a.action_type == A.BUILD_CITY
+                        else "setupSettlementPlaced" if first else "settlementBuilt"
                     ),
                     "player": who,
                     "vertex": B.VERTICES.index(v) if idx else B.xyz(v),
@@ -42,8 +47,12 @@ def events_of(game, board, me):
             )
         elif a.action_type == A.BUILD_ROAD:
             pair = board.edge_of_nodes[frozenset(a.value)]
+            t = "setupRoadPlaced" if first else "roadBuilt"
+            if i % 3 == 0:  # the replayer's form: the two vertices
+                add({"type": t, "player": who, "vertices": [B.xyz(p) for p in pair]})
+                continue
             edge = B.EDGES.index(pair) if idx else [B.xyz(p) for p in pair]
-            add({"type": "roadBuilt", "player": who, "edge": edge})
+            add({"type": t, "player": who, "edge": edge})
         elif a.action_type == A.ROLL:
             d1, d2 = result
             add({"type": "diceRolled", "player": who, "die1": d1, "die2": d2})
