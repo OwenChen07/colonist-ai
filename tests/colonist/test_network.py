@@ -312,6 +312,44 @@ def test_parts_streamed_on_stdin_merge_to_the_same_shard(tmp_path):
             assert np.array_equal(a[key], b[key]), key
 
 
+def test_a_stream_worker_starting_parts_as_games_end_writes_the_same_data(
+    tmp_path,
+):
+    import gc
+    import queue
+
+    from catanatron.colonist import selfplay
+
+    net_path = str(tmp_path / "net.npz")
+    random_net(hidden=(16,)).save(net_path)
+    whole, *_ = selfplay.run_shard(
+        (str(tmp_path / "one"), net_path, 5, 9, {"simulations": 4})
+    )
+    tasks, results = queue.Queue(), queue.Queue()
+    for part in [(5, 2), (7, 3), (10, 4), None]:
+        tasks.put(part)
+    out = tmp_path / "sp"
+    try:
+        selfplay.stream_worker(  # 3 games at once: the parts overlap
+            (str(out), net_path, 0, 0, {"simulations": 4}), tasks, results, 3
+        )
+    finally:
+        gc.enable()
+    names = sorted(os.path.basename(results.get()[0]) for _ in range(3))
+    assert results.empty()
+    assert names == [
+        "shard_0000005_2.npz",
+        "shard_0000007_3.npz",
+        "shard_0000010_4.npz",
+    ]
+    merged = str(tmp_path / os.path.basename(whole))
+    selfplay.merge_parts(merged, [str(out / n) for n in names])
+    with np.load(whole) as a, np.load(merged) as b:
+        assert a.files == b.files
+        for key in a.files:
+            assert np.array_equal(a[key], b[key]), key
+
+
 def test_a_stopped_parts_stream_worker_ends_with_its_pool(tmp_path):
     # distributed.run stops this machine's worker with SIGTERM to its group,
     # its pool idle: round 85's hung in the pool's terminate.

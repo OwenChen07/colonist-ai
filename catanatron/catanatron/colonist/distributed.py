@@ -34,6 +34,9 @@ SHARD_SIZE = 64
 # another machine also plays it once the queue is empty). Parts of 16 were
 # no slower per game than whole shards (round 82, 10.142.0.8).
 PART_SIZE = 8
+# Parts a machine holds per self-play process: enough for its
+# selfplay.STREAM_GAMES games in play (four), and one to start.
+STREAM_PARTS = 5
 STOP_GRACE = 20  # seconds a self-play worker gets to end before it is killed
 HERE = "here"  # the coordinator, as a job's host
 
@@ -341,7 +344,9 @@ def run(
                     text=True,
                 )
             state["process"] = process
-            slots = threading.Semaphore(processes)
+            # Enough parts for each process to keep selfplay.STREAM_GAMES
+            # games in play: it starts the next part as games end.
+            slots = threading.Semaphore(processes * STREAM_PARTS)
 
             def feed():
                 try:

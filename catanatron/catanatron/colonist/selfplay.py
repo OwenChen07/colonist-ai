@@ -46,9 +46,11 @@ import json
 import math
 import multiprocessing
 import os
+import queue
 import random
 import signal
 import sys
+import threading
 import time
 
 import numpy as np
@@ -353,67 +355,9 @@ def _play_games(
     human,
     human_rate,
 ):
-    games = []
-    for s in seeds:
-        game = human_start(s, starts, start_rate)
-        colors = None if game is None else game.state.colors
-        seats = seat_plan(
-            s, net, list(opponents), opponent_rate, colors, human, human_rate
-        )
-        games.append(_Game(s, search_args, seats, net, game))
-    pending = {}
-    for g in games:
-        step = g.advance()
-        if step is not None:
-            pending[g] = step
-    calls = 0
-    while pending:
-        by_net = {}
-        for g, (n, nodes) in pending.items():
-            by_net.setdefault(id(n), (n, []))[1].extend(nodes)
-        for n, nodes in by_net.values():
-            encoded = [E.encode(node.game, node.color) for node in nodes]
-            logits, values = n.forward_rows(
-                [st for st, _ in encoded], np.stack([d for _, d in encoded])
-            )
-            calls += 1
-            if calls % GC_EVERY == 0:
-                gc.collect()
-            # Widened once per call (exact) rather than once per row.
-            logits = logits.astype(np.float64)
-            values = values.tolist()
-            for row, node in enumerate(nodes):
-                node.set_evaluation(
-                    logits[row].take(E.legal_indices(node.actions)), values[row]
-                )
-        for g in list(pending):
-            step = g.advance()
-            if step is None:
-                del pending[g]
-            else:
-                pending[g] = step
-    return games, calls
-
-
-def run_shard(task):
-    out_dir, net_path, first, count, search_args, *rest = task
-    rest = list(rest) + [(), 0.0, None, 0.0, None, 0.0][len(rest) :]
-    opponent_specs, opponent_rate, starts_path, start_rate, human_path, human_rate = (
-        rest
-    )
-    from catanatron.colonist.net import Net
-    from catanatron.colonist.starts import load as load_starts
-
-    os.makedirs(out_dir, exist_ok=True)
-    path = shard_path(out_dir, first, count)
-    net = Net.load(net_path)
-    opponents = [load_opponent(o) for o in opponent_specs]
-    starts = load_starts(starts_path) if starts_path and start_rate > 0 else None
-    human = HumanModel(Net.load(human_path)) if human_path and human_rate > 0 else None
-    start = time.time()
-    games, calls = play_games(
+    games = new_games(
         net,
-        range(first, first + count),
+        seeds,
         search_args,
         opponents,
         opponent_rate,
@@ -422,6 +366,127 @@ def run_shard(task):
         human,
         human_rate,
     )
+    runner = _Runner()
+    runner.add(games)
+    while runner.pending:
+        runner.step()
+    return games, runner.calls
+
+
+def new_games(
+    net,
+    seeds,
+    search_args,
+    opponents,
+    opponent_rate,
+    starts,
+    start_rate,
+    human,
+    human_rate,
+):
+    """A _Game for each seed, with its start and seats."""
+    games = []
+    for s in seeds:
+        game = human_start(s, starts, start_rate)
+        colors = None if game is None else game.state.colors
+        seats = seat_plan(
+            s, net, list(opponents), opponent_rate, colors, human, human_rate
+        )
+        games.append(_Game(s, search_args, seats, net, game))
+    return games
+
+
+class _Runner:
+    """Games played together, one network call per net per step. Games can
+    join while others play."""
+
+    def __init__(self):
+        self.pending = {}  # game -> (net, positions to evaluate)
+        self.calls = 0
+
+    def add(self, games):
+        """Starts the games; returns those already over."""
+        over = []
+        for g in games:
+            step = g.advance()
+            if step is None:
+                over.append(g)
+            else:
+                self.pending[g] = step
+        return over
+
+    def step(self):
+        """Evaluates every pending position and advances each game; returns
+        the games that ended."""
+        by_net = {}
+        for g, (n, nodes) in self.pending.items():
+            by_net.setdefault(id(n), (n, []))[1].extend(nodes)
+        for n, nodes in by_net.values():
+            encoded = [E.encode(node.game, node.color) for node in nodes]
+            logits, values = n.forward_rows(
+                [st for st, _ in encoded], np.stack([d for _, d in encoded])
+            )
+            self.calls += 1
+            if self.calls % GC_EVERY == 0:
+                gc.collect()
+            # Widened once per call (exact) rather than once per row.
+            logits = logits.astype(np.float64)
+            values = values.tolist()
+            for row, node in enumerate(nodes):
+                node.set_evaluation(
+                    logits[row].take(E.legal_indices(node.actions)), values[row]
+                )
+        over = []
+        for g in list(self.pending):
+            step = g.advance()
+            if step is None:
+                del self.pending[g]
+                over.append(g)
+            else:
+                self.pending[g] = step
+        return over
+
+
+def _load_task(task):
+    """(out_dir, first, count, play): a task tuple's shard and a function
+    that makes its games for a range of seeds, with the nets loaded once."""
+    out_dir, net_path, first, count, search_args, *rest = task
+    rest = list(rest) + [(), 0.0, None, 0.0, None, 0.0][len(rest) :]
+    opponent_specs, opponent_rate, starts_path, start_rate, human_path, human_rate = (
+        rest
+    )
+    from catanatron.colonist.net import Net
+    from catanatron.colonist.starts import load as load_starts
+
+    net = Net.load(net_path)
+    opponents = [load_opponent(o) for o in opponent_specs]
+    starts = load_starts(starts_path) if starts_path and start_rate > 0 else None
+    human = HumanModel(Net.load(human_path)) if human_path and human_rate > 0 else None
+    args = (net, search_args, opponents, opponent_rate, starts, start_rate, human)
+    return out_dir, first, count, args + (human_rate,)
+
+
+def run_shard(task):
+    out_dir, first, count, args = _load_task(task)
+    os.makedirs(out_dir, exist_ok=True)
+    path = shard_path(out_dir, first, count)
+    net, search_args, *rest = args
+    start = time.time()
+    games, calls = play_games(net, range(first, first + count), search_args, *rest)
+    write_shard(path, games)
+    searches = sum(g.searches for g in games)
+    return (
+        path,
+        count,
+        sum(len(g.rows) for g in games),
+        searches,
+        calls,
+        (time.time() - start),
+    )
+
+
+def write_shard(path, games):
+    """Writes the finished games' records to the shard file at `path`."""
     statics, seeds, cols = [], [], {k: [] for k in "dmpvztfa"}
     gidx = []
     for i, g in enumerate(games):
@@ -453,8 +518,60 @@ def run_shard(task):
         human_opponent=np.asarray([g.human_opponent for g in games], bool),
     )
     os.replace(tmp, path)
-    searches = sum(g.searches for g in games)
-    return path, count, len(gidx), searches, calls, time.time() - start
+
+
+#: Games a --parts-stream process keeps in play: it starts its next part
+#: whenever fewer are left. A shard's games end one by one, so the network
+#: batches shrink to a game or two at its end. 64 seeds in parts of 8, one
+#: process (Oct 18): 14.91 s a game one part at a time, 14.39 with 16 games
+#: in play, 13.82 with 32, with the same moves.
+STREAM_GAMES = 32
+
+
+def stream_worker(task, tasks, results, width=STREAM_GAMES):
+    """A --parts-stream process: plays the (first, count) parts from `tasks`
+    (None ends it), several at once, keeping `width` games in play, and
+    puts each part's run_shard result on `results` when its file is written."""
+    out_dir, _, _, args = _load_task(task)
+    os.makedirs(out_dir, exist_ok=True)
+    runner = _Runner()
+    parts = {}  # (first, count) -> [games, games still playing, start time]
+    owner = {}  # game -> its part
+    ended = False
+    gc.disable()  # as in play_games
+
+    def finish(over):
+        for g in over:
+            part = owner.pop(g)
+            parts[part][1] -= 1
+            if parts[part][1] == 0:
+                games, _, start = parts.pop(part)
+                path = shard_path(out_dir, *part)
+                write_shard(path, games)
+                searches = sum(g.searches for g in games)
+                rows = sum(len(g.rows) for g in games)
+                secs = time.time() - start
+                results.put((path, part[1], rows, searches, runner.calls, secs))
+
+    while True:
+        while not ended and len(runner.pending) < width:
+            try:
+                part = tasks.get(block=not runner.pending)
+            except queue.Empty:
+                break
+            if part is None:
+                ended = True
+                break
+            first, count = part
+            games = new_games(args[0], range(first, first + count), *args[1:])
+            parts[part] = [games, len(games), time.time()]
+            owner.update((g, part) for g in games)
+            finish(runner.add(games))
+        if not runner.pending:
+            if ended:
+                return
+            continue
+        finish(runner.step())
 
 
 # Fewer shards than processes (a host's last shard, or one taken over from a
@@ -514,6 +631,7 @@ def run(
     human_opponent_rate=0.0,
     part_stream=None,
     done=None,
+    stream_games=STREAM_GAMES,
 ):
     """Plays the shards of out_dir that aren't on disk yet. With `part_stream`, an
     iterable of (first, count), plays those parts instead as they come, into
@@ -588,22 +706,45 @@ def run(
     if part_stream is not None:
         # distributed.run's queue: (first, count) parts arrive while others
         # play, and each is reported by its file name in out_dir/parts.
+        # Each process plays several parts at once (stream_worker).
         parts_dir = os.path.join(out_dir, "parts")
         start, played = time.time(), 0
         ctx = multiprocessing.get_context("spawn")
-        with ctx.Pool(workers) as pool:
-            for path, count, rows, searches, calls, secs in pool.imap_unordered(
-                run_shard,
-                (task(parts_dir, first, count) for first, count in part_stream),
-            ):
-                played += count
-                log(
-                    f"{os.path.basename(path)}: {count} games in {secs:.0f} s "
-                    f"({secs / count:.1f} s per game in this worker) | {played} "
-                    f"games, {played / (time.time() - start):.2f}/s"
-                )
-                done(os.path.basename(path))
-        return
+        tasks, results = ctx.Queue(), ctx.Queue()
+        processes = [
+            ctx.Process(
+                target=stream_worker,
+                args=(task(parts_dir, 0, 0), tasks, results, stream_games),
+                daemon=True,
+            )
+            for _ in range(workers or os.cpu_count() or 1)
+        ]
+        for p in processes:
+            p.start()
+
+        def feed():
+            for part in part_stream:
+                tasks.put(part)
+            for _ in processes:
+                tasks.put(None)
+
+        threading.Thread(target=feed, daemon=True).start()
+        while True:
+            try:
+                path, count, rows, searches, calls, secs = results.get(timeout=5)
+            except queue.Empty:
+                if any(p.exitcode not in (None, 0) for p in processes):
+                    raise RuntimeError("a self-play process failed")
+                if all(p.exitcode == 0 for p in processes) and results.empty():
+                    return
+                continue
+            played += count
+            log(
+                f"{os.path.basename(path)}: {count} games in {secs:.0f} s "
+                f"(up to {stream_games} at once in this worker) | {played} "
+                f"games, {played / (time.time() - start):.2f}/s"
+            )
+            done(os.path.basename(path))
     tasks = []
     for first in range(seed, seed + games, shard_size):
         count = min(shard_size, seed + games - first)
