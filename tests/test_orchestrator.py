@@ -324,6 +324,11 @@ if prompt == "slow":
 print("a stderr line about a rate limit in some file", flush=True)
 print(json.dumps({"type": "result", "result": "done", "session_id": "s1",
                   "total_cost_usd": 0.5}), flush=True)
+if prompt == "watcher":
+    print(json.dumps(say("the watcher fired")), flush=True)
+    print(json.dumps({"type": "result", "result": "the watcher fired",
+                      "session_id": "s1", "total_cost_usd": 0.6,
+                      "origin": {"kind": "task-notification"}}), flush=True)
 """
 
 
@@ -344,6 +349,14 @@ def test_claude_streams_into_the_log_and_ends_with_its_result(tmp_path):
     assert result["result"] == "done" and result["session_id"] == "s1"
     assert said == "working on fast"
     assert "rate limit" in other and '"type": "result"' in log
+
+
+def test_a_background_watcher_s_wakeup_does_not_replace_the_real_result(tmp_path):
+    # Oct 17: two Monitor wakeups after the final message made the last result
+    # a one-liner, and the run was filed as "ended without a summary".
+    (result, said, _, _), _ = stream(tmp_path, "watcher", 30)
+    assert result["result"] == "done" and result["total_cost_usd"] == 0.5
+    assert said.endswith("the watcher fired")
 
 
 def test_a_timed_out_run_keeps_what_it_said(tmp_path):

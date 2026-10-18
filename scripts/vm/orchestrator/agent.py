@@ -316,7 +316,14 @@ def stream_claude(command, prompt, *, cwd, env, log, timeout=None):
                 if not isinstance(event, dict):
                     continue
                 if event.get("type") == "result":
-                    result = event
+                    # A background watcher (Monitor, run_in_background) can wake
+                    # the agent after its final message and add a result of its
+                    # own, a one-liner without the JSON summary. Keep the real one.
+                    wakeup = (event.get("origin") or {}).get(
+                        "kind"
+                    ) == "task-notification"
+                    if result is None or not wakeup:
+                        result = event
                 elif event.get("type") == "assistant":
                     for part in (event.get("message") or {}).get("content") or []:
                         if isinstance(part, dict) and part.get("type") == "text":
