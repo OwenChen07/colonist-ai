@@ -9,10 +9,12 @@ User=ubuntu
 WorkingDirectory=/home/ubuntu/colonist-ai
 Environment=PYTHONUNBUFFERED=1
 Environment=OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
-Environment=SIMULATIONS=2400 RANKED_AFTER=5
+Environment=SIMULATIONS=2400 RANKED_AFTER=5 PIN_ROUND=
 # Per account: PORT (unique on this machine, e.g. 8766), optionally SIMULATIONS,
-# and optionally OPPONENT_MODEL and OPPONENT_MIX (a human opponent model for the
-# search, read by ranked_runner; off unless both are set).
+# optionally OPPONENT_MODEL and OPPONENT_MIX (a human opponent model for the
+# search, read by ranked_runner; off unless both are set), and optionally
+# PIN_ROUND (a training round to play instead of the promoted one; empty
+# follows promotions).
 EnvironmentFile=/home/ubuntu/colonist-ai/scripts/vm/bot/accounts/%i.env
 # COLONIST_OWN_ACCOUNTS: all our bot usernames, to spot bot-vs-bot games.
 EnvironmentFile=-/home/ubuntu/colonist-ai/scripts/vm/bot/own_accounts.env
@@ -21,7 +23,7 @@ EnvironmentFile=-/home/ubuntu/colonist-ai/scripts/vm/bot/own_accounts.env
 ExecStart=/home/ubuntu/colonist-ai/.venv/bin/python -m catanatron.colonist.ranked_runner \
     --account %i --queue casual --ranked-after ${RANKED_AFTER} --port ${PORT} \
     --net /home/ubuntu/colonist-ai/models/%i/model.npz \
-    --promotions /home/ubuntu/colonist-ai/runs/g1 \
+    --promotions /home/ubuntu/colonist-ai/runs/g1 --pin-round=${PIN_ROUND} \
     --games 50 --simulations ${SIMULATIONS} --viewport 960x540 --max-fps 5
 StandardOutput=append:/home/ubuntu/colonist-ai/data/%i/run.log
 StandardError=append:/home/ubuntu/colonist-ai/data/%i/run.log

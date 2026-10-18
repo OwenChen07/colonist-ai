@@ -35,6 +35,44 @@ def test_promoted_checkpoint_is_atomic_and_only_changes_for_new_content(tmp_path
         assert net["weights"].tolist() == [6]
 
 
+def test_a_pinned_round_is_played_instead_of_the_promoted_one(tmp_path):
+    from types import SimpleNamespace
+
+    from catanatron.colonist.ranked_runner import main, pin_round_arg, record_game
+
+    run = tmp_path / "training"
+    nets = run / "nets"
+    nets.mkdir(parents=True)
+    np.savez(nets / "round_066.npz", weights=np.array([66]))
+    np.savez(nets / "round_069.npz", weights=np.array([69]))
+    (run / "state.json").write_text(json.dumps({"best_round": 66}))
+    assert promoted_checkpoint(run, None) == (66, (nets / "round_066.npz").resolve())
+    assert promoted_checkpoint(run, 69) == (69, (nets / "round_069.npz").resolve())
+    # A promotion doesn't move the pin.
+    (run / "state.json").write_text(json.dumps({"best_round": 70}))
+    assert promoted_checkpoint(run, 69)[0] == 69
+    with pytest.raises(RuntimeError):
+        promoted_checkpoint(run, 71)
+
+    # The service passes --pin-round=${PIN_ROUND}, empty when unset.
+    assert pin_round_arg("") is None and pin_round_arg("69") == 69
+    with pytest.raises(SystemExit):
+        main(["--net", str(tmp_path / "model.npz"), "--pin-round=69"])
+
+    net = tmp_path / "model.npz"
+    net.write_bytes(b"weights")
+    conversion = SimpleNamespace(
+        ended="win",
+        record={"winner": "RED", "players": {"RED": {"you": True}}},
+    )
+    row = record_game(tmp_path, "c.json", conversion, net, "g1 round 69", 69, 800)
+    assert "pinned" not in row
+    row = record_game(
+        tmp_path, "d.json", conversion, net, "g1 round 69", 69, 800, pinned=True
+    )
+    assert row["pinned"] is True and row["round"] == 69
+
+
 def test_invalid_promoted_checkpoint_keeps_current_model(tmp_path):
     good = tmp_path / "good.npz"
     bad = tmp_path / "bad.npz"

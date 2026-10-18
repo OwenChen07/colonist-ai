@@ -49,15 +49,25 @@ URL = "https://colonist.io/"
 PORT = 8765
 
 
-def promoted_checkpoint(run_dir):
-    """The trainer publishes best_round in an atomically replaced state file."""
+def promoted_checkpoint(run_dir, pin_round=None):
+    """The trainer publishes best_round in an atomically replaced state file.
+    A pinned round (--pin-round) is played instead, promoted or not."""
     root = Path(run_dir).expanduser().resolve()
-    state = json.loads((root / "state.json").read_text())
-    round_number = int(state["best_round"])
+    if pin_round is not None:
+        round_number = int(pin_round)
+    else:
+        state = json.loads((root / "state.json").read_text())
+        round_number = int(state["best_round"])
     source = root / "nets" / f"round_{round_number:03d}.npz"
     if round_number < 0 or not source.is_file():
         raise RuntimeError(f"promoted checkpoint is missing: {source}")
     return round_number, source
+
+
+def pin_round_arg(text):
+    """--pin-round: a round number, or empty (the service's unset PIN_ROUND)
+    to follow promotions."""
+    return int(text) if text.strip() else None
 
 
 def install_promoted_model(source, destination):
@@ -260,6 +270,7 @@ def record_game(
     queue="ranked",
     own_bot=False,
     opponent_mix=0.0,
+    pinned=False,
 ):
     """Appends one verified game to DATA/games.jsonl: which net played it and
     how it ended. Names and chat stay in the capture."""
@@ -284,6 +295,9 @@ def record_game(
     if opponent_mix:
         # Played expecting human-like replies (bridge --opponent-mix).
         row["opponent_mix"] = opponent_mix
+    if pinned:
+        # A round chosen for this account (--pin-round), not the promoted one.
+        row["pinned"] = True
     if own_bot:
         # Against another of our own bots: not a human game, so not training
         # data, and not part of the bot's record against people.
@@ -495,10 +509,13 @@ async def _run(args):
             if not args.net:
                 raise RuntimeError("--net must point to a local trained network")
             if args.promotions:
-                promotion_round, source = promoted_checkpoint(args.promotions)
+                promotion_round, source = promoted_checkpoint(
+                    args.promotions, args.pin_round
+                )
                 install_promoted_model(source, args.net)
                 label = round_label(args.promotions, promotion_round)
-                print(f"using promoted training round {promotion_round}", flush=True)
+                kind = "pinned" if args.pin_round is not None else "promoted"
+                print(f"using {kind} training round {promotion_round}", flush=True)
             if not Path(args.net).exists():
                 raise RuntimeError("--net must point to a local trained network")
             process, log = await _bridge(
@@ -666,6 +683,7 @@ async def _run(args):
                     account=args.account,
                     queue=queue,
                     own_bot=own_bot,
+                    pinned=args.pin_round is not None,
                     opponent_mix=(
                         float(args.opponent_mix)
                         if opponent_args(args.opponent_model, args.opponent_mix)
@@ -691,7 +709,7 @@ async def _run(args):
                 if args.games == 0 or game + 1 < args.games:
                     await page.goto(URL)
                     new_round, source = (
-                        promoted_checkpoint(args.promotions)
+                        promoted_checkpoint(args.promotions, args.pin_round)
                         if args.promotions
                         else (promotion_round, None)
                     )
@@ -770,6 +788,13 @@ def main(argv=None):
     parser.add_argument(
         "--promotions",
         help="training run to follow; switch to its promoted net between games",
+    )
+    parser.add_argument(
+        "--pin-round",
+        type=pin_round_arg,
+        default=None,
+        help="with --promotions: play this training round instead of the "
+        "promoted one (empty: follow promotions), to test a net live",
     )
     parser.add_argument("--profile", default=None)
     parser.add_argument(
@@ -860,6 +885,8 @@ def main(argv=None):
         parser.error("--opponent-mix needs --opponent-model")
     if args.opponent_mix > 0 and not Path(args.opponent_model).exists():
         parser.error("--opponent-model must point to a local trained network")
+    if args.pin_round is not None and not args.promotions:
+        parser.error("--pin-round needs --promotions")
     try:
         asyncio.run(_run(args))
     except KeyboardInterrupt:

@@ -1052,15 +1052,7 @@ class Bridge:
             )
             return actions[0], [(actions[0], 1.0)], value
         if self.simulations == 0:
-            priors, value = self.net.evaluate(
-                game, game.state.current_color(), E.legal_indices(actions)
-            )
-            order = np.argsort(-priors)[:3]
-            return (
-                actions[order[0]],
-                [(actions[i], float(priors[i])) for i in order],
-                value,
-            )
+            return self.net_choice(game)
         from catanatron.colonist.mcts import Search
 
         seconds, simulations = self.budget
@@ -1087,7 +1079,13 @@ class Bridge:
             opponent_mix=self.opponent_mix,
             root_action_filter=root_filter,
         )
-        action, root = search.run(game, time_limit=seconds)
+        try:
+            action, root = search.run(game, time_limit=seconds)
+        except ValueError as error:
+            # The search redeals the opponent's hidden cards; a deal that gives
+            # them 15 points leaves it no choice to make. Take the net's move.
+            print(f"search failed, playing the net's move: {error}", file=sys.stderr)
+            return self.net_choice(game)
         self.searched += search.used
         _, value = search.root_targets(root)
         # Show moves by the share of simulations they got: the search's
@@ -1098,6 +1096,19 @@ class Bridge:
         order = [chosen] + [i for i in np.argsort(-share) if i != chosen][:2]
         move = next(a for a in actions if E.action_key(a) == key)
         return move, [(root.actions[i], float(share[i])) for i in order], value
+
+    def net_choice(self, game):
+        """choose() without search: the net's most likely move."""
+        actions = game.playable_actions
+        priors, value = self.net.evaluate(
+            game, game.state.current_color(), E.legal_indices(actions)
+        )
+        order = np.argsort(-priors)[:3]
+        return (
+            actions[order[0]],
+            [(actions[i], float(priors[i])) for i in order],
+            value,
+        )
 
     def plan_discards(self, game):
         """All of the bot's discards for this 7, chosen one by one on a copy;

@@ -1255,6 +1255,22 @@ def test_a_search_stops_when_its_time_is_up():
     assert search.used >= 99000
 
 
+def test_a_search_with_no_choice_falls_back_to_the_nets_move(monkeypatch):
+    """Redealt hidden VP cards can give the opponent 15 points, so the search
+    finds no decision at its root; the bot plays the net's move instead."""
+    from catanatron.colonist import mcts
+
+    def no_choice(self, game, time_limit=None):
+        raise ValueError("search needs a position with a choice to make")
+
+    monkeypatch.setattr(mcts.Search, "run", no_choice)
+    bridge = Bridge(random_net(hidden=(8,)), simulations=4)
+    game = _position("BUILD_INITIAL_SETTLEMENT")
+    move, shown, value = bridge.choose(game)
+    assert (move, shown, value) == bridge.net_choice(game)
+    assert move in game.playable_actions and len(shown) == 3
+
+
 def test_a_discards_budget_is_shared_between_its_cards():
     bridge = _discard_race(deadline_in=20)
     seen = []
