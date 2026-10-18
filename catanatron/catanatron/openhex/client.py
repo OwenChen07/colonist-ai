@@ -561,12 +561,13 @@ def main():
     rng = random.Random()
     results = []
     joined = False
+    paused = False  # said "paused" since the pause file appeared
     try:
         while args.games <= 0 or len(results) < args.games:
             games = active_games(api)
             if games:
                 gid = games[0]["id"]
-                joined = False
+                joined = paused = False
                 player = Player(api, gid, net, args.simulations, rng)
                 try:
                     info = player.play()
@@ -591,9 +592,14 @@ def main():
                     except Exception:  # noqa: BLE001
                         pass
                     joined = False
+                if not paused:
+                    # Also after a game, when the client was already out of
+                    # the queue: say so once, or the log just stops.
                     say(f"paused ({PAUSE_FILE}): out of the queue")
+                    paused = True
                 time.sleep(5)
                 continue
+            paused = False
             if not joined:
                 try:
                     api.call("POST", "/queue/join", {"mode": "1v1"})
