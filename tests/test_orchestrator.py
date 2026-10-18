@@ -458,9 +458,12 @@ def test_kill_job_kills_a_listed_job_with_its_children_and_nothing_else(tmp_path
         os.utime(jobs / "other.pid", (time.time() - 3600,) * 2)
         stale = kill_job(jobs, "other", "--yes")
         assert stale.returncode == 1 and "reused" in stale.stdout
+        started = time.time()
         killed = kill_job(jobs, "e17", "--yes").stdout
         assert killed.count("killed") == 3 and f"killed {job.pid}" in killed
-        assert job.wait(10) != 0
+        assert "forced" not in killed and time.time() - started < 8  # TERM was enough
+        # Killed by its own signal, not exiting cleanly after its children died.
+        assert job.wait(10) == -signal.SIGTERM
         assert "not running" in kill_job(jobs, "e17").stdout
         assert other.poll() is None
     finally:

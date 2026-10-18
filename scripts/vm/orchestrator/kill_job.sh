@@ -50,14 +50,15 @@ under() { # under PID ROOT: is PID a descendant of ROOT?
   return 1
 }
 
-victims=
+# The job first, so it cannot react to its children's deaths (exit cleanly
+# from a wait, or start new ones) before its own signal arrives.
+victims=$target
 for pid in "${!args[@]}"; do
   [ "$pid" = "$target" ] && continue
   if under "$pid" "$target" || { [ "${group[$target]}" = "$target" ] && [ "${group[$pid]}" = "$target" ]; }; then
     victims+=" $pid"
   fi
 done
-victims+=" $target" # children first, the job last
 
 for pid in $victims; do
   [ "${owner[$pid]}" = "$me" ] || { echo "refused: $pid (${args[$pid]}) is not $me's"; exit 1; }
@@ -75,7 +76,9 @@ done
 for pid in $victims; do kill -TERM "$pid" 2>/dev/null && echo "killed $pid" || echo "$pid already gone"; done
 for _ in $(seq 20); do
   left=
-  for pid in $victims; do kill -0 "$pid" 2>/dev/null && left+=" $pid"; done
+  for pid in $victims; do # a zombie has exited; only its parent's wait is left
+    case $(ps -o stat= -p "$pid" 2>/dev/null) in '' | Z*) ;; *) left+=" $pid" ;; esac
+  done
   [ -z "$left" ] && exit 0
   sleep 0.5
 done
