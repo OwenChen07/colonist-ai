@@ -144,6 +144,28 @@ def test_a_failed_worker_s_games_are_played_here(tmp_path, monkeypatch):
     assert logs
 
 
+def test_evaluation_games_are_split_by_measured_speed(tmp_path, monkeypatch):
+    from catanatron.colonist import distributed, evaluate
+
+    sent = {}
+
+    def specs(host, key, root, tasks):
+        sent[host] = len(tasks)
+        return tasks
+
+    monkeypatch.setattr(distributed, "_sync_code", lambda *a: None)
+    monkeypatch.setattr(distributed, "_remote_specs", specs)
+    monkeypatch.setattr(distributed, "_ssh", lambda host, key, argv: ["false"])
+    monkeypatch.delenv("COLONIST_WORKERS_FILE", raising=False)
+    monkeypatch.setenv("COLONIST_SELFPLAY_CAPACITIES", "local:1,w@x:1,w@y:8")
+    tasks = list(evaluate.tasks_for("R", "W", range(5), {}))
+    logs = []
+    games = distributed.run_tasks(tasks, 4, [("w@x", 4), ("w@y", 4)], log=logs.append)
+    assert sent == {"w@x": 1, "w@y": 8}  # 10 tasks: 1 here, then 1 and 8
+    assert games == list(evaluate._run(tasks, 1))
+    assert any(line.startswith("evaluation games by host: here 1") for line in logs)
+
+
 def test_a_vanished_host_s_range_is_shared_with_the_hosts_that_finished(
     tmp_path, monkeypatch
 ):

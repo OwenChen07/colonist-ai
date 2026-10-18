@@ -660,9 +660,10 @@ def _remote_specs(host, key, root, tasks):
 
 def run_tasks(tasks, workers=None, hosts=None, log=print):
     """Plays evaluate.py's game tasks here and on the worker hosts, in
-    proportion to their processes, and returns the results in task order. A
-    game is a pure function of its task, so where it is played changes
-    nothing. A worker's games that don't come back are played here."""
+    proportion to their measured self-play speeds (or processes), and returns
+    the results in task order. A game is a pure function of its task, so where
+    it is played changes nothing. A worker's games that don't come back are
+    played here."""
     import json
     import threading
 
@@ -672,7 +673,11 @@ def run_tasks(tasks, workers=None, hosts=None, log=print):
     hosts = worker_hosts() if hosts is None else hosts
     key, root = _settings()
     local = workers or os.cpu_count() or 1
-    weights = [local] + [p for _, p in hosts]
+    # By processes, round 78's 1000-game halves took 14-16 min: the
+    # coordinator (8 processes, 0.08 games/s) got 82 games, a t2d VM (4, 0.33)
+    # 41, so the t2d VMs waited on it and on the 2-core hosts.
+    weights = selfplay_capacities(local, hosts)
+    started = time.monotonic()
     cuts = [
         round(len(tasks) * sum(weights[:i]) / sum(weights))
         for i in range(len(weights) + 1)
@@ -715,7 +720,8 @@ def run_tasks(tasks, workers=None, hosts=None, log=print):
         out = {}
         thread = threading.Thread(
             target=lambda p=process, o=out, s=lines: o.update(
-                zip(("stdout", "stderr"), p.communicate(s))
+                zip(("stdout", "stderr"), p.communicate(s)),
+                seconds=time.monotonic() - started,
             )
         )
         thread.start()
@@ -724,8 +730,10 @@ def run_tasks(tasks, workers=None, hosts=None, log=print):
     a, b = chunks[0]
     for i, game in zip(range(a, b), evaluate._run(tasks[a:b], local)):
         results[i] = game
+    times = [f"here {b - a} in {time.monotonic() - started:.0f} s"]
     for host, (a, b), process, thread, out in remote:
         thread.join()
+        times.append(f"{host} {b - a} in {out.get('seconds', 0):.0f} s")
         games = []
         for line in (out.get("stdout") or "").splitlines():
             try:
@@ -736,6 +744,7 @@ def run_tasks(tasks, workers=None, hosts=None, log=print):
             log(f"{host} returned {len(games)} of {b - a} games; playing the rest here")
         for i, game in zip(range(a, b), games):
             results[i] = game
+    log("evaluation games by host: " + ", ".join(times))
     missing = [i for i, game in enumerate(results) if game is None]
     for i, game in zip(missing, evaluate._run([tasks[i] for i in missing], local)):
         results[i] = game
