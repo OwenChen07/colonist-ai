@@ -9,11 +9,19 @@
 set -uo pipefail
 gcloud=$(command -v gcloud || echo /snap/bin/gcloud)
 [ -x "$gcloud" ] || exit 0
-"$gcloud" compute instances list \
-    --filter="(name~^selfplay-spot- OR name~^gpu-train-) AND status=TERMINATED" \
-    --format="value(name,zone.basename())" 2>/dev/null |
-    while read -r name zone; do
-        echo "gcp_start_spot: starting $name ($zone)"
-        "$gcloud" compute instances start "$name" --zone "$zone" --async --quiet 2>&1 | tail -1
-    done
+start_stopped() { # $1: gcloud configuration ("" for the default one)
+    local conf=()
+    [ -n "$1" ] && conf=(--configuration "$1")
+    "$gcloud" compute instances list "${conf[@]}" \
+        --filter="(name~^selfplay-spot- OR name~^gpu-train-) AND status=TERMINATED" \
+        --format="value(name,zone.basename())" 2>/dev/null |
+        while read -r name zone; do
+            echo "gcp_start_spot: starting $name ($zone${1:+, $1})"
+            "$gcloud" compute instances start "$name" "${conf[@]}" --zone "$zone" --async --quiet 2>&1 | tail -1
+        done
+}
+start_stopped ""
+# E42's GPU VM lives in the owner's trial project (configuration trial2,
+# static external IP gpu-train-1-ip, so the train host's address survives).
+"$gcloud" config configurations describe trial2 >/dev/null 2>&1 && start_stopped trial2
 exit 0
