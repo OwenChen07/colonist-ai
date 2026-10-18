@@ -493,13 +493,43 @@ def test_training_on_a_gpu_host_and_falling_back_here(tiny_args, monkeypatch):
     assert loop.main(args + extra) == 0
     assert not local and (run / "nets" / "round_001.npz").exists()
 
-    # It's unreachable: this machine trains instead.
+    # It's unreachable: it tries again a few times, then this machine trains.
+    sleeps, tries = [], []
+    monkeypatch.setattr(loop.time, "sleep", sleeps.append)
+
     def down(*a):
+        tries.append(a[-1])
         raise OSError("no route to host")
 
     monkeypatch.setattr(loop, "train_remote", down)
     assert loop.main(args + ["--train-host", "me@gpu", "--rounds", "2"]) == 0
     assert local and (run / "nets" / "round_002.npz").exists()
+    assert tries == [2] * loop.TRAIN_REMOTE_TRIES
+    assert sleeps == [loop.TRAIN_REMOTE_RETRY_WAIT] * (loop.TRAIN_REMOTE_TRIES - 1)
+
+    # Back after a preemption: the second try trains there.
+    local.clear()
+
+    def flaky(a, argv, data, out, init_net, n):
+        if len(tries) == loop.TRAIN_REMOTE_TRIES:
+            tries.append(n)
+            raise OSError("connection reset")
+        remote(a, argv, data, out, init_net, n)
+
+    monkeypatch.setattr(loop, "train_remote", flaky)
+    assert loop.main(args + ["--train-host", "me@gpu", "--rounds", "3"]) == 0
+    assert not local and (run / "nets" / "round_003.npz").exists()
+
+    # Its GPU stayed busy (it already waited): no second try.
+    tries.clear()
+
+    def busy(*a):
+        tries.append(a[-1])
+        raise loop.GpuBusy("its GPU is busy")
+
+    monkeypatch.setattr(loop, "train_remote", busy)
+    assert loop.main(args + ["--train-host", "me@gpu", "--rounds", "4"]) == 0
+    assert local and tries == [4]
 
 
 def test_the_gpu_host_gets_its_paths_and_settings(tmp_path, monkeypatch):

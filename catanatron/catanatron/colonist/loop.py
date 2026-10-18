@@ -69,6 +69,15 @@ STALL_ROUNDS = 5
 # the GPU host's gpu.lock to go before it trains here on the CPU instead.
 GPU_LOCK_WAIT = 20 * 60
 GPU_LOCK_POLL = 30
+# Any other failure there (a spot VM preempted or restarting, a dropped ssh)
+# is tried TRAIN_REMOTE_TRIES times in all, TRAIN_REMOTE_RETRY_WAIT s apart:
+# the VM is usually back in minutes, the CPU here takes hours.
+TRAIN_REMOTE_TRIES = 4
+TRAIN_REMOTE_RETRY_WAIT = 5 * 60
+
+
+class GpuBusy(RuntimeError):
+    pass
 
 
 class Run:
@@ -354,13 +363,18 @@ def train(run, n, args):
         argv += ["--sample", str(args.train_sample)]
     if getattr(args, "train_ema", 0):
         argv += ["--ema", str(args.train_ema)]
-    if args.train_host:
+    for attempt in range(1, TRAIN_REMOTE_TRIES + 1 if args.train_host else 0):
         try:
             train_remote(args, argv, data, run.dir(n, "train"), init, n)
             shutil.copyfile(run.dir(n, "train", "net.npz"), run.net(n))
             return
         except Exception as error:
-            say(f"round {n}: training on {args.train_host} failed ({error}); here")
+            last = isinstance(error, GpuBusy) or attempt == TRAIN_REMOTE_TRIES
+            then = "here" if last else f"again in {TRAIN_REMOTE_RETRY_WAIT} s"
+            say(f"round {n}: training on {args.train_host} failed ({error}); {then}")
+            if last:
+                break
+            time.sleep(TRAIN_REMOTE_RETRY_WAIT)
     if T.main(argv) != 0:
         raise SystemExit("training failed")
     shutil.copyfile(run.dir(n, "train", "net.npz"), run.net(n))
@@ -371,7 +385,8 @@ def train_remote(args, argv, data, out, init, n):
     setup: same paths under COLONIST_WORKER_ROOT): copy the code, the data
     folders and the starting net there, train with CUDA, copy the result
     back. A loaded subset (--train-max-positions) keeps it within the
-    machine's memory. Any failure raises, and training happens here."""
+    machine's memory. Any failure raises: the caller tries again, then
+    trains here."""
     import subprocess
 
     from catanatron.colonist import distributed as D
@@ -411,7 +426,7 @@ def train_remote(args, argv, data, out, init, n):
         == 0
     ):
         if waited >= GPU_LOCK_WAIT:
-            raise RuntimeError(f"its GPU is busy (gpu.lock, waited {waited} s)")
+            raise GpuBusy(f"its GPU is busy (gpu.lock, waited {waited} s)")
         if not waited:
             say(f"round {n}: {host}'s GPU is busy (gpu.lock); waiting")
         time.sleep(GPU_LOCK_POLL)
