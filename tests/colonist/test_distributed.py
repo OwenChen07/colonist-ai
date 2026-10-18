@@ -252,6 +252,83 @@ def test_idle_machines_take_a_straggler_s_unstarted_shards(tmp_path, monkeypatch
     assert any("stopping w@slow" in line for line in logs)
 
 
+def test_an_unprepared_host_s_range_is_taken_while_a_straggler_plays(
+    tmp_path, monkeypatch
+):
+    # Round 71: a preempted spot VM's 9 shards waited 16 min for the
+    # slowest host, then were played in a second wave.
+    import subprocess
+    import time
+
+    from catanatron.colonist import distributed
+    from catanatron.colonist.datagen import shard_path
+
+    out = tmp_path / "run" / "round" / "data"
+    played = {}  # where each seed was played
+    assigned = {}  # host -> the ranges it was given
+
+    def play(where, first, games):
+        for start in range(first, first + games, distributed.SHARD_SIZE):
+            path = shard_path(
+                out, start, min(distributed.SHARD_SIZE, first + games - start)
+            )
+            if not os.path.isfile(path):
+                played.setdefault(start, []).append(where)
+                open(path, "w").close()
+
+    def seed_range(argv):
+        argv = [str(a) for a in argv]
+        return int(argv[argv.index("--seed") + 1]), int(argv[argv.index("--games") + 1])
+
+    def prepare(host, *a):
+        if host == "w@dead":
+            raise subprocess.CalledProcessError(255, "ssh")
+        return ["selfplay"]
+
+    def ssh(host, key, argv):
+        if "--seed" not in map(str, argv):
+            return ["true"]  # the pkill that stops the straggler
+        assigned.setdefault(host, []).append(seed_range(argv))
+        return ["sleep", "60"]  # still playing its last games
+
+    def local(argv):
+        play("here", *seed_range(argv))
+        return ["true"]
+
+    def rsync(key, source, destination):
+        host = str(source).split(":")[0]
+        if host == "w@slow":
+            play(host, *assigned[host][0])
+
+    monkeypatch.setenv("COLONIST_WORKER_HOSTS", "w@dead:4,w@slow:4")
+    monkeypatch.delenv("COLONIST_WORKERS_FILE", raising=False)
+    monkeypatch.delenv("COLONIST_SELFPLAY_CAPACITIES", raising=False)
+    monkeypatch.setattr(distributed, "STEAL_POLL", 0)
+    monkeypatch.setattr(distributed, "_prepare", prepare)
+    monkeypatch.setattr(distributed, "_remote_opponents", lambda *a: [])
+    monkeypatch.setattr(distributed, "_ssh", ssh)
+    monkeypatch.setattr(distributed, "_local", local)
+    monkeypatch.setattr(distributed, "_rsync", rsync)
+    monkeypatch.setattr(
+        distributed.selfplay,
+        "run",
+        lambda net, out_dir, games, seed, **o: play("here", seed, games),
+    )
+    logs = []
+    started = time.monotonic()
+    distributed.run("net.npz", out, games=12 * 64, seed=0, workers=2, log=logs.append)
+
+    assert distributed._complete(out, 0, 12 * 64)
+    assert time.monotonic() - started < 30  # not after the straggler's 60 s
+    dead_first, dead_games = distributed.split(12 * 64, 0, 2, [("a", 4), ("b", 4)])[1]
+    lost = range(dead_first, dead_first + dead_games, 64)
+    assert all(len(where) == 1 for where in played.values())
+    assert {played[s][0] for s in lost} == {"here"}
+    assert any("takes" in line and "from w@dead" in line for line in logs)
+    assert any("stopping w@slow" in line for line in logs)
+    assert not any("lost shards" in line for line in logs)
+
+
 def test_human_opponent_reaches_local_and_remote_self_play(tmp_path, monkeypatch):
     from catanatron.colonist import distributed
 

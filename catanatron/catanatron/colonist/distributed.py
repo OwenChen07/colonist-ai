@@ -323,7 +323,12 @@ def run(
         """Plays local_range here while each (host, processes, first, size)
         job runs remotely; returns the hosts that finished and were copied."""
         running = []
+        # Ranges nobody plays: a host that could not be prepared, or that
+        # failed. Idle machines take them before any straggler's tail.
+        orphans = []
         for host, count, first, size in jobs:
+            if size and host not in prepared:
+                orphans.append([host, 0, first, size])
             if not size or host not in prepared:
                 continue
             running.append(launch(host, count, first, size))
@@ -353,6 +358,7 @@ def run(
                         log(
                             f"{host} exited with status {code}; its range runs elsewhere"
                         )
+                        orphans.append([host, 0, job[2], job[3]])
                     if host != HERE:
                         try:
                             _rsync(key, f"{host}:{remote_data}/", f"{out_dir}/")
@@ -360,6 +366,8 @@ def run(
                             log(
                                 f"copying shards from {host} failed; its range runs elsewhere"
                             )
+                            if not code:
+                                orphans.append([host, 0, job[2], job[3]])
                             continue
                     if not code:
                         finished.append(host)
@@ -376,7 +384,7 @@ def run(
                 if idle and time.monotonic() - looked >= STEAL_POLL:
                     looked = time.monotonic()
                     for host in list(idle):
-                        job = steal(host, running, taken)
+                        job = steal(host, running, taken, orphans)
                         if job:
                             idle.remove(host)
                             running.append(job)
@@ -387,18 +395,21 @@ def run(
             raise
         return [host for host in dict.fromkeys(finished) if host != HERE]
 
-    def steal(host, running, taken):
-        """A job for an idle host: the unstarted tail of the slowest job's
-        range. Its processes play a job's first missing shards, so those
-        are under way; a later one may get played twice, which gives the
-        same games, and the first copy here is kept."""
+    def steal(host, running, taken, orphans=()):
+        """A job for an idle host: shards of a range nobody plays, else the
+        unstarted tail of the slowest job's range. Its processes play a
+        job's first missing shards, so those are under way; a later one may
+        get played twice, which gives the same games, and the first copy
+        here is kept."""
         count = local_processes if host == HERE else dict(hosts)[host]
         if host != HERE and host not in prepared:
             return None
         best = []
-        for job in running:
+        # Orphans first, so that they win ties. Nothing of theirs is under
+        # way (procs 0), and the host that lost them is not asked for shards.
+        for job in list(orphans) + running:
             victim, procs, first, size = job[:4]
-            if victim != HERE:
+            if victim != HERE and procs:
                 try:
                     _rsync(key, f"{victim}:{remote_data}/", f"{out_dir}/")
                 except subprocess.CalledProcessError:
@@ -415,7 +426,8 @@ def run(
                 if tail and s[0] + SHARD_SIZE != tail[0][0]:
                     break
                 tail.insert(0, s)
-            tail = tail[-min(count, (len(tail) + 1) // 2) :] if tail else []
+            share = (len(tail) + 1) // 2 if procs else len(tail)
+            tail = tail[-min(count, share) :] if tail else []
             if len(tail) > len(best):
                 best, source = tail, victim
         if not best:
