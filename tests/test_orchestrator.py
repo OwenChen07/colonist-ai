@@ -192,11 +192,11 @@ def test_the_lead_and_workers_land_but_never_push():
     assert not any("push" in t for t in worker)
     assert not any("bridge" in t or "ranked_runner" in t for t in worker)
     for tools in (lead, worker):
-        assert "Bash(scripts/vm/orchestrator/kill_landing.sh:*)" in tools
-        assert (
-            f"Bash({agent.HOME_ROOT}/scripts/vm/orchestrator/kill_landing.sh:*)"
-            in tools
-        )
+        for script in ("kill_landing.sh", "kill_job.sh"):
+            assert f"Bash(scripts/vm/orchestrator/{script}:*)" in tools
+            assert (
+                f"Bash({agent.HOME_ROOT}/scripts/vm/orchestrator/{script}:*)" in tools
+            )
 
 
 def test_a_worker_sees_its_open_questions(tmp_path, monkeypatch):
@@ -419,6 +419,53 @@ def test_kill_landing_kills_a_stuck_landing_and_nothing_else(tmp_path):
         landing.kill()
         if alive(holder):
             os.kill(holder, signal.SIGTERM)
+
+
+KILL_JOB = KILL_LANDING.with_name("kill_job.sh")
+
+
+def kill_job(jobs, *args):
+    return subprocess.run(
+        ["bash", str(KILL_JOB), *args],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "KILL_JOB_DIR": str(jobs)},
+    )
+
+
+def test_kill_job_kills_a_listed_job_with_its_children_and_nothing_else(tmp_path):
+    jobs = tmp_path / "jobs"
+    jobs.mkdir()
+    # A job in its own process group with a child (its "ssh"), and a process
+    # the job did not start.
+    job = subprocess.Popen(
+        ["bash", "-c", "sleep 61 & sleep 62 & wait"], start_new_session=True
+    )
+    other = subprocess.Popen(["sleep", "63"])
+    (jobs / "e17.pid").write_text(f"{job.pid}\n")
+    (jobs / "other.pid").write_text(f"{other.pid}\n")
+    try:
+        for _ in range(100):
+            listed = kill_job(jobs, "e17").stdout
+            if len(listed.splitlines()) == 4:  # the job, its 2 children, a note
+                break
+            time.sleep(0.1)
+        assert str(job.pid) in listed and "listed only" in listed
+        assert job.poll() is None  # listing kills nothing
+        for refused in (["../e17"], ["nope", "--yes"]):
+            assert kill_job(jobs, *refused).returncode != 0
+        # A pid file written before its process started: a reused pid.
+        os.utime(jobs / "other.pid", (time.time() - 3600,) * 2)
+        stale = kill_job(jobs, "other", "--yes")
+        assert stale.returncode == 1 and "reused" in stale.stdout
+        killed = kill_job(jobs, "e17", "--yes").stdout
+        assert killed.count("killed") == 3 and f"killed {job.pid}" in killed
+        assert job.wait(10) != 0
+        assert "not running" in kill_job(jobs, "e17").stdout
+        assert other.poll() is None
+    finally:
+        job.kill()
+        other.kill()
 
 
 FAKE_WORKER = """

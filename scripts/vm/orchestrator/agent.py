@@ -71,6 +71,8 @@ CONTROL = (
     "scripts/vm/sync_bot.sh",
     # Kills only land.sh and its lock and tests (it refuses anything else).
     "scripts/vm/orchestrator/kill_landing.sh",
+    # Kills only a job listed in data/orchestrator/jobs/*.pid and its children.
+    "scripts/vm/orchestrator/kill_job.sh",
 )
 
 
