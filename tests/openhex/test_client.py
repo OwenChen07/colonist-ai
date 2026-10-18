@@ -2,6 +2,7 @@
 game behind the API, the opponent a random player, events as test_follow
 tells them. Every action the client sends must be legal there."""
 
+import json
 import random
 
 import pytest
@@ -246,3 +247,14 @@ def test_client_plays_a_whole_game(seed, me, monkeypatch, tmp_path):
     kinds = {a["type"] for a in server.sent}
     assert {"placeInitialSettlement", "placeInitialRoad", "rollDice"} <= kinds
     assert (tmp_path / "fake.json").exists()
+    assert C.is_ours("fake", joined=False)  # a restart would resume it
+
+
+def test_client_leaves_another_clients_game_alone(monkeypatch, tmp_path):
+    monkeypatch.setattr(C, "GAMES_DIR", str(tmp_path))
+    assert C.is_ours("g1", joined=True)  # matched from our queue entry
+    assert not C.is_ours("g1", joined=False)  # another machine's game
+    (tmp_path / "g1.json").write_text(json.dumps({"host": C.socket.gethostname()}))
+    assert C.is_ours("g1", joined=False)  # ours, from before a restart
+    (tmp_path / "g2.json").write_text(json.dumps({"host": "openhex-bot-1"}))
+    assert not C.is_ours("g2", joined=False)  # a synced copy of the VM's game

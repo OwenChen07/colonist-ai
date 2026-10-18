@@ -23,6 +23,7 @@ for _var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
 import argparse
 import json
 import random
+import socket
 import time
 import traceback
 import urllib.error
@@ -198,7 +199,13 @@ class Player:
         self.rng = rng
         self.follower = None
         self.me = None
-        self.record = {"id": gid, "events": [], "moves": [], "notes": []}
+        self.record = {
+            "id": gid,
+            "host": socket.gethostname(),
+            "events": [],
+            "moves": [],
+            "notes": [],
+        }
         self.broken = False  # the simulator lost the game: fallback moves only
         self.mismatch = 0  # polls where OpenHex says we move, the simulator not
         self.pending_seen = set()
@@ -544,6 +551,24 @@ def active_games(api):
     return [g for g in reply if g.get("status", "active") == "active"]
 
 
+def is_ours(gid, joined):
+    """Whether this client should play active game gid.
+
+    One bot token can run on two machines, and both see the same active
+    game. A client plays a game it queued for, or one this machine wrote a
+    game file for (a restart); any other is another client's. Synced copies
+    of another machine's files carry that machine's host name.
+    """
+    if joined:
+        return True
+    try:
+        with open(os.path.join(GAMES_DIR, f"{gid}.json")) as f:
+            saved = json.load(f)
+    except (OSError, ValueError):
+        return False
+    return saved.get("host", socket.gethostname()) == socket.gethostname()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("net")
@@ -562,9 +587,16 @@ def main():
     results = []
     joined = False
     paused = False  # said "paused" since the pause file appeared
+    skipped = None  # another client's game, said once
     try:
         while args.games <= 0 or len(results) < args.games:
             games = active_games(api)
+            if games and not is_ours(games[0]["id"], joined):
+                if skipped != games[0]["id"]:
+                    skipped = games[0]["id"]
+                    say(f"[{skipped[:8]}] another client's game: waiting")
+                time.sleep(5)
+                continue
             if games:
                 gid = games[0]["id"]
                 joined = paused = False
