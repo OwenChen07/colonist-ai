@@ -402,6 +402,26 @@ def test_human_opponent_seat_plays_unsearched_and_unrecorded(tmp_path):
         assert g.rows and all(row[4] == main_color for row in g.rows)
 
 
+def test_games_are_played_with_the_collector_off_and_collected_now_and_then(
+    monkeypatch,
+):
+    import gc
+
+    from catanatron.colonist import selfplay as S
+
+    seen = []
+    collect = gc.collect
+    monkeypatch.setattr(S, "GC_EVERY", 2)
+    monkeypatch.setattr(gc, "collect", lambda: seen.append(gc.isenabled()))
+    assert gc.isenabled()
+    _, calls = S.play_games(
+        random_net(hidden=(16,), seed=1), range(2), {"simulations": 4}
+    )
+    assert gc.isenabled()
+    assert len(seen) == calls // 2 and seen and not any(seen)
+    collect()
+
+
 def test_human_opponent_samples_from_its_policy():
     from catanatron.colonist.selfplay import _HumanSeat
 

@@ -41,6 +41,7 @@ full search.
 """
 
 import argparse
+import gc
 import json
 import math
 import multiprocessing
@@ -292,6 +293,44 @@ def play_games(
 ):
     """Plays the games together, one network call per net per step. Returns
     the finished _Games and the number of network calls."""
+    # The search trees hold millions of objects, and the cyclic collector's
+    # full passes over them took a fifth of self-play's time. They have
+    # almost no cycles (reference counting frees them), so collect only now
+    # and then. The games are the same either way.
+    enabled = gc.isenabled()
+    gc.disable()
+    try:
+        return _play_games(
+            net,
+            seeds,
+            search_args,
+            opponents,
+            opponent_rate,
+            starts,
+            start_rate,
+            human,
+            human_rate,
+        )
+    finally:
+        if enabled:
+            gc.enable()
+
+
+#: Network calls between full garbage collections while games are played.
+GC_EVERY = 1000
+
+
+def _play_games(
+    net,
+    seeds,
+    search_args,
+    opponents,
+    opponent_rate,
+    starts,
+    start_rate,
+    human,
+    human_rate,
+):
     games = []
     for s in seeds:
         game = human_start(s, starts, start_rate)
@@ -316,6 +355,8 @@ def play_games(
                 [st for st, _ in encoded], np.stack([d for _, d in encoded])
             )
             calls += 1
+            if calls % GC_EVERY == 0:
+                gc.collect()
             for row, node in enumerate(nodes):
                 legal = E.legal_indices(node.actions)
                 node.set_evaluation(
