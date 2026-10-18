@@ -108,6 +108,14 @@ def global_rank(standing):
     )
 
 
+def rating_of(duel):
+    """The 1v1 rating as an int, or None; the API sends it as text ("2397")."""
+    try:
+        return int(float(duel.get("skillRating")))
+    except (TypeError, ValueError):
+        return None
+
+
 def new_high(state, duels, now):
     """Shoots and queues the best bot's rating when it beats the record.
 
@@ -115,9 +123,7 @@ def new_high(state, duels, now):
     it silently from the current best.
     """
     rated = [
-        (d["skillRating"], name)
-        for name, d in duels.items()
-        if isinstance(d.get("skillRating"), (int, float))
+        (rating_of(d), name) for name, d in duels.items() if rating_of(d) is not None
     ]
     if not rated:
         return

@@ -283,9 +283,11 @@ def test_rank_watch_posts_each_new_rating_record(tmp_path, monkeypatch):
         standing = [
             {"name": {"key": "strings:leaderboardPage.tabs.global"}, "rank": "61"}
         ]
+        # The API sends ratings as text, like "2353".
+        rating = str(ratings[name])
         return [
-            {"modeType": 2, "skillRating": 9999},
-            {"modeType": 1, "skillRating": ratings[name], "rankedStanding": standing},
+            {"modeType": 2, "skillRating": "9999"},
+            {"modeType": 1, "skillRating": rating, "rankedStanding": standing},
         ]
 
     monkeypatch.setattr(rank_watch, "fetch", fetch)
