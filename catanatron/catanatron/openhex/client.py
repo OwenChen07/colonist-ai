@@ -540,7 +540,10 @@ def main():
                     time.sleep(10)
                     continue
                 me = player.me
-                results.append((gid, info.get("status"), info.get("winner"), me))
+                winner = info.get("winner")  # {botId, color, name, seat}
+                if isinstance(winner, dict):
+                    winner = winner.get("color")
+                results.append((gid, info.get("status"), winner, me))
                 wins = sum(1 for _, _, w, c in results if w and w == c)
                 say(f"games {len(results)}/{args.games}, wins {wins}")
                 continue

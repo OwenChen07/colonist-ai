@@ -140,11 +140,23 @@ class Follower:
         elif t == "robberMoved":
             self.pending_robber = (who, as_hex(e["hex"]))
         elif t == "resourceStolen":
-            if not self.pending_robber:
-                raise OutOfSync(f"steal without a robber move: {e}")
             if not e.get("resource"):
                 raise OutOfSync(f"a steal we can't see: {e}")
-            self._flush_robber(color(e["target"]), e["resource"])
+            if self.pending_robber:
+                self._flush_robber(color(e["target"]), e["resource"])
+                return
+            # settle() already wrote the robber move as stealing nothing (the
+            # steal came after a poll): give that move its steal.
+            last = self.log[-1][0] if self.log else None
+            if not (
+                last
+                and last[0] == who.value
+                and last[1] == A.MOVE_ROBBER.value
+                and last[2][1] is None
+            ):
+                raise OutOfSync(f"steal without a robber move: {e}")
+            last[2][1] = color(e["target"]).value
+            self.log[-1][1] = RESOURCE[e["resource"]]
         elif t == "resourcesDiscarded":
             for r, n in sorted(e["resources"].items()):
                 for _ in range(n):
