@@ -21,6 +21,7 @@ import glob
 import json
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -36,6 +37,7 @@ STATE = ROOT / "data" / "orchestrator"
 PY = str(ROOT / ".venv/bin/python")
 LEAD = "orchestrator"
 RANK_EVERY_S = 600  # how often rank_watch.py checks for a #1
+FOLLOW_EVERY_S = 10  # how often a restarted bot checks its old workers
 WORKSTREAMS = [
     w.strip()
     for w in os.environ.get(
@@ -75,6 +77,30 @@ def mtime(path):
         return 0
 
 
+def runs(name):
+    """A workstream's run posts (runs/<stamp>.md), oldest first."""
+    found = (STATE / "workstreams" / name / "runs").glob("*.md")
+    return sorted(p for p in found if re.fullmatch(r"\d{8}-\d{6}\.md", p.name))
+
+
+def alive(pid):
+    """Whether pid is still a worker's agent.py (not a reused pid)."""
+    try:
+        return b"agent.py\0worker" in Path(f"/proc/{pid}/cmdline").read_bytes()
+    except OSError:
+        return False
+
+
+def last_status(name):
+    """The status of a workstream's last task, from its progress notes."""
+    try:
+        notes = (STATE / "workstreams" / name / "progress.md").read_text()
+    except OSError:
+        notes = ""
+    found = re.findall(r"^## .*\(\S+, (\w+)\)$", notes, re.M)
+    return found[-1] if found else "progress"
+
+
 class Orchestrator(discord.Client):
     def __init__(self, guild_id, owner_id):
         intents = discord.Intents.default()
@@ -89,8 +115,14 @@ class Orchestrator(discord.Client):
             ("alerted", []),
             ("rest", {}),
             ("paused", []),
+            ("workers", {}),  # workstream -> {"pid", "started"}, across restarts
         ):
             self.state.setdefault(key, default)
+        # The newest run post per workstream; seeded so old posts stay unposted.
+        self.state.setdefault(
+            "last_run", {n: r[-1].stem for n in WORKSTREAMS if (r := runs(n))}
+        )
+        self.recovered = False
         self.state.setdefault(
             "max_workers", int(os.environ.get("ORCHESTRATOR_MAX_WORKERS", "1"))
         )
@@ -142,7 +174,7 @@ class Orchestrator(discord.Client):
             message = await channel.send(part, **extra)
         return message
 
-    async def execute(self, *args):
+    async def execute(self, *args, started=None):
         """Runs agent.py or a script; returns its last stdout line as JSON."""
         proc = await asyncio.create_subprocess_exec(
             PY,
@@ -151,6 +183,8 @@ class Orchestrator(discord.Client):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
+        if started:
+            started(proc.pid)
         out, _ = await proc.communicate()
         text = out.decode(errors="replace").strip()
         try:
@@ -172,6 +206,9 @@ class Orchestrator(discord.Client):
     async def tick(self):
         if not self.channels:
             return
+        if not self.recovered:
+            self.recovered = True
+            await self.recover()
         now = utcnow()
         for kind, key in core.due(now):
             if f"{kind} {key}" in self.state["done"]:
@@ -370,25 +407,71 @@ class Orchestrator(discord.Client):
                 states[name] = {"state": why}
         save(STATE / "workers.json", states)
 
+    def started(self, name, pid):
+        self.state["workers"][name] = {
+            "pid": pid,
+            "started": self.running[name].isoformat(),
+        }
+        self.save()
+
     async def work(self, name):
+        status = "failed"
         try:
-            result, text = await self.execute(str(HERE / "agent.py"), "worker", name)
+            result, text = await self.execute(
+                str(HERE / "agent.py"),
+                "worker",
+                name,
+                started=lambda pid: self.started(name, pid),
+            )
             status = result.get("status", "failed")
-            if result.get("post"):
-                await self.say(name, Path(result["post"]).read_text())
-            elif status == "failed":
+            if not await self.post_runs(name) and status == "failed":
                 await self.say(name, f"Task failed: `{text[-400:]}`")
         except Exception:
             log.exception("worker %s", name)
-            status = "failed"
         finally:
-            ended = utcnow()
-            self.state["rest"][name] = {
-                "ended": ended.timestamp(),
-                "until": core.cooldown_until(ended, status).isoformat(),
-            }
-            self.running.pop(name, None)
+            self.finished(name, status)
+
+    def finished(self, name, status):
+        ended = utcnow()
+        self.state["rest"][name] = {
+            "ended": ended.timestamp(),
+            "until": core.cooldown_until(ended, status).isoformat(),
+        }
+        self.running.pop(name, None)
+        self.state["workers"].pop(name, None)
+        self.save()
+
+    async def post_runs(self, name):
+        """Posts the workstream's run posts not posted yet; returns how many."""
+        last = self.state["last_run"].get(name, "")
+        new = [p for p in runs(name) if p.stem > last]
+        for path in new:
+            await self.say(name, path.read_text())
+            self.state["last_run"][name] = path.stem
             self.save()
+        return len(new)
+
+    async def recover(self):
+        """After a restart: follow the workers still running (instead of
+        starting a second copy), and post what the others left."""
+        for name in WORKSTREAMS:
+            worker = self.state["workers"].get(name)
+            if worker and alive(worker["pid"]):
+                self.running[name] = dt.datetime.fromisoformat(worker["started"])
+                self.spawn(self.follow(name, worker["pid"]))
+                continue
+            self.state["workers"].pop(name, None)
+            await self.post_runs(name)
+        self.save()
+
+    async def follow(self, name, pid):
+        """Waits for a worker started by an earlier bot, then posts its run."""
+        while alive(pid):
+            await asyncio.sleep(FOLLOW_EVERY_S)
+        try:
+            await self.post_runs(name)
+        finally:
+            self.finished(name, last_status(name))
 
     # Messages ---------------------------------------------------------------
 

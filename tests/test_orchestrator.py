@@ -421,6 +421,77 @@ def test_kill_landing_kills_a_stuck_landing_and_nothing_else(tmp_path):
             os.kill(holder, signal.SIGTERM)
 
 
+FAKE_WORKER = """
+import sys, time
+from pathlib import Path
+time.sleep(1)
+d = Path(sys.argv[2])
+(d / "runs" / "20261017-210000.md").write_text("round 71 took 41 min")
+with open(d / "progress.md", "a") as notes:
+    notes.write("\\n## Oct 17 21:00 (claude, idle)\\nnotes\\n")
+"""
+
+
+def test_a_restarted_bot_follows_its_workers_and_posts_what_they_left(
+    tmp_path, monkeypatch
+):
+    import asyncio
+
+    import discord_bot
+
+    monkeypatch.setattr(discord_bot, "STATE", tmp_path)
+    monkeypatch.setattr(discord_bot, "WORKSTREAMS", ["efficiency", "openhex"])
+    monkeypatch.setattr(discord_bot, "FOLLOW_EVERY_S", 0.1)
+    for name in ("efficiency", "openhex"):
+        (tmp_path / "workstreams" / name / "runs").mkdir(parents=True)
+    runs = tmp_path / "workstreams" / "openhex" / "runs"
+    (runs / "20261017-180000.md").write_text("old, posted before")
+    posts = []
+
+    def bot():
+        orchestrator = discord_bot.Orchestrator(1, 2)
+
+        async def say(name, text, **kwargs):
+            posts.append((name, text))
+
+        orchestrator.say = say
+        return orchestrator
+
+    first = bot()  # the first start seeds what was posted
+    assert first.state["last_run"] == {"openhex": "20261017-180000"}
+    first.save()
+    # Runs that ended while the bot was down; a -partial.md is never posted.
+    (runs / "20261017-190000.md").write_text("orphaned post")
+    (runs / "20261017-190000-partial.md").write_text("last words")
+    script = tmp_path / "agent.py"  # its command line looks like a worker's
+    script.write_text(FAKE_WORKER)
+    d = tmp_path / "workstreams" / "efficiency"
+    worker = subprocess.Popen([sys.executable, str(script), "worker", str(d)])
+    first.state["workers"]["efficiency"] = {
+        "pid": worker.pid,
+        "started": "2026-10-18T00:50:00+00:00",
+    }
+    first.save()
+
+    async def restart():
+        again = bot()
+        await again.recover()
+        assert posts == [("openhex", "orphaned post")]
+        assert list(again.running) == ["efficiency"]  # no second copy
+        assert discord_bot.alive(worker.pid)
+        await asyncio.wait_for(asyncio.gather(*again.tasks), 10)
+        return again
+
+    again = asyncio.run(restart())
+    worker.wait()
+    assert posts[1:] == [("efficiency", "round 71 took 41 min")]
+    assert again.running == {} and again.state["workers"] == {}
+    rest = again.state["rest"]["efficiency"]
+    until = dt.datetime.fromisoformat(rest["until"]).timestamp()
+    assert until - rest["ended"] == 3 * 3600  # idle: three hours, not two minutes
+    assert not discord_bot.alive(worker.pid)
+
+
 def test_only_the_lead_may_restart_the_bot():
     restart = "Bash(scripts/vm/orchestrator/restart_bot.sh:*)"
     assert restart in agent.allowed_tools("lead")
