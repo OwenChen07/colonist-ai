@@ -556,6 +556,7 @@ def main():
     from catanatron.colonist.net import Net
 
     net = Net.load(args.net)
+    say(f"net {os.path.basename(args.net)}, {args.simulations} simulations")
     api = Api(load_key())
     rng = random.Random()
     results = []
