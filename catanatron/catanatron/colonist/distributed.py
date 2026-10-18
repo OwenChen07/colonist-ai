@@ -34,6 +34,7 @@ SHARD_SIZE = 64
 # another machine also plays it once the queue is empty). Parts of 16 were
 # no slower per game than whole shards (round 82, 10.142.0.8).
 PART_SIZE = 8
+STOP_GRACE = 20  # seconds a self-play worker gets to end before it is killed
 HERE = "here"  # the coordinator, as a job's host
 
 
@@ -390,7 +391,19 @@ def run(
                 slots.release()
             if process.poll() is None:
                 stop(host, state)
-            process.wait()
+            try:
+                process.wait(STOP_GRACE)
+            except subprocess.TimeoutExpired:
+                # A worker that outlives its stop held the round up 8 minutes
+                # and stayed behind with its pool (round 85).
+                if host == HERE:
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                else:
+                    process.kill()
+                process.wait()
 
     def stop(host, state):
         """Ends a machine's self-play, once: its pool here, or over SSH."""

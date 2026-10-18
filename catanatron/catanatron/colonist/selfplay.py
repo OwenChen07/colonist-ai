@@ -676,6 +676,14 @@ def run(
             merge_done()
 
 
+def _end_now(*_):
+    """SIGTERM for a --parts-stream worker: its finished parts are on disk, and
+    the part being written is a tmp file, so nothing is lost."""
+    for child in multiprocessing.active_children():
+        child.kill()
+    os._exit(143)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("net")
@@ -760,6 +768,9 @@ def main(argv=None):
     opponents = [o for o in args.opponents.split(",") if o]
     log, stream, done = (lambda m: print(m, flush=True)), None, None
     if args.parts_stream:
+        # A stopped queue worker hung in its pool's terminate, on a lock a
+        # killed worker held (round 85): kill the workers and leave instead.
+        signal.signal(signal.SIGTERM, _end_now)
         log = lambda m: print(m, file=sys.stderr, flush=True)  # noqa: E731
         stream = (tuple(map(int, line.split())) for line in sys.stdin if line.strip())
         done = lambda name: print(name, flush=True)  # noqa: E731

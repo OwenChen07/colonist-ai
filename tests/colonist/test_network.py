@@ -312,6 +312,39 @@ def test_parts_streamed_on_stdin_merge_to_the_same_shard(tmp_path):
             assert np.array_equal(a[key], b[key]), key
 
 
+def test_a_stopped_parts_stream_worker_ends_with_its_pool(tmp_path):
+    # distributed.run stops this machine's worker with SIGTERM to its group,
+    # its pool idle: round 85's hung in the pool's terminate.
+    import signal
+    import subprocess
+    import sys
+
+    net_path = str(tmp_path / "net.npz")
+    random_net(hidden=(16,)).save(net_path)
+    argv = [sys.executable, "-m", "catanatron.colonist.selfplay", net_path]
+    argv += [str(tmp_path / "sp"), "--simulations", "4", "--opponent-rate", "0"]
+    process = subprocess.Popen(
+        argv + ["--workers", "3", "--parts-stream"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        process.stdin.write("1 1\n")
+        process.stdin.flush()
+        assert process.stdout.readline().strip() == "shard_0000001_1.npz"
+        process.stdin.close()
+        os.killpg(process.pid, signal.SIGTERM)
+        assert process.wait(15) == 143
+    finally:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+
 def test_shards_past_the_last_full_wave_are_played_in_parts(tmp_path):
     from catanatron.colonist import selfplay
 
