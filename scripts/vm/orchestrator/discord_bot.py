@@ -167,6 +167,9 @@ class Orchestrator(discord.Client):
         channel = self.channels.get(name)
         if channel is None or not text.strip():
             return None
+        # Agents write "@owner" where they need the owner's input; nothing else
+        # in a report or run post pings them.
+        text = text.replace("@owner", f"<@{self.owner_id}>")
         message = None
         parts = core.chunks(text)
         for i, part in enumerate(parts):
@@ -300,7 +303,9 @@ class Orchestrator(discord.Client):
                         ),
                     )
                 )
-            mention = f"<@{self.owner_id}> " if d.get("urgent") else ""
+            # Owner's rule (Oct 18): anything that needs the owner's input pings
+            # them; regular updates never do.
+            mention = f"<@{self.owner_id}> "
             text = "\n".join(
                 [
                     f"{mention}❓ **Decision** `{d['id']}` (from {d.get('from')})",

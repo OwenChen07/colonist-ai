@@ -35,7 +35,7 @@ A denial applies to **that command**, not to Bash: rewrite it and go on. **Never
 - Your autonomy and the owner's rules are in `scripts/vm/orchestrator/ORCHESTRATOR.md` ("What you and the workers may do", "Ask the owner first", "The owner's rules"). Read them once if they aren't in your progress notes. Most important: never commit `captures/`; never print the reconnect token; never log in, type passwords or touch accounts; restart bots only between games; spend no money; the bot never trades or chats.
 - Another workstream owns another area. If your task needs a change there, say so in your output's `post` rather than doing it.
 - Be frugal with tokens: read what the task needs, skip broad tours of the code, and use subagents only for clearly parallel work.
-- When you need a decision, ask it as a decision (below) and work on something else, or end with status `blocked`.
+- When you need a decision, ask it as a decision (below) and work on something else, or end with status `blocked`. Decisions ping the owner; your run posts never do (owner's rule, Oct 18), so don't write `@owner` in a post unless it is itself a question only the owner can answer.
 
 ## Output (required, the last thing you write)
 End your final message with one JSON block. `agent.py` files and posts it.

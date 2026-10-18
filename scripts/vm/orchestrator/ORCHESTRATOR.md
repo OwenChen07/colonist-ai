@@ -119,4 +119,4 @@ End your final message with one JSON block. `agent.py` posts and files it; don't
 - **Next:** what happens before the next report.
 Use Toronto times. Say plainly when something failed or is inconclusive.
 
-**Decisions** are posted with a button per option; the owner can also reply in words. Mark one `urgent` only for an account risk or something that can't wait for the next report. From 9 pm to 9 am, only urgent ones are posted.
+**Decisions** are posted with a button per option and ping the owner (owner's rule, Oct 18: anything that needs their input pings them; the reports and status posts never do, so don't write `@owner` in a report); the owner can also reply in words. Mark one `urgent` only for an account risk or something that can't wait for the next report. From 9 pm to 9 am, only urgent ones are posted.
