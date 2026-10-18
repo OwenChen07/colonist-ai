@@ -658,6 +658,23 @@ def _remote_specs(host, key, root, tasks):
     return [(remote(t[0]), remote(t[1]), *t[2:]) for t in tasks]
 
 
+_match_rates = {}  # "local" or host: evaluation games/s in the last call
+
+
+def _match_weights(names, selfplay):
+    """The hosts' evaluation speeds from earlier calls, and for hosts without
+    one, their self-play capacity scaled by the median measured ratio. Round
+    79's match split by self-play speed: the GPU host, which trains during
+    self-play, finished in 145-278 s, the 2-core hosts in 340-774 s."""
+    ratios = sorted(
+        _match_rates[n] / w for n, w in zip(names, selfplay) if n in _match_rates
+    )
+    if not ratios:
+        return selfplay
+    scale = ratios[len(ratios) // 2]
+    return [_match_rates.get(n, w * scale) for n, w in zip(names, selfplay)]
+
+
 def run_tasks(tasks, workers=None, hosts=None, log=print):
     """Plays evaluate.py's game tasks here and on the worker hosts, in
     proportion to their measured self-play speeds (or processes), and returns
@@ -676,7 +693,8 @@ def run_tasks(tasks, workers=None, hosts=None, log=print):
     # By processes, round 78's 1000-game halves took 14-16 min: the
     # coordinator (8 processes, 0.08 games/s) got 82 games, a t2d VM (4, 0.33)
     # 41, so the t2d VMs waited on it and on the 2-core hosts.
-    weights = selfplay_capacities(local, hosts)
+    names = ["local"] + [host for host, _ in hosts]
+    weights = _match_weights(names, selfplay_capacities(local, hosts))
     started = time.monotonic()
     cuts = [
         round(len(tasks) * sum(weights[:i]) / sum(weights))
@@ -730,7 +748,10 @@ def run_tasks(tasks, workers=None, hosts=None, log=print):
     a, b = chunks[0]
     for i, game in zip(range(a, b), evaluate._run(tasks[a:b], local)):
         results[i] = game
-    times = [f"here {b - a} in {time.monotonic() - started:.0f} s"]
+    seconds = time.monotonic() - started
+    times = [f"here {b - a} in {seconds:.0f} s"]
+    if b > a:
+        _match_rates["local"] = (b - a) / max(seconds, 1)
     for host, (a, b), process, thread, out in remote:
         thread.join()
         times.append(f"{host} {b - a} in {out.get('seconds', 0):.0f} s")
@@ -742,6 +763,9 @@ def run_tasks(tasks, workers=None, hosts=None, log=print):
                 break
         if process.returncode or len(games) != b - a:
             log(f"{host} returned {len(games)} of {b - a} games; playing the rest here")
+            _match_rates.pop(host, None)
+        else:
+            _match_rates[host] = (b - a) / max(out["seconds"], 1)
         for i, game in zip(range(a, b), games):
             results[i] = game
     log("evaluation games by host: " + ", ".join(times))

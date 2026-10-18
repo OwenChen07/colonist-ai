@@ -156,6 +156,7 @@ def test_evaluation_games_are_split_by_measured_speed(tmp_path, monkeypatch):
     monkeypatch.setattr(distributed, "_sync_code", lambda *a: None)
     monkeypatch.setattr(distributed, "_remote_specs", specs)
     monkeypatch.setattr(distributed, "_ssh", lambda host, key, argv: ["false"])
+    monkeypatch.setattr(distributed, "_match_rates", {})
     monkeypatch.delenv("COLONIST_WORKERS_FILE", raising=False)
     monkeypatch.setenv("COLONIST_SELFPLAY_CAPACITIES", "local:1,w@x:1,w@y:8")
     tasks = list(evaluate.tasks_for("R", "W", range(5), {}))
@@ -164,6 +165,22 @@ def test_evaluation_games_are_split_by_measured_speed(tmp_path, monkeypatch):
     assert sent == {"w@x": 1, "w@y": 8}  # 10 tasks: 1 here, then 1 and 8
     assert games == list(evaluate._run(tasks, 1))
     assert any(line.startswith("evaluation games by host: here 1") for line in logs)
+    # Only the hosts that returned all their games keep a measured speed.
+    assert list(distributed._match_rates) == ["local"]
+
+
+def test_later_evaluation_calls_split_by_the_measured_evaluation_speed(
+    monkeypatch,
+):
+    from catanatron.colonist import distributed
+
+    monkeypatch.setattr(distributed, "_match_rates", {})
+    names = ["local", "w@x", "w@y"]
+    assert distributed._match_weights(names, [10, 20, 40]) == [10, 20, 40]
+    # Measured: x plays 1 game/s, y 4; local, unmeasured, gets its self-play
+    # capacity times the median measured ratio (x: 1/20, y: 4/40, median 0.1).
+    distributed._match_rates.update({"w@x": 1.0, "w@y": 4.0})
+    assert distributed._match_weights(names, [10, 20, 40]) == [1.0, 1.0, 4.0]
 
 
 def test_a_vanished_host_s_range_is_shared_with_the_hosts_that_finished(
