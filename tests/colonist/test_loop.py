@@ -537,11 +537,44 @@ def test_a_busy_gpu_host_is_skipped(tmp_path, monkeypatch):
     monkeypatch.setattr(
         subprocess, "run", lambda cmd, **kw: SimpleNamespace(returncode=0)
     )
+    sleeps = []
+    monkeypatch.setattr(loop.time, "sleep", sleeps.append)
     args = SimpleNamespace(
         train_host="me@gpu", train_device="cuda", train_max_positions=1
     )
+    # It waits GPU_LOCK_WAIT, checking every GPU_LOCK_POLL, then gives up.
     with pytest.raises(RuntimeError, match="busy"):
         loop.train_remote(args, ["d", "--out", "o"], ["d"], "o", "b.npz", 1)
+    assert sleeps == [loop.GPU_LOCK_POLL] * (loop.GPU_LOCK_WAIT // loop.GPU_LOCK_POLL)
+
+
+def test_training_waits_for_the_gpu_lock_to_go(tmp_path, monkeypatch):
+    import subprocess
+
+    from catanatron.colonist import distributed as D
+    from catanatron.colonist import loop
+
+    monkeypatch.chdir(tmp_path)
+    synced, sleeps, checks = [], [], []
+    monkeypatch.setattr(D, "_sync_code", lambda *a: synced.append(1))
+    monkeypatch.setattr(D, "_rsync", lambda *a: None)
+    monkeypatch.setattr(loop.time, "sleep", sleeps.append)
+
+    def run(cmd, **kw):
+        if "gpu.lock" in cmd[-1]:
+            checks.append(1)
+            return SimpleNamespace(returncode=0 if len(checks) <= 3 else 1)
+        if "catanatron.colonist.train" in cmd[-1]:
+            os.makedirs("o", exist_ok=True)
+            open("o/net.npz", "w").close()
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", run)
+    args = SimpleNamespace(
+        train_host="me@gpu", train_device="cuda", train_max_positions=1
+    )
+    loop.train_remote(args, ["d", "--out", "o"], ["d"], "o", "n/b.npz", 1)
+    assert sleeps == [loop.GPU_LOCK_POLL] * 3 and synced
 
 
 def test_strict_gate_promotes_only_through_the_guardrails(tiny_args, monkeypatch):

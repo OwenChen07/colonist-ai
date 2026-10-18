@@ -65,6 +65,10 @@ import time
 
 STEPS = ("selfplay", "train", "match", "benchmark", "done")
 STALL_ROUNDS = 5
+# Training waits up to GPU_LOCK_WAIT s (checking every GPU_LOCK_POLL s) for
+# the GPU host's gpu.lock to go before it trains here on the CPU instead.
+GPU_LOCK_WAIT = 20 * 60
+GPU_LOCK_POLL = 30
 
 
 class Run:
@@ -396,13 +400,24 @@ def train_remote(args, argv, data, out, init, n):
         check=True,
         timeout=60,
     )
-    # A long job on the GPU (e.g. growing a bigger net) holds gpu.lock there:
-    # train here rather than share its memory.
-    busy = subprocess.run(
-        D._ssh(host, key, ["test", "-e", f"{root}/gpu.lock"]), timeout=60
-    )
-    if busy.returncode == 0:
-        raise RuntimeError("its GPU is busy (gpu.lock)")
+    # A job on the GPU (e.g. growing a bigger net, an experiment's arm) holds
+    # gpu.lock there. Wait for it a while, since training here on the CPU
+    # takes hours; past that, train here rather than share its memory.
+    waited = 0
+    while (
+        subprocess.run(
+            D._ssh(host, key, ["test", "-e", f"{root}/gpu.lock"]), timeout=60
+        ).returncode
+        == 0
+    ):
+        if waited >= GPU_LOCK_WAIT:
+            raise RuntimeError(f"its GPU is busy (gpu.lock, waited {waited} s)")
+        if not waited:
+            say(f"round {n}: {host}'s GPU is busy (gpu.lock); waiting")
+        time.sleep(GPU_LOCK_POLL)
+        waited += GPU_LOCK_POLL
+    if waited:
+        say(f"round {n}: {host}'s GPU is free after {waited} s")
     D._sync_code(host, key, root)
     for folder in sorted(set(data)) + [os.path.dirname(init), out]:
         subprocess.run(D._ssh(host, key, ["mkdir", "-p", remote(folder)]), check=True)
