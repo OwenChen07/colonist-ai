@@ -512,8 +512,12 @@ def run(
     setup_simulations=None,
     human_opponent=None,
     human_opponent_rate=0.0,
+    part_stream=None,
+    done=None,
 ):
-    """Plays the shards of out_dir that aren't on disk yet."""
+    """Plays the shards of out_dir that aren't on disk yet. With `part_stream`, an
+    iterable of (first, count), plays those parts instead as they come, into
+    out_dir/parts, calling done(file name) as each is written."""
     if not 0 <= human_start_rate <= 1:
         raise ValueError("human_start_rate must be in [0, 1]")
     if not 0 <= human_opponent_rate <= 1:
@@ -565,25 +569,46 @@ def run(
     if full_rate < 1:
         search_args["full_rate"] = full_rate
         search_args["fast_simulations"] = fast_simulations
+
+    def task(directory, first, count):
+        return (
+            directory,
+            net_path,
+            first,
+            count,
+            search_args,
+            tuple(opponents),
+            opponent_rate,
+            human_starts,
+            human_start_rate,
+            human_opponent,
+            human_opponent_rate,
+        )
+
+    if part_stream is not None:
+        # distributed.run's queue: (first, count) parts arrive while others
+        # play, and each is reported by its file name in out_dir/parts.
+        parts_dir = os.path.join(out_dir, "parts")
+        start, played = time.time(), 0
+        ctx = multiprocessing.get_context("spawn")
+        with ctx.Pool(workers) as pool:
+            for path, count, rows, searches, calls, secs in pool.imap_unordered(
+                run_shard,
+                (task(parts_dir, first, count) for first, count in part_stream),
+            ):
+                played += count
+                log(
+                    f"{os.path.basename(path)}: {count} games in {secs:.0f} s "
+                    f"({secs / count:.1f} s per game in this worker) | {played} "
+                    f"games, {played / (time.time() - start):.2f}/s"
+                )
+                done(os.path.basename(path))
+        return
     tasks = []
     for first in range(seed, seed + games, shard_size):
         count = min(shard_size, seed + games - first)
         if not os.path.exists(shard_path(out_dir, first, count)):
-            tasks.append(
-                (
-                    out_dir,
-                    net_path,
-                    first,
-                    count,
-                    search_args,
-                    tuple(opponents),
-                    opponent_rate,
-                    human_starts,
-                    human_start_rate,
-                    human_opponent,
-                    human_opponent_rate,
-                )
-            )
+            tasks.append(task(out_dir, first, count))
     processes = workers or os.cpu_count() or 1
     parts = {}  # shard path -> its part paths, when played in parts
     # The shards past the last full wave are cut into parts for every
@@ -723,9 +748,21 @@ def main(argv=None):
         default=0.2,
         help="share of games where one seat is a random opponent",
     )
+    parser.add_argument(
+        "--parts-stream",
+        action="store_true",
+        help="play 'first count' lines from stdin as they arrive, into "
+        "out_dir/parts, printing each part's file name when written (how "
+        "distributed.run uses a worker); progress goes to stderr",
+    )
     args = parser.parse_args(argv)
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     opponents = [o for o in args.opponents.split(",") if o]
+    log, stream, done = (lambda m: print(m, flush=True)), None, None
+    if args.parts_stream:
+        log = lambda m: print(m, file=sys.stderr, flush=True)  # noqa: E731
+        stream = (tuple(map(int, line.split())) for line in sys.stdin if line.strip())
+        done = lambda name: print(name, flush=True)  # noqa: E731
     run(
         args.net,
         args.out_dir,
@@ -736,7 +773,7 @@ def main(argv=None):
         args.workers,
         opponents,
         args.opponent_rate,
-        log=lambda m: print(m, flush=True),
+        log=log,
         setup_noise_scale=args.setup_noise_scale,
         full_rate=args.full_rate,
         fast_simulations=args.fast_simulations,
@@ -745,6 +782,8 @@ def main(argv=None):
         setup_simulations=args.setup_simulations,
         human_opponent=args.human_opponent,
         human_opponent_rate=args.human_opponent_rate,
+        part_stream=stream,
+        done=done,
     )
     return 0
 

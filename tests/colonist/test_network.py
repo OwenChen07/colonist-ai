@@ -278,6 +278,40 @@ def test_a_lone_shard_is_played_in_parts_and_merged_to_the_same_data(tmp_path):
             assert np.array_equal(a[key], b[key]), key
 
 
+def test_parts_streamed_on_stdin_merge_to_the_same_shard(tmp_path):
+    import subprocess
+    import sys
+
+    from catanatron.colonist import selfplay
+
+    net_path = str(tmp_path / "net.npz")
+    random_net(hidden=(16,)).save(net_path)
+    whole, *_ = selfplay.run_shard(
+        (str(tmp_path / "one"), net_path, 5, 9, {"simulations": 4})
+    )
+    out = tmp_path / "sp"
+    argv = [sys.executable, "-m", "catanatron.colonist.selfplay", net_path, str(out)]
+    argv += ["--simulations", "4", "--opponent-rate", "0", "--workers", "2"]
+    done = subprocess.run(
+        argv + ["--parts-stream"],
+        input="9 5\n5 4\n",
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+    parts = [
+        str(out / "parts" / name)
+        for name in ("shard_0000005_4.npz", "shard_0000009_5.npz")
+    ]
+    assert sorted(done) == [os.path.basename(p) for p in parts]
+    merged = str(out / os.path.basename(whole))
+    selfplay.merge_parts(merged, parts)
+    with np.load(whole) as a, np.load(merged) as b:
+        assert a.files == b.files
+        for key in a.files:
+            assert np.array_equal(a[key], b[key]), key
+
+
 def test_shards_past_the_last_full_wave_are_played_in_parts(tmp_path):
     from catanatron.colonist import selfplay
 
