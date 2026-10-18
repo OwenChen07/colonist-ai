@@ -47,6 +47,9 @@ API = "https://open-hex.web.app/api"
 TORONTO = ZoneInfo("America/Toronto")
 KEY_FILE = "data/openhex/bot.json"
 GAMES_DIR = "data/openhex/games"
+# While this file exists the client finishes its game and stays out of the
+# queue, so a restart can happen between games.
+PAUSE_FILE = "data/openhex/pause"
 MOVE_CLOCK = 60.0  # seconds per action; missing it aborts the game
 RESERVE = 8.0  # seconds kept back for the network and a fallback move
 # prompt: (share of the time left, cap in seconds, simulations as a multiple
@@ -544,7 +547,7 @@ def active_games(api):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("net")
-    parser.add_argument("--games", type=int, default=1)
+    parser.add_argument("--games", type=int, default=1, help="0: no limit")
     parser.add_argument("--simulations", type=int, default=2400)
     parser.add_argument("--core", type=int, default=None, help="pin to one CPU")
     args = parser.parse_args()
@@ -558,7 +561,7 @@ def main():
     results = []
     joined = False
     try:
-        while len(results) < args.games:
+        while args.games <= 0 or len(results) < args.games:
             games = active_games(api)
             if games:
                 gid = games[0]["id"]
@@ -579,6 +582,16 @@ def main():
                 results.append((gid, info.get("status"), winner, me))
                 wins = sum(1 for _, _, w, c in results if w and w == c)
                 say(f"games {len(results)}/{args.games}, wins {wins}")
+                continue
+            if os.path.exists(PAUSE_FILE):
+                if joined:
+                    try:
+                        api.call("POST", "/queue/leave", {"mode": "1v1"}, tries=1)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    joined = False
+                    say(f"paused ({PAUSE_FILE}): out of the queue")
+                time.sleep(5)
                 continue
             if not joined:
                 try:

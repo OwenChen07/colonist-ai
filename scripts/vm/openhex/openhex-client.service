@@ -1,0 +1,26 @@
+[Unit]
+Description=Colonist AI: the OpenHex 1v1 ladder client (one game at a time)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+# One client per vCPU at most. The API key is data/openhex/bot.json (mode 600,
+# copied by scp, never committed). To restart between games: touch
+# data/openhex/pause, wait for "paused" in the log, restart, rm the file.
+[Service]
+User=owen
+WorkingDirectory=/home/owen/colonist-ai
+Environment=PYTHONUNBUFFERED=1
+Environment=OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
+ExecStart=/home/owen/colonist-ai/.venv/bin/python -m catanatron.openhex.client \
+    /home/owen/colonist-ai/runs/g1/nets/round_066.npz \
+    --games 0 --simulations 2400
+StandardOutput=append:/home/owen/colonist-ai/data/openhex/client.log
+StandardError=append:/home/owen/colonist-ai/data/openhex/client.log
+Restart=always
+RestartSec=60
+KillMode=control-group
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
