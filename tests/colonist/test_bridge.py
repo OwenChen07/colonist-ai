@@ -1161,6 +1161,21 @@ def test_planned_discard_is_sent_when_the_opponent_is_too_slow():
     assert bridge.think() == []  # and not again when the opponent discards
 
 
+def test_a_sent_discard_is_not_planned_again_before_it_shows():
+    """bot4's 2026-10-18 capture: the bot (the earlier seat) sent its six
+    discards, then the opponent's discard was logged first. The bot was still
+    to move in the simulator, searched again and sent a second plan, so its
+    real discard didn't match what was expected."""
+    bridge = _discard_race(deadline_in=60)
+    _opponent_discards(bridge)
+    replies = bridge.think()
+    assert any(r["kind"] == "send" for r in replies)
+    plan = bridge.expect[1]
+    bridge.live.position_key += 1  # another update before the bot's discard
+    assert bridge.think() == []
+    assert bridge.expect[1] == plan
+
+
 @pytest.mark.parametrize("left, searched", [(60, True), (4, False)])
 def test_late_opponent_discard_uses_the_plan_only_without_time(left, searched):
     bridge = _discard_race(deadline_in=20)

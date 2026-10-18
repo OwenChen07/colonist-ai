@@ -946,6 +946,11 @@ class Bridge:
             and live.game.state.is_discarding
         ):
             return []  # the planned discard is already sent for this 7
+        if self.expect is not None:
+            # A sent move isn't confirmed yet. The opponent's discard logged
+            # first still leaves the bot to move in the simulator, and a new
+            # search sent a second discard (seen live: bot5, then bot4).
+            return []
         if not live.bot_to_move or live.position_key == self.answered:
             return []
         self.answered = live.position_key
