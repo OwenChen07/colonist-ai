@@ -333,20 +333,19 @@ def run(
                 continue
             running.append(launch(host, count, first, size))
             log(f"self-play: {size} games (seeds {first}+) on {host}")
+        # The coordinator's range is a job like the others, so that idle
+        # hosts take orphans and stragglers' tails while it plays: round 72's
+        # six fastest VMs sat idle 25 minutes waiting on it (load 38 on 8
+        # cores), and round 71's lost shards waited 38.
         first, size = local_range
         log(f"self-play: {size} games here")
-        try:
-            if size:
-                selfplay.run(net_path, out_dir, games=size, seed=first, **options)
-        except BaseException:
-            for job in running:
-                job[4].terminate()
-                job[4].wait()
-            raise
+        idle = [] if size else [HERE]
+        if size:
+            running.append(launch(HERE, local_processes, first, size))
         wanted = shards_of(*local_range) + [
             s for _, _, first, size in jobs for s in shards_of(first, size)
         ]
-        finished, idle, taken = [], [HERE], set()
+        finished, taken = [], set()
         looked = time.monotonic()
         try:
             while running:

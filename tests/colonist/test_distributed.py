@@ -144,6 +144,16 @@ def test_a_vanished_host_s_range_is_shared_with_the_hosts_that_finished(
     def selfplay_run(net, out_dir, games, seed, **options):
         play("here", seed, games)
 
+    def local(argv):
+        argv = [str(a) for a in argv]
+        selfplay_run(
+            None,
+            None,
+            int(argv[argv.index("--games") + 1]),
+            int(argv[argv.index("--seed") + 1]),
+        )
+        return ["true"]
+
     remote = {}  # host -> the range it last played
 
     def ssh(host, key, argv):
@@ -166,6 +176,7 @@ def test_a_vanished_host_s_range_is_shared_with_the_hosts_that_finished(
     monkeypatch.setattr(distributed, "_remote_opponents", lambda *a: [])
     monkeypatch.setattr(distributed, "_ssh", ssh)
     monkeypatch.setattr(distributed, "_rsync", rsync)
+    monkeypatch.setattr(distributed, "_local", local)
     monkeypatch.setattr(distributed.selfplay, "run", selfplay_run)
     logs = []
     distributed.run(
@@ -329,14 +340,82 @@ def test_an_unprepared_host_s_range_is_taken_while_a_straggler_plays(
     assert not any("lost shards" in line for line in logs)
 
 
+def test_idle_hosts_take_orphans_while_the_coordinator_plays(tmp_path, monkeypatch):
+    # Round 72: six VMs sat idle 25 min while the loaded coordinator played.
+    import subprocess
+    import time
+
+    from catanatron.colonist import distributed
+    from catanatron.colonist.datagen import shard_path
+
+    out = tmp_path / "run" / "round" / "data"
+    played = {}  # where each seed was played
+    assigned = {}  # host -> the ranges it was given
+
+    def play(where, first, games):
+        for start in range(first, first + games, distributed.SHARD_SIZE):
+            path = shard_path(
+                out, start, min(distributed.SHARD_SIZE, first + games - start)
+            )
+            if not os.path.isfile(path):
+                played.setdefault(start, []).append(where)
+                open(path, "w").close()
+
+    def seed_range(argv):
+        argv = [str(a) for a in argv]
+        return int(argv[argv.index("--seed") + 1]), int(argv[argv.index("--games") + 1])
+
+    def prepare(host, *a):
+        if host == "w@dead":
+            raise subprocess.CalledProcessError(255, "ssh")
+        return ["selfplay"]
+
+    def ssh(host, key, argv):
+        if "--seed" in map(str, argv):
+            assigned.setdefault(host, []).append(seed_range(argv))
+        return ["true"]
+
+    def local(argv):
+        play("here", *seed_range(argv))
+        return ["sleep", "60"]  # its shards are on disk, its process still runs
+
+    def rsync(key, source, destination):
+        host = str(source).split(":")[0]
+        for first, games in assigned.get(host, []):
+            play(host, first, games)
+
+    monkeypatch.setenv("COLONIST_WORKER_HOSTS", "w@dead:4,w@fast:4")
+    monkeypatch.delenv("COLONIST_WORKERS_FILE", raising=False)
+    monkeypatch.delenv("COLONIST_SELFPLAY_CAPACITIES", raising=False)
+    monkeypatch.setattr(distributed, "STEAL_POLL", 0)
+    monkeypatch.setattr(distributed, "_prepare", prepare)
+    monkeypatch.setattr(distributed, "_remote_opponents", lambda *a: [])
+    monkeypatch.setattr(distributed, "_ssh", ssh)
+    monkeypatch.setattr(distributed, "_local", local)
+    monkeypatch.setattr(distributed, "_rsync", rsync)
+    logs = []
+    started = time.monotonic()
+    distributed.run("net.npz", out, games=12 * 64, seed=0, workers=4, log=logs.append)
+
+    assert distributed._complete(out, 0, 12 * 64)
+    assert time.monotonic() - started < 30  # not after the coordinator's 60 s
+    dead_first, dead_games = distributed.split(12 * 64, 0, 4, [("a", 4), ("b", 4)])[1]
+    lost = range(dead_first, dead_first + dead_games, 64)
+    assert all(len(where) == 1 for where in played.values())
+    assert {played[s][0] for s in lost} == {"w@fast"}
+    assert any("w@fast takes" in line and "from w@dead" in line for line in logs)
+    assert any("stopping here" in line for line in logs)
+
+
 def test_human_opponent_reaches_local_and_remote_self_play(tmp_path, monkeypatch):
     from catanatron.colonist import distributed
 
     out = tmp_path / "run" / "round" / "data"
-    local, remote, copied = {}, [], []
+    local, remote, copied = [], [], []
 
-    def selfplay_run(net, out_dir, games, seed, **options):
-        local.update(options)
+    def local_argv(argv):
+        local.extend(str(a) for a in argv)
+        return ["true"]
 
     def ssh(host, key, argv):
         remote.append([str(a) for a in argv])
@@ -350,7 +429,7 @@ def test_human_opponent_reaches_local_and_remote_self_play(tmp_path, monkeypatch
     monkeypatch.setattr(distributed, "_ssh", ssh)
     monkeypatch.setattr(distributed, "_rsync", lambda k, s, d: copied.append(str(s)))
     monkeypatch.setattr(distributed, "_complete", lambda *a: True)
-    monkeypatch.setattr(distributed.selfplay, "run", selfplay_run)
+    monkeypatch.setattr(distributed, "_local", local_argv)
     distributed.run(
         "net.npz",
         out,
@@ -362,8 +441,8 @@ def test_human_opponent_reaches_local_and_remote_self_play(tmp_path, monkeypatch
         human_opponent_rate=0.15,
     )
 
-    assert local["human_opponent"] == "human.npz"
-    assert local["human_opponent_rate"] == 0.15
+    assert local[local.index("--human-opponent") + 1] == "human.npz"
+    assert local[local.index("--human-opponent-rate") + 1] == "0.15"
     argv = remote[0]
     assert argv[argv.index("--human-opponent-rate") + 1] == "0.15"
     assert argv[argv.index("--human-opponent") + 1].endswith("human_opponent.npz")
