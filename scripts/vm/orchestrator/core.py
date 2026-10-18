@@ -149,6 +149,110 @@ def chunks(text, size=1990):
     return out
 
 
+# #experiments: experiments.json rendered as embeds. Discord allows 4096
+# characters in an embed's text and 6000 over all of a message's embeds.
+EXPERIMENT_GROUPS = (
+    ("Running now", ("running", "deploying")),
+    ("Planned", ("planned",)),
+    ("Finished", ("done-kept", "done-reverted", "closed")),
+)
+FINISHED_WORDS = {"done-kept": "kept", "done-reverted": "reverted", "closed": "closed"}
+EMBED_TEXT = 4000
+MESSAGE_TEXT = 5800
+MESSAGE_EMBEDS = 10
+
+
+def toronto_stamp(text):
+    """'Oct 18, 6:55 AM' or 'Oct 18' as a datetime for sorting (year 2000:
+    the stamps carry none), else None."""
+    for form in ("%b %d, %I:%M %p", "%b %d"):
+        try:
+            return dt.datetime.strptime(f"2000 {text.strip()}", f"%Y {form}")
+        except (ValueError, AttributeError):
+            pass
+    return None
+
+
+def experiment_block(e):
+    """One experiment: in full while it runs or is planned, one or two
+    lines once finished."""
+    status = e.get("status", "")
+    head = f"**{e.get('id', '?')} · {e.get('title', '')}**"
+    if status in FINISHED_WORDS:
+        ended = (e.get("ended") or "").split(",")[0]
+        word = FINISHED_WORDS[status] + (f" {ended}" if ended else "")
+        lines = [f"{head} · _{word}_"]
+        if e.get("result"):
+            lines.append(e["result"])
+    else:
+        since = f" since {e['started']}" if e.get("started") else ""
+        lines = [head, f"_{e.get('workstream', '')} · {status}{since}_"]
+        for label, key in (
+            ("What", "what"),
+            ("Why", "why"),
+            ("Judged by", "metric"),
+            ("So far", "result"),
+        ):
+            if e.get(key):
+                lines.append(f"**{label}:** {e[key]}")
+    if e.get("next"):
+        lines.append(f"**Next:** {e['next']}")
+    return "\n".join(lines)
+
+
+def experiment_messages(entries, updated=""):
+    """experiments.json's entries as Discord messages, each a list of embed
+    texts: running and deploying first, then planned, then finished, newest
+    first within a group. As few messages as the limits allow."""
+
+    def newest(e):
+        stamp = toronto_stamp(
+            (e.get("ended") or e.get("started") or "")
+            if e.get("status") in FINISHED_WORDS
+            else (e.get("started") or "")
+        )
+        number = re.match(r"E(\d+)", e.get("id", ""))
+        return (stamp or dt.datetime.min, int(number.group(1)) if number else 0)
+
+    known = {s for _, statuses in EXPERIMENT_GROUPS for s in statuses}
+    title = f"**🧪 Experiments: {len(entries)}**" + (
+        f" (updated {updated})" if updated else ""
+    )
+    blocks = []
+    for name, statuses in EXPERIMENT_GROUPS:
+        group = [e for e in entries if e.get("status") in statuses]
+        if name == "Finished":
+            group += [e for e in entries if e.get("status") not in known]
+        if not group:
+            continue
+        group.sort(key=newest, reverse=True)
+        # A group starts its own embed, so the groups stand apart; its heading
+        # goes with its first entry, never alone at a message's end.
+        first = f"__**{name} ({len(group)})**__\n" + experiment_block(group[0])
+        blocks.append((True, first))
+        blocks += [(False, experiment_block(e)) for e in group[1:]]
+    blocks[:1] = [(True, title + "".join("\n\n" + b for _, b in blocks[:1]))]
+    messages, size = [], 0
+    for fresh, block in blocks:
+        block = block if len(block) <= EMBED_TEXT else block[: EMBED_TEXT - 1] + "…"
+        embeds = messages[-1] if messages else None
+        if embeds and not fresh and len(embeds[-1]) + 2 + len(block) <= EMBED_TEXT:
+            if size + 2 + len(block) <= MESSAGE_TEXT:
+                embeds[-1] += "\n\n" + block
+                size += 2 + len(block)
+                continue
+        if (
+            not embeds
+            or len(embeds) >= MESSAGE_EMBEDS
+            or size + len(block) > MESSAGE_TEXT
+        ):
+            messages.append([])
+            size = 0
+        messages[-1].append(block)
+        size += len(block)
+    return messages
+
+
 def option_lines(options):
     """A decision's options as a numbered list: the message wraps them on a
     phone, where long button labels are cut off."""

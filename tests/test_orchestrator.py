@@ -4,6 +4,7 @@
 import datetime as dt
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -272,6 +273,53 @@ def test_decision_options_fit_a_phone():
     assert core.chosen(options, "option 2") == "Keep it as is"
     assert core.chosen(options, "3") is None
     assert core.chosen(options, "2 but only for training") is None
+
+
+def test_experiments_render_running_first_newest_first_within_discord_limits():
+    def entry(n, status, started, ended="", **extra):
+        return {
+            "id": f"E{n}",
+            "title": f"title {n}",
+            "workstream": "training",
+            "status": status,
+            "started": started,
+            "ended": ended,
+            "what": "what " * 30,
+            "why": "why",
+            "metric": "metric",
+            "result": "result " * 20 if ended else "",
+            **extra,
+        }
+
+    entries = [
+        entry(1, "done-kept", "Oct 12, 9:54 PM", "Oct 13, 7:20 AM"),
+        entry(2, "closed", "Oct 12", "Oct 17, 8:40 AM"),
+        entry(3, "running", "Oct 17, 9:20 PM"),
+        entry(4, "planned", "Oct 18"),
+        entry(5, "deploying", "Oct 18, 7:55 AM", next="verdict after round 81"),
+        entry(6, "done-reverted", "Oct 18, 1:00 AM", "Oct 18, 2:00 AM"),
+    ]
+    messages = core.experiment_messages(entries, "Oct 18, 9:00 AM")
+    text = "\n".join(t for m in messages for t in m)
+    assert text.startswith("**🧪 Experiments: 6** (updated Oct 18, 9:00 AM)")
+    order = [int(n) for n in re.findall(r"\*\*E(\d+) ·", text)]
+    assert order == [5, 3, 4, 6, 2, 1]
+    assert "**What:** what" in text and "**Next:** verdict after round 81" in text
+    # Finished ones are short: no what or why, the status and end date.
+    finished = text.split("Finished (3)")[1]
+    assert "**What:**" not in finished and "_reverted Oct 18_" in finished
+    assert len(messages) == 1
+
+    many = [entry(n, "running", "Oct 18") for n in range(60)]
+    messages = core.experiment_messages(many)
+    assert len(messages) > 1
+    for embeds in messages:
+        assert len(embeds) <= core.MESSAGE_EMBEDS
+        assert sum(map(len, embeds)) <= core.MESSAGE_TEXT
+        assert all(len(t) <= core.EMBED_TEXT for t in embeds)
+    text = "\n".join(t for m in messages for t in m)
+    assert all(f"**E{n} ·" in text for n in range(60))
+    assert core.experiment_messages([]) == [["**🧪 Experiments: 0**"]]
 
 
 def test_permission_requests_never_reach_the_owner(tmp_path, monkeypatch):

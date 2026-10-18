@@ -5,10 +5,13 @@ colonist-orchestrator.service, so it keeps going with the owner's laptop off.
   agent), an hourly status from 10 am to 8 pm (status.py, no tokens), the
   decisions that need the owner (buttons, or reply to the message), and chat
   with the lead. Commands: !status !budget !workers N !pause W !resume W !run W
-  !major !help.
+  !major !experiments !help.
 - One channel per workstream (#efficiency, #training, #live-loss, #openhex): each worker
   posts there when a task ends. Messages there go to that worker's inbox, and
   an idle worker starts on them at once.
+- #experiments: every experiment in data/orchestrator/experiments.json, as
+  pinned messages the bot edits in place when the file changes (!experiments
+  re-renders now). Messages there do nothing else.
 - From 9 pm to 9 am only account risks (data/*/NEEDS_OWNER.md) and urgent
   decisions are posted. The workers keep working within the daily budget.
 
@@ -36,6 +39,7 @@ ROOT = HERE.parents[2]
 STATE = ROOT / "data" / "orchestrator"
 PY = str(ROOT / ".venv/bin/python")
 LEAD = "orchestrator"
+EXPERIMENTS = "experiments"
 RANK_EVERY_S = 600  # how often rank_watch.py checks for a #1
 FOLLOW_EVERY_S = 10  # how often a restarted bot checks its old workers
 WORKSTREAMS = [
@@ -116,6 +120,7 @@ class Orchestrator(discord.Client):
             ("rest", {}),
             ("paused", []),
             ("workers", {}),  # workstream -> {"pid", "started"}, across restarts
+            ("experiments", {}),  # #experiments: {"ids": [...], "mtime": ...}
         ):
             self.state.setdefault(key, default)
         # The newest run post per workstream; seeded so old posts stay unposted.
@@ -123,6 +128,8 @@ class Orchestrator(discord.Client):
             "last_run", {n: r[-1].stem for n in WORKSTREAMS if (r := runs(n))}
         )
         self.recovered = False
+        self.experiments_checked = False  # stored messages still there?
+        self.experiments_lock = asyncio.Lock()
         self.state.setdefault(
             "max_workers", int(os.environ.get("ORCHESTRATOR_MAX_WORKERS", "1"))
         )
@@ -156,7 +163,7 @@ class Orchestrator(discord.Client):
         category = discord.utils.get(guild.categories, name="colonist-ai")
         if category is None:
             category = await guild.create_category("colonist-ai")
-        for name in [LEAD, *WORKSTREAMS]:
+        for name in [LEAD, *WORKSTREAMS, EXPERIMENTS]:
             channel = discord.utils.get(guild.text_channels, name=name)
             if channel is None:
                 channel = await guild.create_text_channel(name, category=category)
@@ -224,6 +231,7 @@ class Orchestrator(discord.Client):
                 self.spawn(self.major())
         await self.alerts()
         await self.post_decisions(now)
+        await self.post_experiments()
         if now.timestamp() - self.state.get("rank_checked", 0) >= RANK_EVERY_S:
             self.state["rank_checked"] = now.timestamp()
             self.spawn(self.rank_watch(now))
@@ -356,6 +364,73 @@ class Orchestrator(discord.Client):
         await interaction.response.edit_message(
             content=interaction.message.content + f"\n✅ **{choice}**", view=None
         )
+
+    # #experiments -----------------------------------------------------------
+
+    async def post_experiments(self, force=False):
+        """Renders experiments.json into #experiments when the file changed,
+        editing the stored messages in place. After a restart (or
+        !experiments), re-posts them all if one of them is gone."""
+        async with self.experiments_lock:
+            await self.render_experiments(force)
+
+    async def render_experiments(self, force):
+        channel = self.channels.get(EXPERIMENTS)
+        path = STATE / "experiments.json"
+        stamp = mtime(path)
+        if channel is None or not stamp:
+            return
+        ids = list(self.state["experiments"].get("ids", []))
+        if not self.experiments_checked:
+            self.experiments_checked = force = True
+            try:
+                for i in ids:
+                    await channel.fetch_message(i)
+            except discord.NotFound:
+                for i in ids:
+                    try:
+                        await channel.get_partial_message(i).delete()
+                    except discord.HTTPException:
+                        pass
+                ids = []
+        if not force and stamp == self.state["experiments"].get("mtime"):
+            return
+        self.state["experiments"]["mtime"] = stamp
+        try:
+            entries = json.loads(path.read_text())["experiments"]
+        except (OSError, ValueError, KeyError, TypeError):
+            log.exception("experiments.json unreadable; waiting for a change")
+            self.save()
+            return
+        updated = core.local(dt.datetime.fromtimestamp(stamp, dt.timezone.utc))
+        pages = core.experiment_messages(entries, f"{updated:%b %-d, %-I:%M %p}")
+        kept = []
+        for n, texts in enumerate(pages):
+            embeds = [discord.Embed(description=t, colour=0x2B8A3E) for t in texts]
+            if n < len(ids):
+                try:
+                    await channel.get_partial_message(ids[n]).edit(
+                        content=None, embeds=embeds
+                    )
+                except discord.NotFound:
+                    self.experiments_checked = False  # re-post on the next tick
+                    return
+                kept.append(ids[n])
+                continue
+            message = await channel.send(embeds=embeds)
+            kept.append(message.id)
+            if n == 0:
+                try:
+                    await message.pin()
+                except discord.HTTPException:
+                    log.warning("could not pin the #experiments message")
+        for i in ids[len(pages) :]:
+            try:
+                await channel.get_partial_message(i).delete()
+            except discord.HTTPException:
+                pass
+        self.state["experiments"] = {"ids": kept, "mtime": stamp}
+        self.save()
 
     # Workers ----------------------------------------------------------------
 
@@ -575,9 +650,13 @@ class Orchestrator(discord.Client):
         elif cmd == "major":
             self.spawn(self.major())
             await message.add_reaction("👍")
+        elif cmd == "experiments":
+            self.experiments_checked = False  # also re-post any that are gone
+            await self.post_experiments(force=True)
+            await message.add_reaction("👍")
         else:
             await message.reply(
-                "`!status` `!budget` `!workers N` `!pause W` `!resume W` `!run W` `!major`; "
+                "`!status` `!budget` `!workers N` `!pause W` `!resume W` `!run W` `!major` `!experiments`; "
                 f"workstreams: {', '.join(WORKSTREAMS)}"
             )
 

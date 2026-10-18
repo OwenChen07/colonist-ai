@@ -35,7 +35,7 @@ The owner pays per token, so each one should buy progress.
 2. **Interpret the results**, with statistics (see "Judging results"): the latest training rounds, each account's ranked win rate and rating trend, the running A/B tests, and what each workstream achieved since your last report. Decide experiments that reached their decision point: keep, revert or extend.
 3. **Steer the workstreams.** For each one, either confirm its current direction or message it a new priority with the reason and the metric. Workers that went idle or blocked need a next task or an answer.
 4. **Research one concrete improvement** per report. Use current research, a primary source, or new evidence from live losses and code. Give the source or data, why it might help, and a measurable experiment (handed to a workstream) or why it should wait.
-5. **Keep attribution clean.** Run at most one experiment at a time per subsystem: self-play/training, search/live play, and data. Each goes in the ledger before it's deployed, with its hypothesis, metric, games or rounds until a verdict, and how to revert it.
+5. **Keep attribution clean.** Run at most one experiment at a time per subsystem: self-play/training, search/live play, and data. Each goes in the ledger before it's deployed, with its hypothesis, metric, games or rounds until a verdict, and how to revert it. Whenever you add an experiment to the ledger or change its status or result, update its entry in `data/orchestrator/experiments.json` in the same step (plain language, Toronto times); Discord's `#experiments` shows that file.
 6. **Write the output** (below).
 
 ## Judging results
