@@ -526,7 +526,9 @@ class Search:
             pi[root.immediate_win] = 1.0
             return pi, 1.0
         q = self.completed_q(root)
-        pi = self.improved_policy(root, scale=self.target_scale if scale is None else scale)
+        pi = self.improved_policy(
+            root, scale=self.target_scale if scale is None else scale
+        )
         return pi, float((pi * q).sum())
 
 
