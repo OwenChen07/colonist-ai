@@ -401,6 +401,8 @@ def run(
                         queue.append(part)
                 state["failed"] = any(p not in arrived for p in state["sent"])
                 cond.notify_all()
+            if state["failed"]:
+                _restart(host, log)
             for _ in range(processes):
                 slots.release()
             if process.poll() is None:
@@ -476,6 +478,7 @@ def run(
             for host, argv in _each_host(prepare, [host for host, _ in hosts]):
                 if argv is None:
                     log(f"could not prepare {host}; the others play its share")
+                    _restart(host, log)
                 else:
                     launch(host, dict(hosts)[host], argv + flags)
         while any(thread.is_alive() for _, thread, _ in machines):
@@ -519,6 +522,39 @@ def run(
 
 def _safe(host):
     return "".join(c if c.isalnum() or c in "-." else "_" for c in host)
+
+
+RESTART_EVERY = 600  # seconds before the same host may start the script again
+_restarts = {}  # host: time.monotonic() of its last restart
+_restarts_lock = threading.Lock()
+
+
+def _restart(host, log=print, environ=os.environ):
+    """Starts COLONIST_RESTART_SCRIPT (train.sh: gcp_start_spot.sh, which
+    starts every preempted spot VM) in the background when a host can't be
+    prepared or drops out, at most once per host in RESTART_EVERY seconds.
+    Before, only the next round's --before-round restarted a VM, about 20 min
+    down per preemption (16 a day, Oct 18-19). Never blocks or fails."""
+    script = environ.get("COLONIST_RESTART_SCRIPT")
+    if not script or host == HERE:
+        return False
+    now = time.monotonic()
+    with _restarts_lock:
+        if now - _restarts.get(host, -RESTART_EVERY) < RESTART_EVERY:
+            return False
+        _restarts[host] = now
+    try:
+        subprocess.Popen(
+            ["bash", "-c", script],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError:
+        return False
+    log(f"{host} is down: starting stopped spot VMs in the background")
+    return True
 
 
 def _each_host(prepare, hosts, errors=(subprocess.CalledProcessError,)):
@@ -759,6 +795,8 @@ def run_tasks(tasks, workers=None, hosts=None, log=print):
         out["failed"] = bool(sent)
         with lock:  # still-running hosts may take them; the rest are played here
             queue.extend(sorted(sent))
+        if sent:
+            _restart(host, log)
 
     threads = []
     # All hosts at once, so the first ones don't finish while the last start.
@@ -770,6 +808,7 @@ def run_tasks(tasks, workers=None, hosts=None, log=print):
     ):
         if lines is None:
             log(f"could not prepare {host}; the others play its games")
+            _restart(host, log)
             continue
         out = {"games": 0}
         thread = threading.Thread(target=serve, args=(host, processes, lines, out))

@@ -66,8 +66,12 @@
 # extend from the same flags. Every round now trains from the best net
 # (--train-from best): chained nets drifted (late live error up about 0.003 a
 # round, E31), so each round is the best net plus one clean step.
+# Oct 19 (lead): a worker host that can't be prepared or drops out mid-round
+# starts gcp_start_spot.sh in the background at once (distributed.py, at most
+# once per host in 10 min), not only at the next round's start.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
+export COLONIST_RESTART_SCRIPT="$PWD/scripts/vm/gcp_start_spot.sh"
 init=()
 [ -e runs/g1/state.json ] || init=(--init models/graph1/net.npz)
 sp1=runs/sp1

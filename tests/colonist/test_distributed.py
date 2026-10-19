@@ -44,6 +44,36 @@ def test_hosts_are_prepared_at_once_in_order_with_failures_as_none():
     assert _each_host(prepare, []) == []
 
 
+def test_a_lost_host_starts_the_restart_script_once_per_host(tmp_path, monkeypatch):
+    import time
+
+    from catanatron.colonist import distributed
+
+    monkeypatch.setattr(distributed, "_restarts", {})
+    logs = []
+    env = {"COLONIST_RESTART_SCRIPT": f"echo x >> {tmp_path}/ran"}
+    assert not distributed._restart("w@a", logs.append, {})  # off unless set
+    assert not distributed._restart(distributed.HERE, logs.append, env)
+    assert distributed._restart("w@a", logs.append, env)
+    assert not distributed._restart("w@a", logs.append, env)  # within 10 min
+    assert distributed._restart("w@b", logs.append, env)
+    monkeypatch.setitem(
+        distributed._restarts, "w@a", time.monotonic() - distributed.RESTART_EVERY
+    )
+    assert distributed._restart("w@a", logs.append, env)
+    assert logs == [
+        f"{h} is down: starting stopped spot VMs in the background"
+        for h in ["w@a", "w@b", "w@a"]
+    ]
+    for _ in range(100):  # it runs in the background
+        if (tmp_path / "ran").exists() and len(
+            (tmp_path / "ran").read_text().split()
+        ) == 3:
+            break
+        time.sleep(0.05)
+    assert (tmp_path / "ran").read_text().split() == ["x"] * 3
+
+
 @pytest.mark.parametrize("games", [5000, 640, 65, 3])
 def test_split_covers_every_seed_once_in_whole_shards(games):
     ranges = split(games, 1000, 8, [("a", 4), ("b", 4)])
