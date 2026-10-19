@@ -91,6 +91,12 @@ BUDGETS = {
 #: Resends of one unconfirmed move, each after a snapshot proves it didn't land.
 MAX_RECONNECT_RETRIES = 3
 
+#: Seconds the browser has to confirm a send before it is resent once, and
+#: again before the bot stops. Was 2: on a bot VM short of memory the page froze
+#: for 7 s (bot8's first game, Oct 19: its own 1 s pings stopped) and the bot
+#: stopped in the opening, losing the game by inactivity.
+ACK_SECONDS = 5
+
 
 def think_budget(game, remaining, simulations):
     """(seconds or None, simulation cap) for the player to move, given the
@@ -750,7 +756,7 @@ class Bridge:
             retries = []
             for send_id, pending in self.pending_sends.items():
                 reply, sent_at, attempts = pending
-                if now - sent_at < 2:
+                if now - sent_at < ACK_SECONDS:
                     continue
                 if attempts == 0:
                     pending[1:] = [now, 1]

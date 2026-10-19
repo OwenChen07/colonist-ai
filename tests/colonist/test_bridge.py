@@ -11,7 +11,12 @@ from types import SimpleNamespace
 import pytest
 
 from catanatron.colonist import convert as C
-from catanatron.colonist.bridge import MAX_RECONNECT_RETRIES, Bridge, serve_forever
+from catanatron.colonist.bridge import (
+    ACK_SECONDS,
+    MAX_RECONNECT_RETRIES,
+    Bridge,
+    serve_forever,
+)
 from catanatron.colonist.capture import load
 from catanatron.colonist.live import LiveGame
 from catanatron.colonist.net import random_net
@@ -773,13 +778,33 @@ def test_unacknowledged_browser_send_retries_once_with_same_id():
         if bridge.expect:
             break
     sent = next(r for r in replies if r["kind"] == "send")
-    bridge.pending_sends[sent["sendId"]][1] -= 3
+    bridge.pending_sends[sent["sendId"]][1] -= ACK_SECONDS + 1
     retries = bridge.check_timeout()
     assert retries == [sent]
     assert bridge.pending_sends[sent["sendId"]][2] == 1
     bridge.handle({"kind": "send-confirmed", "sendId": sent["sendId"]})
     assert not bridge.pending_sends
     assert not bridge.check_timeout()
+
+
+def test_a_browser_frozen_for_seven_seconds_does_not_stop_the_bot():
+    # bot8's first game (Oct 19): on a VM short of memory the page froze 7 s
+    # after the opening settlement was sent, and the 2 s window stopped the bot.
+    bridge = Bridge(random_net(hidden=(8,)), 2, play=True, encode=_fake_encode)
+    bridge.choose = _player_of_record("capture_full_game")
+    bridge.reset()
+    for message in _messages("capture_full_game"):
+        replies = bridge.handle({**message, "socket": 1})
+        if bridge.expect:
+            break
+    sent = next(r for r in replies if r["kind"] == "send")
+    bridge.pending_sends[sent["sendId"]][1] -= 3
+    assert bridge.check_timeout() == []
+    bridge.pending_sends[sent["sendId"]][1] -= 4
+    assert bridge.check_timeout() == [sent]
+    assert bridge.expect is not None
+    bridge.handle({"kind": "send-confirmed", "sendId": sent["sendId"]})
+    assert not bridge.pending_sends
 
 
 def test_outgoing_frame_confirms_send_when_old_page_has_no_ack():
