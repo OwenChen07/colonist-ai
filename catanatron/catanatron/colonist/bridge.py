@@ -88,6 +88,22 @@ BUDGETS = {
 }
 
 
+def budgets_from_env(text):
+    """BUDGETS overrides from THINK_BUDGETS, e.g. "PLAY_TURN=0.3:10:5,ROLL=0.33:2:0.67"
+    (prompt=share:cap seconds:simulations multiple), for one account's clock
+    trial (E60) from its env file. Empty: no change."""
+    out = {}
+    for item in filter(None, (part.strip() for part in (text or "").split(","))):
+        prompt, _, values = item.partition("=")
+        if prompt not in BUDGETS:
+            raise ValueError(f"THINK_BUDGETS: unknown prompt {prompt!r}")
+        share, cap, scale = (float(v) for v in values.split(":"))
+        if not (0 < share <= 1 and cap > 0 and scale > 0):
+            raise ValueError(f"THINK_BUDGETS: bad values in {item!r}")
+        out[prompt] = (share, cap, scale)
+    return out
+
+
 #: Resends of one unconfirmed move, each after a snapshot proves it didn't land.
 MAX_RECONNECT_RETRIES = 3
 
@@ -1350,6 +1366,13 @@ def main(argv=None):
         # Also covers an already-running ranked runner when it starts a fresh
         # bridge for a newly promoted model.
         args.spectator_state = os.path.join("data", "ranked", "spectator-state.json")
+    try:
+        overrides = budgets_from_env(os.environ.get("THINK_BUDGETS"))
+    except ValueError as error:
+        parser.error(str(error))
+    if overrides:
+        BUDGETS.update(overrides)
+        print(f"think budgets from THINK_BUDGETS: {overrides}", flush=True)
     from catanatron.colonist.net import Net
 
     net = Net.load(args.net)

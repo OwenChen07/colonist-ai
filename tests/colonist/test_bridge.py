@@ -1307,6 +1307,20 @@ def test_free_roads_before_the_roll_get_the_build_budget():
     assert think_budget(game, 15.0, 2400) == (3.75, 4800)
 
 
+def test_an_account_env_file_can_change_the_clock_shares(monkeypatch):
+    from catanatron.colonist import bridge
+
+    overrides = bridge.budgets_from_env("PLAY_TURN=0.3:10:5, ROLL=0.33:2:0.6667")
+    assert overrides == {"PLAY_TURN": (0.3, 10.0, 5.0), "ROLL": (0.33, 2.0, 0.6667)}
+    monkeypatch.setitem(bridge.BUDGETS, "PLAY_TURN", overrides["PLAY_TURN"])
+    turn = _position("AFTER_ROLL")
+    assert bridge.think_budget(turn, 30.0, 2400) == (0.3 * 27.5, 12000)
+    assert bridge.budgets_from_env("") == {} and bridge.budgets_from_env(None) == {}
+    for bad in ("TURN=0.3:10:5", "PLAY_TURN=0.3:10", "PLAY_TURN=2:10:5", "ROLL=x:1:1"):
+        with pytest.raises(ValueError):
+            bridge.budgets_from_env(bad)
+
+
 def test_a_search_stops_when_its_time_is_up():
     from catanatron.colonist.mcts import Search
 
