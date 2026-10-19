@@ -433,6 +433,13 @@ class Bridge:
             self.sent_raws = []
             self.offers, self.declined = {}, set()
             self.socket = message.get("socket")
+            # The game's first snapshot carries the opening settlement's 60 s:
+            # without it the first seat's first settlement (no diff yet) got
+            # a plain search, or a previous game's expired deadline.
+            self.deadline = self.early_discard = None
+            self.timer_start = self.timer_allocated = None
+            if not replaying:
+                self.note_deadline(payload["gameState"].get("currentState"), frame.t)
             if not self.live.error and in_progress(payload) and opening is None:
                 # A game joined midway (e.g. after a page reload) comes as a
                 # snapshot without its history, and the converter can only

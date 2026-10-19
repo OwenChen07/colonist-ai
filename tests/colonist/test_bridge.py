@@ -1215,6 +1215,31 @@ def test_colonists_timer_is_tracked_with_its_extensions():
     assert bridge.time_left() is None
 
 
+def test_game_start_snapshot_sets_the_first_settlements_timer():
+    # The first seat's first settlement comes before any diff: its 60 s is in
+    # the game's first snapshot, and a previous game's deadline is dropped.
+    import msgpack
+
+    from catanatron.colonist.capture import decode
+
+    bridge = Bridge(random_net(hidden=(8,)), 2)
+    bridge.reset()
+    bridge.deadline = time.time() - 100  # a previous game's expired timer
+    message = next(
+        m
+        for m in _messages("capture_full_game")
+        if decode({**m, "seq": 0, "socket": 1}).type == C.GAME_STATE
+    )
+    payload = decode({**message, "seq": 0, "socket": 1}).data["data"]["payload"]
+    allocated = payload["gameState"]["currentState"]["allocatedTime"]
+    payload["gameState"]["currentState"]["startTime"] = time.time() * 1000
+    b64 = base64.b64encode(
+        msgpack.packb({"id": "1", "data": {"type": 4, "payload": payload}})
+    ).decode()
+    bridge.handle({"kind": "frame", "dir": "in", "socket": 1, "b64": b64})
+    assert allocated - 2 < bridge.time_left() <= allocated + 0.1
+
+
 def _position(prompt):
     from catanatron.game import Game
     from catanatron.models.enums import ActionPrompt
