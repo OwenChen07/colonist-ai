@@ -78,8 +78,10 @@ sp1=runs/sp1
 human=$(printf ',data/human/train/value%.0s' $(seq "${HUMAN_REPEAT:-4}"))
 # E14: the moves people made in the games they won against the bot, as move
 # targets only, listed HUMAN_POLICY_REPEAT times (3 is about 9% of the move
-# targets in a round). Off (0) unless set.
-for ((i = 0; i < ${HUMAN_POLICY_REPEAT:-0}; i++)); do human+=",data/human/train/policy_won"; done
+# targets in a round). Off (0) unless set. E56: HUMAN_POLICY_DIR picks the
+# folder (policy_won_exact adds the turns where the person's development-card
+# hand is known exactly; policy_won has the card-free turns only).
+for ((i = 0; i < ${HUMAN_POLICY_REPEAT:-0}; i++)); do human+=",${HUMAN_POLICY_DIR:-data/human/train/policy_won}"; done
 starts=()
 [ -e data/human/starts.jsonl.gz ] && starts=(--human-starts data/human/starts.jsonl.gz)
 # E13: a HUMAN_OPPONENT_RATE share of self-play games has one seat playing

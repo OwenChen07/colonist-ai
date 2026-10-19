@@ -19,8 +19,12 @@ nice -n 19 .venv/bin/python -m catanatron.colonist.human_dataset \
 nice -n 19 .venv/bin/python -m catanatron.colonist.starts data/human \
     --out data/human/starts.jsonl.gz >> data/human/build.log 2>&1
 mkdir -p models/human
+# E56: the model learns from (and is scored on) opponent_exact, which adds the
+# turns where the person's development-card hand is known exactly; opponent
+# has the card-free turns only. OPPONENT_SHARDS=opponent goes back.
+shards=${OPPONENT_SHARDS:-opponent_exact}
 nohup flock -n /tmp/opponent_model.lock env OMP_NUM_THREADS=3 nice -n 15 \
     .venv/bin/python -m catanatron.colonist.opponent_model refresh \
-    data/human/train/opponent --holdout data/human/holdout/opponent \
+    "data/human/train/$shards" --holdout "data/human/holdout/$shards" \
     --init runs/g1/best.npz --model models/human/net.npz -- --device cpu --epochs 10 \
     >> models/human/refresh.log 2>&1 < /dev/null 9>&- &
