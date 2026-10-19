@@ -5,7 +5,10 @@ An opponent's unplayed development cards are hidden in a one-sided capture,
 so replaying that opponent's moves does not recreate their information state.
 For a bot-side capture against a human, use --value-only for outcome labels
 and --opponent-openings for the human's setup moves, when no development cards
-exist yet. The output contains numeric inputs and labels, not names or chat.
+exist yet. The opponent_known and opponent_exact modes take the human
+opponent's later moves too: while they hold no card, and (opponent_exact)
+while their hand is the only one that fits the log (DevHands). The output
+contains numeric inputs and labels, not names or chat.
 
     python -m catanatron.colonist.human_data 'captures/human-*.json' \
         --out data/human --human-perspective
@@ -14,28 +17,145 @@ exist yet. The output contains numeric inputs and labels, not names or chat.
 import argparse
 import glob
 import hashlib
+import itertools
 import json
 import os
 import random
 import sys
+from collections import Counter
 
 import numpy as np
 
 from catanatron.colonist import encode as E
 from catanatron.colonist.capture import load as load_capture
 from catanatron.colonist.convert import convert
+from catanatron.colonist.record import BUY, END_TURN, PLAYED_CARD
 from catanatron.colonist.replay import replay
-from catanatron.state_functions import player_num_dev_cards
+from catanatron.models.enums import DEVELOPMENT_CARDS, VICTORY_POINT
+from catanatron.state_functions import get_dev_cards_in_hand, player_num_dev_cards
+
+UNKNOWN = "?"  # a card never identified: never played, and not a revealed VP
+
+
+def _fits(plays, buys):
+    """Whether each play (its turn) can have its own purchase on an earlier
+    turn. "Earlier than" nests, so checking sorted prefixes is enough."""
+    buys = sorted(buys)
+    for k, play in enumerate(sorted(plays)):
+        if sum(1 for b in buys if b < play) < k + 1:
+            return False
+    return True
+
+
+class DevHands:
+    """A seat's hidden development cards before each log entry, worked out
+    from its purchases (cards unseen), its plays and the end-of-game reveal of
+    victory point cards (`hidden_vp_cards`).
+
+    at(i) gives the hand as a Counter of cards and whether it is the only one
+    that fits: ("none", empty) when no card is held; ("exact", hand) when every
+    way of matching plays to earlier-turn purchases gives the same hand and it
+    has no never-identified card; ("ambiguous", None) or ("unknown", None)
+    otherwise. Same-type cards need no matching, and a card bought this turn
+    can't be played, which is what narrows the matchings down.
+    """
+
+    def __init__(self, record, color):
+        self.buys, self.plays = [], []  # (log index, turn[, card])
+        known_buy = False
+        turn = 0
+        for i, (action, result) in enumerate(record["log"]):
+            if action[1] == END_TURN:
+                turn += 1
+            if action[0] != color:
+                continue
+            if action[1] == BUY:
+                self.buys.append((i, turn))
+                known_buy |= result is not None
+            elif action[1] in PLAYED_CARD:
+                self.plays.append((i, turn, PLAYED_CARD[action[1]]))
+        revealed = record.get("hidden_vp_cards") or {}
+        self.vp = revealed.get(color, 0)
+        self.unknown = len(self.buys) - len(self.plays) - self.vp
+        if color not in revealed:  # no reveal: any unplayed card is unknown
+            self.unknown, self.vp = self.unknown + self.vp, 0
+        # The person's own purchases are hidden; a seat whose cards were seen
+        # is not what this is for.
+        self.ok = (
+            not known_buy
+            and self.unknown >= 0
+            and bool(self.hands(len(record["log"]) + 1) or not self.buys)
+        )
+
+    def hands(self, i):
+        """Every hand that fits before log entry i."""
+        before = [b for b in self.buys if b[0] < i]
+        after = [b for b in self.buys if b[0] >= i]
+        played = [p for p in self.plays if p[0] < i]
+        later = [p for p in self.plays if p[0] >= i]
+        held = len(before) - len(played)
+        kinds = sorted({p[2] for p in later})
+        by_kind = {k: [p for p in later if p[2] == k] for k in kinds}
+        out = set()
+        for counts in itertools.product(*(range(len(by_kind[k]) + 1) for k in kinds)):
+            rest = held - sum(counts)
+            for vp in range(min(self.vp, max(rest, -1)) + 1):
+                unknown = rest - vp
+                if unknown < 0 or unknown > self.unknown:
+                    continue
+                # A held card of a kind is the one played first, later on.
+                now = [p for k, c in zip(kinds, counts) for p in by_kind[k][:c]]
+                then = [p for k, c in zip(kinds, counts) for p in by_kind[k][c:]]
+                if len(then) + self.vp - vp + self.unknown - unknown != len(after):
+                    continue
+                if not _fits([p[1] for p in played + now], [b[1] for b in before]):
+                    continue
+                if not _fits([p[1] for p in then], [b[1] for b in after]):
+                    continue
+                hand = Counter(dict(zip(kinds, counts)))
+                hand[VICTORY_POINT] += vp
+                hand[UNKNOWN] += unknown
+                out.add(tuple(sorted((k, n) for k, n in hand.items() if n)))
+        return out
+
+    def at(self, i):
+        held = sum(1 for b in self.buys if b[0] < i) - sum(
+            1 for p in self.plays if p[0] < i
+        )
+        if held == 0:
+            return "none", Counter()
+        hands = self.hands(i) if self.ok else set()
+        if len(hands) != 1:
+            unknown = not hands or any(dict(h).get(UNKNOWN) for h in hands)
+            return ("unknown" if unknown else "ambiguous"), None
+        hand = Counter(dict(next(iter(hands))))
+        return ("unknown", None) if hand[UNKNOWN] else ("exact", hand)
+
+
+def held_cards(state, color):
+    """The development cards the engine has in color's hand."""
+    return Counter(
+        {
+            card: n
+            for card in DEVELOPMENT_CARDS
+            if (n := get_dev_cards_in_hand(state, color, card))
+        }
+    )
 
 
 class _Positions:
-    def __init__(self, color, setup_only=False, known_only=False):
+    def __init__(self, color, setup_only=False, known_only=False, hands=None):
         self.color = color
         self.setup_only = setup_only
         # Only decisions where the player holds no unplayed development card:
         # then everything they knew is in the capture (their card count is
         # public, and in 1v1 every resource that moves is seen by both).
         self.known_only = known_only
+        # Or those plus the ones where their hand is known exactly (DevHands)
+        # and the replay gave them those very cards.
+        self.hands = hands
+        self.counts = Counter()
+        self.index = 0
         self.rows = []
         self.static = None
         self.winner = None
@@ -44,6 +164,7 @@ class _Positions:
         self.static = E.encode_static(game.state.board.map)
 
     def step(self, game, decision):
+        i, self.index = self.index, self.index + 1
         if game.state.current_color().value != self.color:
             return
         if self.setup_only and not game.state.is_initial_build_phase:
@@ -55,6 +176,19 @@ class _Positions:
         actions = game.playable_actions
         if len(actions) <= 1:
             return
+        if self.hands is not None:
+            kind, hand = self.hands.at(i)
+            if kind == "exact" and held_cards(
+                game.state, game.state.current_color()
+            ) != hand:
+                kind = "mismatch"
+            elif kind == "none" and player_num_dev_cards(
+                game.state, game.state.current_color()
+            ):
+                kind = "mismatch"
+            self.counts[kind] += 1
+            if kind not in ("none", "exact"):
+                return
         _, dynamic = E.encode(game, game.state.current_color())
         legal = np.zeros(E.NUM_ACTIONS, bool)
         legal[E.legal_indices(actions)] = True
@@ -96,11 +230,16 @@ def capture_net(path):
     return bot.get("sha256", "")
 
 
-def export_capture(path, out_dir, keep=40, mode="human"):
+MODES = ("human", "value", "opponent_openings", "opponent_known", "opponent_exact")
+
+
+def export_capture(path, out_dir, keep=40, mode="human", stats=None):
     """Export one clean, finished game; return (path, sampled rows, total rows).
 
     Raises ValueError for games that cannot safely provide training labels.
     Existing shards are left untouched, making repeated imports idempotent.
+    For opponent_exact, `stats` (a dict) gets the opponent's decisions by
+    what was known of their hand: none, exact, ambiguous, unknown, mismatch.
     """
     conversion = convert(load_capture(path))
     record = conversion.record
@@ -110,9 +249,9 @@ def export_capture(path, out_dir, keep=40, mode="human"):
     you = [color for color, player in record["players"].items() if player["you"]]
     if len(you) != 1:
         raise ValueError("capture has no single recording-player perspective")
-    if mode not in ("human", "value", "opponent_openings", "opponent_known"):
+    if mode not in MODES:
         raise ValueError("unknown export mode")
-    opponent = mode in ("opponent_openings", "opponent_known")
+    opponent = mode.startswith("opponent_")
     if opponent and len(record["seats"]) != 2:
         raise ValueError("opponent exports require a two-player game")
     color = next(c for c in record["seats"] if c != you[0]) if opponent else you[0]
@@ -120,10 +259,13 @@ def export_capture(path, out_dir, keep=40, mode="human"):
         color,
         setup_only=mode == "opponent_openings",
         known_only=mode == "opponent_known",
+        hands=DevHands(record, color) if mode == "opponent_exact" else None,
     )
     report = replay(record, observer=observer)
     if not report.ok:
         raise ValueError("capture did not replay with matching cards and points")
+    if stats is not None:
+        stats.update(observer.counts)
     winner = observer.winner or record.get("winner")
     if winner is None and conversion.ended == "resignation":
         resigned = record.get("resigned")

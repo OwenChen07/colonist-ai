@@ -97,6 +97,117 @@ def test_opponent_moves_only_without_hidden_cards(tmp_path):
     assert total == sum(seen) <= len(seen)
 
 
+def _hands_log(moves, revealed=None):
+    """A record with BLUE's turns as lists of moves ('B' buy, 'K'/'M' plays);
+    RED's turns in between are empty. Returns the record and, per BLUE turn,
+    the log index after each of its moves (a decision there)."""
+    from catanatron.colonist.record import BUY, END_TURN
+
+    plays = {"K": "PLAY_KNIGHT_CARD", "M": "PLAY_MONOPOLY"}
+    log, points = [], []
+    for turn in moves:
+        here = [len(log)]
+        for move in turn:
+            log.append([["BLUE", BUY if move == "B" else plays[move], None], None])
+            here.append(len(log))
+        points.append(here)
+        log.append([["BLUE", END_TURN, None], None])
+        log.append([["RED", END_TURN, None], None])
+    record = {"log": log}
+    if revealed is not None:
+        record["hidden_vp_cards"] = {"BLUE": revealed}
+    return record, points
+
+
+def test_dev_hands_two_kinds_are_ambiguous_until_both_are_bought():
+    from collections import Counter
+
+    from catanatron.colonist.human_data import DevHands
+
+    # Buy, wait, buy; play a knight, then a monopoly, on later turns.
+    record, at = _hands_log([["B"], [], ["B"], [], ["K"], ["M"]], revealed=0)
+    hands = DevHands(record, "BLUE")
+    assert hands.at(at[0][0]) == ("none", Counter())
+    assert hands.at(at[1][0])[0] == "ambiguous"  # the knight or the monopoly
+    both = Counter({"KNIGHT": 1, "MONOPOLY": 1})
+    assert hands.at(at[3][0]) == ("exact", both)
+    assert hands.at(at[4][1]) == ("exact", Counter({"MONOPOLY": 1}))
+    # A card bought this turn can't be played: the knight is the first card.
+    record, at = _hands_log([["B"], [], ["B", "K"], ["M"]], revealed=0)
+    hands = DevHands(record, "BLUE")
+    assert hands.at(at[1][0]) == ("exact", Counter({"KNIGHT": 1}))
+
+
+def test_dev_hands_same_kind_needs_no_matching():
+    from collections import Counter
+
+    from catanatron.colonist.human_data import DevHands
+
+    record, at = _hands_log([["B"], ["B"], [], ["K"], ["K"]], revealed=0)
+    hands = DevHands(record, "BLUE")
+    assert hands.at(at[1][0]) == ("exact", Counter({"KNIGHT": 1}))
+    assert hands.at(at[2][0]) == ("exact", Counter({"KNIGHT": 2}))
+    assert hands.at(at[3][1]) == ("exact", Counter({"KNIGHT": 1}))
+
+
+def test_dev_hands_count_a_victory_point_card_revealed_at_the_end():
+    from collections import Counter
+
+    from catanatron.colonist.human_data import DevHands
+
+    moves = [["B"], ["B"], [], ["K"], []]
+    record, at = _hands_log(moves, revealed=1)
+    hands = DevHands(record, "BLUE")
+    assert hands.at(at[2][0]) == (
+        "exact",
+        Counter({"KNIGHT": 1, "VICTORY_POINT": 1}),
+    )
+    assert hands.at(at[4][0]) == ("exact", Counter({"VICTORY_POINT": 1}))
+    # Without the reveal the unplayed card could be anything.
+    hands = DevHands(_hands_log(moves)[0], "BLUE")
+    assert hands.at(at[4][0]) == ("unknown", None)
+    assert hands.at(at[2][0]) == ("unknown", None)
+    # A play with no purchase on an earlier turn: nothing fits.
+    record, at = _hands_log([["B", "K"]], revealed=0)
+    assert not DevHands(record, "BLUE").ok
+
+
+def test_opponent_exact_adds_hands_the_replay_gives_right(tmp_path):
+    from catanatron.colonist.human_data import export_capture
+
+    stats_known, stats = {}, {}
+    _, _, known = export_capture(
+        FULL_GAME, str(tmp_path / "k"), 10_000, "opponent_known", stats_known
+    )
+    _, used, total = export_capture(
+        FULL_GAME, str(tmp_path / "e"), 10_000, "opponent_exact", stats
+    )
+    assert stats_known == {}  # counted only for opponent_exact
+    assert used == total == stats.get("none", 0) + stats.get("exact", 0)
+    assert stats.get("none", 0) == known and stats.get("mismatch", 0) == 0
+    assert sum(stats.values()) >= total
+
+
+def test_build_indexes_hands_and_backfills_old_rows(tmp_path):
+    out = tmp_path / "human"
+    H.build(_captures(tmp_path), out=str(out), log=lambda _: None)
+    (row,) = [json.loads(l) for l in open(out / "index.jsonl")]
+    assert isinstance(row["exported"]["opponent_exact"], int)
+    assert row["exported"]["opponent_exact"] >= row["exported"]["opponent"]
+    assert list((out / row["split"] / "opponent_exact").glob("*_opponent_exact.npz"))
+    # A row indexed before the exact export gets it on the next run.
+    old = {k: v for k, v in row.items() if k != "hands"}
+    (out / "index.jsonl").write_text(json.dumps(old) + "\n")
+    assert H.backfill_exact(_captures(tmp_path), str(out), log=lambda _: None) == 1
+    (again,) = [json.loads(l) for l in open(out / "index.jsonl")]
+    assert again["hands"] == row["hands"]
+    assert H.backfill_exact(_captures(tmp_path), str(out), log=lambda _: None) == 0
+    _person_won(out)
+    exact = dict(source="opponent_exact", mode="opponent_exact")
+    assert H.policy_won(str(out), lambda _: None, folder="policy_won_exact", **exact)
+    assert list((out / row["split"] / "policy_won_exact").glob("*.npz"))
+
+
 def _person_won(out):
     rows = [json.loads(l) for l in open(out / "index.jsonl")]
     for row in rows:
