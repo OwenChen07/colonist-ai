@@ -109,6 +109,33 @@ def test_the_search_always_takes_an_immediate_win():
     off.run(game)
 
 
+def test_target_scale_softens_only_the_target():
+    """E59: target_scale changes root_targets' policy, not the search."""
+    import numpy as np
+
+    from catanatron.colonist.graph import random_graph_net
+    from catanatron.colonist.mcts import Search
+    from catanatron.colonist.rules import new_game
+    from catanatron.models.player import Player
+
+    game = new_game([Player(Color.RED), Player(Color.BLUE)], seed=5)
+    while len(game.playable_actions) < 3 or game.state.is_initial_build_phase:
+        game.execute(game.playable_actions[0])
+    net = random_graph_net(seed=2)
+    runs = {}
+    for scale in (None, 1.0, 0.1):
+        search = Search(net, 32, rng=random.Random(0), target_scale=scale)
+        action, root = search.run(game)
+        runs[scale] = (action, *search.root_targets(root), search, root)
+    assert runs[None][0] == runs[1.0][0] == runs[0.1][0]
+    assert np.array_equal(runs[None][1], runs[1.0][1])
+    hard, soft = runs[1.0][1], runs[0.1][1]
+    entropy = lambda p: -(p[p > 0] * np.log(p[p > 0])).sum()
+    assert entropy(soft) > entropy(hard)
+    search, root = runs[1.0][3:]
+    assert np.allclose(search.root_targets(root, scale=0.1)[0], soft)
+
+
 def test_no_immediate_win_far_from_the_end():
     from catanatron.colonist.mcts import Decision, immediate_win
     from catanatron.colonist.rules import new_game

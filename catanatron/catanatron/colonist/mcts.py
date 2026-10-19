@@ -237,12 +237,15 @@ class Search:
         opponent_mix=0.0,
         root_action_filter=None,
         take_immediate_wins=True,
+        target_scale=None,
     ):
         self.net = net
         self.simulations = simulations
         self.considered = considered
         self.c_visit = c_visit
         self.c_scale = c_scale
+        # sigma's scale for root_targets' policy only (E59); None: c_scale
+        self.target_scale = c_scale if target_scale is None else target_scale
         self.rng = rng or random.Random()
         # Gumbel noise makes the root's choice a sample: right for self-play,
         # which should explore. Without it the search plays its best move.
@@ -338,10 +341,11 @@ class Search:
             return leaf.value if leaf.color == color else -leaf.value
         raise TypeError(leaf)
 
-    def sigma(self, node, q):
+    def sigma(self, node, q, scale=None):
         """Scale Q (for node.color, in [-1, 1]) as the paper's sigma, on [0, 1]."""
+        scale = self.c_scale if scale is None else scale
         # Halving the scalar first is exact: the same floats as (... * (q + 1)) / 2
-        return (self.c_visit + node.N.max()) * self.c_scale / 2 * (q + 1)
+        return (self.c_visit + node.N.max()) * scale / 2 * (q + 1)
 
     def completed_q(self, node, total=None):
         N = node.N
@@ -359,8 +363,8 @@ class Search:
         q[visited] = qv
         return q
 
-    def improved_policy(self, node, total=None):
-        x = node.logits + self.sigma(node, self.completed_q(node, total))
+    def improved_policy(self, node, total=None, scale=None):
+        x = node.logits + self.sigma(node, self.completed_q(node, total), scale)
         x -= x.max()
         p = np.exp(x, out=x)
         p /= p.sum()
@@ -512,15 +516,17 @@ class Search:
         best = max(candidates, key=lambda a: score[a])
         return root.actions[best], root
 
-    def root_targets(self, root):
+    def root_targets(self, root, scale=None):
         """Training targets from a finished search: the improved policy over
-        the root's moves, and the search's value for the root player."""
+        the root's moves, and the search's value for the root player. The
+        policy uses sigma's scale `scale`, else target_scale (E59: a lower
+        scale gives a softer target; the search itself keeps c_scale)."""
         if root.immediate_win is not None:  # the move that wins, for sure
             pi = np.zeros(len(root.actions))
             pi[root.immediate_win] = 1.0
             return pi, 1.0
         q = self.completed_q(root)
-        pi = self.improved_policy(root)
+        pi = self.improved_policy(root, scale=self.target_scale if scale is None else scale)
         return pi, float((pi * q).sum())
 
 
