@@ -54,6 +54,17 @@ def _read_json(path):
         return None
 
 
+def site_net(label):
+    """A runner label as the site accepts it: letters, digits, space, dot and
+    hyphen, at most 40 characters, or None. A fixed net's label such as
+    "people model, Oct 19, 2:34 PM" has commas and a colon, and the site
+    rejected the whole snapshot (Oct 19: every bot on the VM showed offline)."""
+    if not isinstance(label, str):
+        return None
+    cleaned = " ".join(re.sub(r"[^\w .-]", " ", label).split())[:40].strip()
+    return cleaned or None
+
+
 def live_game(folder, now):
     """The colonist game id the account is playing now, or None."""
     path = folder / "spectator-state.json"
@@ -117,7 +128,7 @@ def bot_status(folder, name, now=None):
         "name": name,
         "status": status,
         "queue": queue if queue in ("ranked", "casual") else None,
-        "net": runner.get("label") if isinstance(runner.get("label"), str) else None,
+        "net": site_net(runner.get("label")),
         "gameId": game,
         **counts,
     }
@@ -367,7 +378,7 @@ def retired_status(folder, name, now=None):
         "name": name,
         "status": "retired",
         "queue": queue if queue in ("ranked", "casual") else None,
-        "net": runner.get("label") if isinstance(runner.get("label"), str) else None,
+        "net": site_net(runner.get("label")),
         "gameId": None,
         **counts,
     }
