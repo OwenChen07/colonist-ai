@@ -31,7 +31,7 @@ from context import SITE, STATE, read_json  # noqa: E402
 API = "https://colonist.io/api"
 HEADERS = {"User-Agent": "colonist-ai-status/1.0", "Accept": "application/json"}
 SHOTS = STATE / "screenshots"
-DEFAULT_ACCOUNTS = "Petra4620,Dilly6283,Sherie3424,Dale7112"
+DEFAULT_ACCOUNTS = "Petra4620,Dilly6283,Sherie3424,Dale7112,Vasos5306"
 
 
 def fetch(url):

@@ -44,7 +44,9 @@ def training():
 # Each account folder's colonist username (owner's rule, Oct 19: the live lines
 # name the accounts, not bot2, bot3). ORCHESTRATOR_ACCOUNT_NAMES overrides:
 # "bot3=Dilly6283,bot4=Sherie3424".
-DEFAULT_ACCOUNT_NAMES = "bot3=Dilly6283,bot4=Sherie3424,bot5=Petra4620,bot7=Dale7112"
+DEFAULT_ACCOUNT_NAMES = (
+    "bot3=Dilly6283,bot4=Sherie3424,bot5=Petra4620,bot7=Dale7112,bot8=Vasos5306"
+)
 
 
 def account_names():
