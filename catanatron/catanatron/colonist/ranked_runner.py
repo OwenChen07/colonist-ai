@@ -250,6 +250,28 @@ def round_label(run_dir, round_number):
     return f"{Path(run_dir).name} round {round_number}"
 
 
+def file_stamp(path):
+    """When a file last changed, or None if it's missing."""
+    try:
+        return os.stat(path).st_mtime_ns
+    except OSError:
+        return None
+
+
+def fixed_net_label(path, name=None):
+    """The label of a fixed net (--net-path): its name and the file's date in
+    Toronto time, e.g. "people model, Oct 19, 4:50 PM", so its games are told
+    apart in games.jsonl and the spectator state."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    when = datetime.fromtimestamp(
+        os.stat(path).st_mtime, ZoneInfo("America/Toronto")
+    ).strftime("%b %d, %I:%M %p")
+    when = when.replace(" 0", " ")
+    return f"{name or Path(path).name}, {when}"
+
+
 def _winner(record):
     """The winner on points, or else the player who didn't resign (or leave)."""
     if record.get("winner"):
@@ -271,6 +293,7 @@ def record_game(
     own_bot=False,
     opponent_mix=0.0,
     pinned=False,
+    fixed_net=False,
 ):
     """Appends one verified game to DATA/games.jsonl: which net played it and
     how it ended. Names and chat stay in the capture."""
@@ -298,6 +321,10 @@ def record_game(
     if pinned:
         # A round chosen for this account (--pin-round), not the promoted one.
         row["pinned"] = True
+    if fixed_net:
+        # A fixed net file (--net-path, e.g. the people model), not a
+        # training round; the label names it.
+        row["fixed_net"] = True
     if own_bot:
         # Against another of our own bots: not a human game, so not training
         # data, and not part of the bot's record against people.
@@ -502,13 +529,21 @@ async def _run(args):
     games_completed = 0
     deadline = time.monotonic() + args.hours * 3600 if args.hours else None
     promotion_round = None
+    net_stamp = None
     opponent_model_stamp = opponent_stamp(args.opponent_model, args.opponent_mix)
     label = Path(args.net).name if args.net else None
     async with async_playwright() as playwright:
         if not args.login_only and not args.inspect:
             if not args.net:
                 raise RuntimeError("--net must point to a local trained network")
-            if args.promotions:
+            if args.net_path:
+                # A fixed net (the people model): installed like a promotion,
+                # and reinstalled between games when the file changes.
+                net_stamp = file_stamp(args.net_path)
+                install_promoted_model(args.net_path, args.net)
+                label = fixed_net_label(args.net_path, args.net_name)
+                print(f"using fixed net {label}", flush=True)
+            elif args.promotions:
                 promotion_round, source = promoted_checkpoint(
                     args.promotions, args.pin_round
                 )
@@ -684,6 +719,7 @@ async def _run(args):
                     queue=queue,
                     own_bot=own_bot,
                     pinned=args.pin_round is not None,
+                    fixed_net=bool(args.net_path),
                     opponent_mix=(
                         float(args.opponent_mix)
                         if opponent_args(args.opponent_model, args.opponent_mix)
@@ -710,13 +746,22 @@ async def _run(args):
                     await page.goto(URL)
                     new_round, source = (
                         promoted_checkpoint(args.promotions, args.pin_round)
-                        if args.promotions
+                        if args.promotions and not args.net_path
                         else (promotion_round, None)
                     )
                     stamp = opponent_stamp(args.opponent_model, args.opponent_mix)
+                    new_net_stamp = file_stamp(args.net_path) if args.net_path else None
                     # A rollback to an earlier round counts too; so does a
-                    # retrained opponent model (opponent_model.py refresh).
-                    if new_round != promotion_round or stamp != opponent_model_stamp:
+                    # retrained opponent model (opponent_model.py refresh) or
+                    # a retrained fixed net (--net-path).
+                    net_changed = new_net_stamp is not None and new_net_stamp != (
+                        net_stamp
+                    )
+                    if (
+                        new_round != promotion_round
+                        or stamp != opponent_model_stamp
+                        or net_changed
+                    ):
                         opponent_model_stamp = stamp
                         process.terminate()
                         await process.wait()
@@ -725,6 +770,10 @@ async def _run(args):
                         if new_round != promotion_round:
                             install_promoted_model(source, args.net)
                             label = round_label(args.promotions, new_round)
+                        if net_changed:
+                            net_stamp = new_net_stamp
+                            install_promoted_model(args.net_path, args.net)
+                            label = fixed_net_label(args.net_path, args.net_name)
                         process, log = await _bridge(
                             args.net,
                             args.simulations,
@@ -737,7 +786,11 @@ async def _run(args):
                         changed = (
                             f"promoted training round {new_round}"
                             if new_round != promotion_round
-                            else "the retrained opponent model"
+                            else (
+                                f"fixed net {label}"
+                                if net_changed
+                                else "the retrained opponent model"
+                            )
                         )
                         promotion_round = new_round
                         print(f"switched to {changed} between games", flush=True)
@@ -795,6 +848,19 @@ def main(argv=None):
         default=None,
         help="with --promotions: play this training round instead of the "
         "promoted one (empty: follow promotions), to test a net live",
+    )
+    parser.add_argument(
+        "--net-path",
+        default=os.environ.get("NET_PATH") or None,
+        help="(or NET_PATH) play this net file instead of a training round, "
+        "installed to --net and reloaded between games when it changes; "
+        "--promotions and --pin-round are then ignored",
+    )
+    parser.add_argument(
+        "--net-name",
+        default=os.environ.get("NET_NAME") or None,
+        help="(or NET_NAME) the fixed net's name in its label, e.g. "
+        '"people model" (default: the file name)',
     )
     parser.add_argument("--profile", default=None)
     parser.add_argument(
@@ -887,6 +953,10 @@ def main(argv=None):
         parser.error("--opponent-model must point to a local trained network")
     if args.pin_round is not None and not args.promotions:
         parser.error("--pin-round needs --promotions")
+    if args.net_path:
+        if not args.login_only and not Path(args.net_path).is_file():
+            parser.error("--net-path must point to a local trained network")
+        args.pin_round = None
     try:
         asyncio.run(_run(args))
     except KeyboardInterrupt:

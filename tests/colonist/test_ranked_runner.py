@@ -73,6 +73,49 @@ def test_a_pinned_round_is_played_instead_of_the_promoted_one(tmp_path):
     assert row["pinned"] is True and row["round"] == 69
 
 
+def test_a_fixed_net_is_labelled_by_name_and_date_and_reloads_on_change(tmp_path):
+    from types import SimpleNamespace
+
+    from catanatron.colonist.ranked_runner import (
+        file_stamp,
+        fixed_net_label,
+        main,
+        record_game,
+    )
+
+    people = tmp_path / "human" / "net.npz"
+    people.parent.mkdir()
+    np.savez(people, weights=np.array([1]))
+    # Oct 19, 2026, 4:50 PM in Toronto (20:50 UTC, daylight time).
+    os.utime(people, (1792443000, 1792443000))
+    assert fixed_net_label(people, "people model") == "people model, Oct 19, 4:50 PM"
+    assert fixed_net_label(people) == "net.npz, Oct 19, 4:50 PM"
+    stamp = file_stamp(people)
+    destination = tmp_path / "bot8" / "model.npz"
+    assert install_promoted_model(people, destination)
+    # The people model's refresh replaces the file: a new stamp, a new install.
+    np.savez(people, weights=np.array([2]))
+    os.utime(people, (1792446600, 1792446600))
+    assert file_stamp(people) != stamp
+    assert install_promoted_model(people, destination)
+    with np.load(destination) as net:
+        assert net["weights"].tolist() == [2]
+    assert file_stamp(tmp_path / "missing.npz") is None
+
+    with pytest.raises(SystemExit):
+        main(["--net", str(destination), "--net-path", str(tmp_path / "none.npz")])
+
+    conversion = SimpleNamespace(
+        ended="win", record={"winner": "RED", "players": {"RED": {"you": True}}}
+    )
+    label = fixed_net_label(people, "people model")
+    row = record_game(
+        tmp_path, "c.json", conversion, destination, label, None, 2400, fixed_net=True
+    )
+    assert row["fixed_net"] is True and row["round"] is None
+    assert row["label"] == "people model, Oct 19, 5:50 PM"
+
+
 def test_invalid_promoted_checkpoint_keeps_current_model(tmp_path):
     good = tmp_path / "good.npz"
     bad = tmp_path / "bad.npz"
