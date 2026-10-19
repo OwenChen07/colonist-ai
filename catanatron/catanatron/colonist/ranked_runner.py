@@ -43,6 +43,8 @@ from pathlib import Path
 from catanatron.colonist.capture import load as load_capture
 from catanatron.colonist.convert import convert
 from catanatron.colonist.human_data import export_capture
+from catanatron.colonist import own_queue
+from catanatron.colonist.spectator_publish import parse_names
 
 
 URL = "https://colonist.io/"
@@ -521,6 +523,10 @@ async def _run(args):
         ).split(",")
         if name.strip()
     }
+    bot_names = parse_names(os.environ.get("COLONIST_BOT_NAMES", ""))
+    own_name = bot_names.get(args.account or "ranked")
+    if args.avoid_own_site and not own_name:
+        print("--avoid-own-site: no COLONIST_BOT_NAMES entry; off", flush=True)
     captures.mkdir(parents=True, exist_ok=True, mode=0o700)
     data.mkdir(parents=True, exist_ok=True, mode=0o700)
     process = log = None
@@ -675,8 +681,14 @@ async def _run(args):
                     if locked is not None:
                         queue = "casual" if locked else "ranked"
                 ranked = queue == "ranked"
+                if ranked and args.avoid_own_site and own_name:
+                    await own_queue.wait_for_own_accounts(
+                        args.avoid_own_site, data, own_name, own_accounts, bot_names
+                    )
                 try:
                     await queue_with_retries(page, "Ranked" if ranked else "Casual")
+                    if ranked and args.avoid_own_site and own_name:
+                        own_queue.mark_queued(data)
                 except RuntimeError as error:
                     if not (ranked and args.ranked_after is not None):
                         raise
@@ -891,6 +903,12 @@ def main(argv=None):
         "--own-accounts",
         help="comma-separated usernames of our bots (or COLONIST_OWN_ACCOUNTS): "
         "games against them are recorded but not used as training data",
+    )
+    parser.add_argument(
+        "--avoid-own-site",
+        default=os.environ.get("AVOID_OWN_SITE") or None,
+        help="the spectator site (or AVOID_OWN_SITE): before a ranked queue, "
+        "wait up to 90 s while another of our accounts is queued (own_queue)",
     )
     parser.add_argument("--captures", default=None)
     parser.add_argument("--data", default=None)

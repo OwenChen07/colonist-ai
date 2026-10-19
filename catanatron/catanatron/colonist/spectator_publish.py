@@ -124,6 +124,9 @@ def bot_status(folder, name, now=None):
     else:
         status = "searching"
     counts, queue = record(folder, now)
+    if status == "searching" and runner.get("queue_state") == "waiting":
+        # Not in colonist's queue yet (own_queue): other accounts read this.
+        queue = None
     return {
         "name": name,
         "status": status,

@@ -17,7 +17,9 @@ Environment=SIMULATIONS=2400 RANKED_AFTER=5 PIN_ROUND=
 # follows promotions), or NET_PATH and NET_NAME (a fixed net file, such as the
 # people model, played instead of any training round), and optionally
 # THINK_BUDGETS (the bridge's clock shares for this account, e.g.
-# PLAY_TURN=0.3:10:5; see bridge.budgets_from_env).
+# PLAY_TURN=0.3:10:5; see bridge.budgets_from_env), and optionally
+# AVOID_OWN_SITE (the spectator site's URL: wait before a ranked queue while
+# another of our accounts is queued; see own_queue).
 EnvironmentFile=/home/ubuntu/colonist-ai/scripts/vm/bot/accounts/%i.env
 # COLONIST_OWN_ACCOUNTS: all our bot usernames, to spot bot-vs-bot games.
 EnvironmentFile=-/home/ubuntu/colonist-ai/scripts/vm/bot/own_accounts.env
