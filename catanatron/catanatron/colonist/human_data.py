@@ -178,9 +178,10 @@ class _Positions:
             return
         if self.hands is not None:
             kind, hand = self.hands.at(i)
-            if kind == "exact" and held_cards(
-                game.state, game.state.current_color()
-            ) != hand:
+            if (
+                kind == "exact"
+                and held_cards(game.state, game.state.current_color()) != hand
+            ):
                 kind = "mismatch"
             elif kind == "none" and player_num_dev_cards(
                 game.state, game.state.current_color()

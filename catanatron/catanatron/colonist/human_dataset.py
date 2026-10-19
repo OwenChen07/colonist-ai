@@ -253,7 +253,11 @@ def backfill_exact(captures, out="data/human", jobs=1, log=print):
         rows = [json.loads(line) for line in stream]
     paths = {Path(p).name: p for p in captures}
     todo = [
-        (row["capture"], paths[row["capture"]], os.path.join(out, row["split"], "opponent_exact"))
+        (
+            row["capture"],
+            paths[row["capture"]],
+            os.path.join(out, row["split"], "opponent_exact"),
+        )
         for row in rows
         if row.get("status") == "ok" and "hands" not in row and row["capture"] in paths
     ]
@@ -349,7 +353,12 @@ def main(argv=None):
     )
     backfill_exact(paths, args.out, args.jobs)
     policy_won(args.out)
-    policy_won(args.out, source="opponent_exact", mode="opponent_exact", folder="policy_won_exact")
+    policy_won(
+        args.out,
+        source="opponent_exact",
+        mode="opponent_exact",
+        folder="policy_won_exact",
+    )
     return 0
 
 
