@@ -71,3 +71,28 @@ def test_live_calibration_of_a_net(tmp_path):
     assert 0 <= result["accuracy"] <= 1 and result["mse"] >= 0
     assert "opening" in result and "live value MSE" in describe(result)
     assert load_value_shards([str(tmp_path)], net_sha256="ab" * 8) == []
+
+
+def test_calibration_reports_hope_when_even_or_behind():
+    from catanatron.colonist.calibrate import calibrate, describe
+
+    class Fixed:
+        def forward_rows(self, rows, dynamic):
+            return None, dynamic[:, 0]
+
+    # Values -0.2 (stated 40%) at turns 5, 25, 70; 0.8 (stated 90%) at turn 30.
+    dynamic = np.array([[-0.2], [-0.2], [-0.2], [0.8]], np.float32)
+    parts = [
+        (
+            np.zeros((1, 1), np.float32),
+            dynamic,
+            np.zeros(4, np.int64),
+            np.array([1, -1, 1, -1], np.float32),
+            np.array([5, 25, 70, 30], np.int64),
+        )
+    ]
+    hopeful = calibrate(Fixed(), parts)["hopeful"]
+    assert hopeful == {"stated": 0.4, "won": 0.5, "n": 2}
+    assert "stated 20-60% from turn 20: 40.0%, won 50.0% (2 positions)" in describe(
+        calibrate(Fixed(), parts)
+    )

@@ -23,6 +23,7 @@ import sys
 import numpy as np
 
 PHASES = (("opening", 0, 20), ("middle", 20, 60), ("late", 60, 10**6))
+HOPEFUL_FROM_TURN = 20
 
 
 def load_value_shards(folders, net_sha256=None):
@@ -61,6 +62,15 @@ def calibrate(net, parts):
         rows = (t >= start) & (t < end)
         if rows.any():
             out[name] = _scores(v[rows], z[rows])
+    # Even or behind from mid-game on: the stated win chance against the real one.
+    stated = (v + 1) / 2
+    rows = (t >= HOPEFUL_FROM_TURN) & (stated >= 0.2) & (stated < 0.6)
+    if rows.any():
+        out["hopeful"] = {
+            "stated": round(float(np.mean(stated[rows])), 4),
+            "won": round(float(np.mean((z[rows] + 1) / 2)), 4),
+            "n": int(rows.sum()),
+        }
     return out
 
 
@@ -118,7 +128,14 @@ def describe(result):
     phases = [
         f"{name} {result[name]['mse']:.3f}" for name, _, _ in PHASES if name in result
     ]
-    return line + ("; MSE by phase: " + ", ".join(phases) if phases else "")
+    line += "; MSE by phase: " + ", ".join(phases) if phases else ""
+    hopeful = result.get("hopeful")
+    if hopeful:
+        line += (
+            f"; stated 20-60% from turn {HOPEFUL_FROM_TURN}: {hopeful['stated']:.1%}, "
+            f"won {hopeful['won']:.1%} ({hopeful['n']} positions)"
+        )
+    return line
 
 
 def main(argv=None):
