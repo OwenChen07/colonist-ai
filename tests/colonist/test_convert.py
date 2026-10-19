@@ -526,6 +526,38 @@ def test_a_reconnect_snapshot_older_than_the_log_changes_nothing(frames):
     assert not c.reconcile(start.data["data"]["payload"]["gameState"])
 
 
+def test_a_robber_move_with_nobody_to_rob_resolves_at_once(frames):
+    """colonist logs 139 right after a robber move that robs nobody, and no
+    steal follows (254 of 254 in 800 ranked captures). The move must not
+    wait for one: live, the bot then sat out its turn."""
+    from catanatron.colonist.convert import GAME_STATE, _Converter
+
+    start = next(f for f in frames if f.type == GAME_STATE)
+    entries = [
+        {"text": {"type": 11, "playerColor": None, "pieceEnum": 5}},
+        {"text": {"type": 139, "playerColor": None, "playerCount": 1}},
+    ]
+    for logged in (entries[:1], entries):
+        c = _Converter(start.data["data"]["payload"], start)
+        for e in logged:
+            e["text"]["playerColor"] = c.you
+        tile = next(k for k in c.hexes if int(k) != c.robber_tile)
+        c.apply(
+            {
+                "gameLogState": {
+                    str(c.last_log_id + 1 + i): e for i, e in enumerate(logged)
+                },
+                "mechanicRobberState": {"locationTileIndex": int(tile)},
+            }
+        )
+        if len(logged) == 1:
+            assert c.pending_robber is not None
+        else:
+            assert c.pending_robber is None
+            (who, kind, (_, victim)), _ = c.log[-1]
+            assert (kind, victim) == ("MOVE_ROBBER", None)
+
+
 def test_a_combined_bank_trade_takes_its_rate_from_the_cards():
     """4 wood for 2 ore in one entry, before the player's 2:1 rate arrived
     (seen live): two 2:1 trades."""

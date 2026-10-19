@@ -97,6 +97,10 @@ LOG_DISCARDED = 55
 LOG_TIMER_DISCARDED = 64  # colonist's timer chose the discards (55 follows)
 LOG_ROBBER_NOTHING_TO_STEAL = 74
 STEALS = (LOG_YOU_STOLE, LOG_STOLE_FROM_YOU, LOG_ROBBER_NOTHING_TO_STEAL)
+#: Logged right after a robber move with nobody to rob, instead of a steal
+#: entry (all 254 robber moves with it in 800 ranked captures, none followed
+#: by a steal). Waiting for a steal there cost the bot its turn.
+LOG_ROBBER_NO_VICTIM = 139
 LOG_MONOPOLY = 86  # the resource taken
 LOG_RESIGNED = 112
 LOG_TRADED_WITH_BANK = 116
@@ -117,9 +121,7 @@ LOG_PIECE_NOTICE = {72, 87}  # before matching setup road / settlement placement
 #: logs its own entry, which is not mapped yet and so stops the record), and
 #: a player embargoing another (113: only blocks player-to-player trades,
 #: which this bot never offers or accepts), and
-#: a pre-game counter (130), and how many players the robber can steal
-#: from (139, logged with the robber move; the steal itself may follow in a
-#: later update, seen live), and a player disconnecting (140, logged with
+#: a pre-game counter (130), and a player disconnecting (140, logged with
 #: isConnected false in the same update, seen live in a ranked game), and a
 #: player starting a vote to pause the game (124, sent with a type 51 vote
 #: frame; the vote needs every player's accept, so it expires unless the bot
@@ -157,7 +159,6 @@ LOG_IGNORED = {
     128,
     130,
     131,
-    139,
     140,
 }
 PIECE = {0: "road", 2: "settlement", 3: "city"}
@@ -531,15 +532,17 @@ class _Converter:
                     raise _Unsupported(
                         f"robber moved without a new robber tile: {text}"
                     )
-                # The steal (or "nothing to steal") entry follows, in this
-                # update or, live, in a later one. With nobody to rob colonist
-                # may log nothing at all: the next other entry settles that.
+                # The steal, "nothing to steal" or "no victim" entry follows,
+                # in this update or a later one. If none comes, the next
+                # other entry settles it as robbing nobody.
                 self._resolve_robber()
                 self.pending_robber = (color, list(self._tile_cube(robber)))
             elif kind in STEALS:
                 if self.pending_robber is None:
                     raise _Unsupported(f"steal without a robber move: {text}")
                 self._resolve_robber(text)
+            elif kind == LOG_ROBBER_NO_VICTIM:
+                self._resolve_robber()
             elif kind == LOG_BOUGHT_DEV_CARD:
                 bought.setdefault(color, 0)
                 bought[color] += 1
