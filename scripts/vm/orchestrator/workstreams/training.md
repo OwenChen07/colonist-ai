@@ -2,7 +2,7 @@
 
 **Aim:** a stronger net and search, measured live against people.
 
-**Owns:** `loop.py`, `train.py`, the promotion gate and guardrails, `scripts/vm/train.sh`, the graph net's architecture, targets and data mix, and the search's settings for live play (`BUDGETS`, simulations, the opening).
+**Owns:** `loop.py`, the production training run (`scripts/vm/train.sh`, `workers.env`, the data window and sample), the promotion gate and guardrails, and deployments by `safe_restart_training.sh`. The net's architecture, targets and offline experiments belong to `research` (since Oct 18); the search's settings for live play (`BUDGETS`, simulations, the opening, the account env files) belong to `live-play` (since Oct 19, 9:18 AM).
 
 **Known gaps to work on, in the lead's order:**
 1. The live value error is about 0.64, against about 0.40 in self-play. The opening value error is about 0.95, no better than guessing.
