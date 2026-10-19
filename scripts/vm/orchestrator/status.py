@@ -49,9 +49,9 @@ DEFAULT_ACCOUNT_NAMES = "bot3=Dilly6283,bot4=Sherie3424,bot5=Petra4620,bot7=Dale
 
 def account_names():
     names = {}
-    for pair in os.environ.get("ORCHESTRATOR_ACCOUNT_NAMES", DEFAULT_ACCOUNT_NAMES).split(
-        ","
-    ):
+    for pair in os.environ.get(
+        "ORCHESTRATOR_ACCOUNT_NAMES", DEFAULT_ACCOUNT_NAMES
+    ).split(","):
         account, _, name = pair.strip().partition("=")
         if account and name:
             names[account] = name
