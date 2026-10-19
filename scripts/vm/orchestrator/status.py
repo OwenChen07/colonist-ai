@@ -7,6 +7,7 @@ import csv
 import datetime as dt
 import glob
 import json
+import os
 import sys
 import urllib.request
 from pathlib import Path
@@ -40,7 +41,25 @@ def training():
     return line
 
 
+# Each account folder's colonist username (owner's rule, Oct 19: the live lines
+# name the accounts, not bot2, bot3). ORCHESTRATOR_ACCOUNT_NAMES overrides:
+# "bot3=Dilly6283,bot4=Sherie3424".
+DEFAULT_ACCOUNT_NAMES = "bot3=Dilly6283,bot4=Sherie3424,bot5=Petra4620,bot7=Dale7112"
+
+
+def account_names():
+    names = {}
+    for pair in os.environ.get("ORCHESTRATOR_ACCOUNT_NAMES", DEFAULT_ACCOUNT_NAMES).split(
+        ","
+    ):
+        account, _, name = pair.strip().partition("=")
+        if account and name:
+            names[account] = name
+    return names
+
+
 def live():
+    names = account_names()
     ratings = {}
     try:
         with urllib.request.urlopen(SITE + "/api/live", timeout=20) as response:
@@ -70,12 +89,13 @@ def live():
         if not day and status != "needs_attention":
             continue  # a retired or idle account
         wins = sum(r["winner"] == r.get("bot_color") for r in day)
-        name = next(
+        name = names.get(account) or next(
             (n for n in ratings if n and n.lower().startswith(account.lower())), None
         )
-        rating = f", {ratings[name]}" if name else ""
+        rating = f", {ratings[name]}" if name in ratings else ""
         flag = "" if status in (None, "running", "starting") else f", ⚠️ {status}"
-        lines.append(f"- {account}: {wins}-{len(day) - wins}{rating}{flag}")
+        label = f"{name} ({account})" if name else account
+        lines.append(f"- {label}: {wins}-{len(day) - wins}{rating}{flag}")
     return "\n".join(lines)
 
 

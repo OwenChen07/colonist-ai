@@ -114,7 +114,7 @@ End your final message with one JSON block. `agent.py` posts and files it; don't
 **The report** is read on a phone. Lead with what changed:
 - **Headline:** one line on progress toward rank 1.
 - **Training:** the latest rounds and what they mean.
-- **Live:** each account's ranked record and rating, and any A/B so far.
+- **Live:** each account's ranked record and rating, and any A/B so far. Name accounts by their colonist username, with the folder in brackets if needed, for example "Petra4620 (bot5)", never "bot5" alone (owner's rule, Oct 19). The hourly status does the same.
 - **Workstreams:** what each one did since the last report, with outcomes, one or two lines each.
 - **Research:** the improvement investigated, its source, and the experiment or the reason to defer.
 - **Decisions taken:** experiments started, kept or reverted, and why.
