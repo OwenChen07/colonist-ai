@@ -372,6 +372,12 @@ def train(run, n, args):
             last = isinstance(error, GpuBusy) or attempt == TRAIN_REMOTE_TRIES
             then = "here" if last else f"again in {TRAIN_REMOTE_RETRY_WAIT} s"
             say(f"round {n}: training on {args.train_host} failed ({error}); {then}")
+            if not isinstance(error, GpuBusy):
+                # A preempted GPU VM: gcp_start_spot.sh starts it (or moves
+                # it to another zone) while we wait, not next round.
+                from catanatron.colonist import distributed as D
+
+                D._restart(args.train_host, say)
             if last:
                 break
             time.sleep(TRAIN_REMOTE_RETRY_WAIT)

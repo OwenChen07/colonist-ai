@@ -501,10 +501,16 @@ def test_training_on_a_gpu_host_and_falling_back_here(tiny_args, monkeypatch):
         tries.append(a[-1])
         raise OSError("no route to host")
 
+    from catanatron.colonist import distributed
+
+    restarts = []
+    monkeypatch.setattr(distributed, "_restart", lambda h, log: restarts.append(h))
     monkeypatch.setattr(loop, "train_remote", down)
     assert loop.main(args + ["--train-host", "me@gpu", "--rounds", "2"]) == 0
     assert local and (run / "nets" / "round_002.npz").exists()
     assert tries == [2] * loop.TRAIN_REMOTE_TRIES
+    # Each failure starts stopped spot VMs (the GPU one too) at once.
+    assert restarts == ["me@gpu"] * loop.TRAIN_REMOTE_TRIES
     assert sleeps == [loop.TRAIN_REMOTE_RETRY_WAIT] * (loop.TRAIN_REMOTE_TRIES - 1)
 
     # Back after a preemption: the second try trains there.
