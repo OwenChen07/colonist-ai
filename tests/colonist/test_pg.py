@@ -33,3 +33,37 @@ def test_games_are_recorded_and_fixed_by_the_seed(tmp_path):
     assert len(d["action"]) == len(d["logp"]) == len(d["adv"]) == n
     assert (d["action"] >= 0).all() and (d["logp"] <= 0).all()
     assert np.allclose(d["ret"], d["adv"] + d["vpred"], atol=1e-5)
+
+
+def test_pg_training_runs_and_starts_at_ratio_one(tmp_path):
+    import torch
+
+    from catanatron.colonist import graph as G
+    from catanatron.colonist import train
+
+    net = G.random_graph_net(8, 8, 1, seed=1)
+    net_path = str(tmp_path / "net.npz")
+    net.save(net_path)
+    games, _ = pg.play_games(net, range(4), [], self_rate=1.0)
+    (tmp_path / "data").mkdir()
+    shard = str(tmp_path / "data" / "shard_0.npz")
+    pg.write_shard(shard, games)
+
+    static, split, _, _ = train.load_split([shard], 0.0, pg=True)
+    data = train.Data(static, split, "cpu")
+    assert np.allclose(split["value"], np.load(shard)["ret"])
+    model = train.torch_model_of(net_path).eval()
+    idx = torch.arange(data.n)
+    x, legal, action, _, ret, _ = data.batch(idx)
+    old_logp, adv = data.pg_batch(idx)
+    with torch.no_grad():
+        _, _, _, _, kl, clipped = train.pg_losses(
+            model, model, x, legal, action, ret, old_logp, adv
+        )
+    # the net that played the moves: ratio 1 and no distance to itself
+    assert float(clipped) == 0 and abs(float(kl)) < 1e-5
+
+    out = str(tmp_path / "out")
+    args = [str(tmp_path / "data"), "--out", out, "--init", net_path, "--pg"]
+    assert train.main(args + ["--epochs", "1", "--device", "cpu", "--batch", "64"]) == 0
+    assert (tmp_path / "out" / "last.npz").exists()

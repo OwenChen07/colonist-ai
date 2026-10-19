@@ -119,6 +119,20 @@ def hidden_of(path):
     return [w.shape[1] for w, _ in Net.load(path).hidden]
 
 
+def torch_model_of(path):
+    """A torch model of a net.npz's kind and size, with its weights."""
+    if is_graph_file(path):
+        from catanatron.colonist import graph as G
+        from catanatron.colonist.net import Net
+
+        g = Net.load(path)
+        model = G.torch_model(g.hidden_size, g.glob, g.layers)
+    else:
+        model = build_model(hidden_of(path))
+    load_weights(model, path)
+    return model
+
+
 def pick_device(name=None):
     import torch
 
@@ -190,9 +204,13 @@ def byte_codes(dynamic, path=""):
     return k.astype(np.uint8)
 
 
-def load_split(paths, val_fraction, value_mix=0.0):
+def load_split(paths, val_fraction, value_mix=0.0, pg=False):
     """Reads the shards into compact training and validation sets, split by
     game, as (static, train, validation, games).
+
+    With `pg`, the shards are pg.py's (every row has logp, adv and ret): the
+    value target is the GAE return `ret`, and the splits also keep `logp`
+    and `adv` for pg_losses.
 
     Compact, so many rounds of self-play fit in memory: legal moves stay
     packed (8 per byte), most position features are counts kept in a byte
@@ -241,6 +259,9 @@ def load_split(paths, val_fraction, value_mix=0.0):
             "pi": np.empty(n_pi, np.float16),
             "aux": np.full((n, AUX_TARGETS), np.nan, np.float16),
         }
+        if pg:
+            splits[val]["logp"] = np.empty(n, np.float32)
+            splits[val]["adv"] = np.empty(n, np.float32)
     at = {False: [0, 0], True: [0, 0]}
     offset = 0
     for path, (is_val, soft, count) in zip(paths, plans):
@@ -251,6 +272,10 @@ def load_split(paths, val_fraction, value_mix=0.0):
         if "full" in d:
             v = np.where(d["full"].astype(bool), v, z)
         value = (1 - value_mix) * z + value_mix * v
+        if pg:
+            if "adv" not in d:
+                raise ValueError(f"{path} is not a pg.py shard (no adv)")
+            value = d["ret"].astype(np.float32)
         codes = byte_codes(d["dynamic"], path)
         static[offset : offset + len(d["static"])] = d["static"]
         for val in (False, True):
@@ -268,6 +293,9 @@ def load_split(paths, val_fraction, value_mix=0.0):
             split["soft"][r:end] = soft[rows]
             if "aux" in d:
                 split["aux"][r:end] = d["aux"][rows]
+            if pg:
+                split["logp"][r:end] = d["logp"][rows]
+                split["adv"][r:end] = d["adv"][rows]
             counts = count[rows]
             split["pi_start"][r:end] = q + np.cumsum(counts) - counts
             soft_rows = rows[soft[rows]]
@@ -311,6 +339,8 @@ class Data:
         self.pi = t(split["pi"])
         self.aux = t(split["aux"])
         self.has_aux = bool(np.isfinite(split["aux"][:, 0]).any())
+        if "adv" in split:
+            self.logp, self.adv = t(split["logp"]), t(split["adv"])
         self.shifts = torch.arange(7, -1, -1, device=device, dtype=torch.uint8)
 
     def batch(self, idx):
@@ -340,6 +370,11 @@ class Data:
                 pi[soft] = block
         aux = self.aux[idx].float() if self.has_aux else None
         return x, legal, self.action[idx], pi, self.value[idx], aux
+
+    def pg_batch(self, idx):
+        """(logp of the move played, its advantage) for pg_losses. Both stay
+        as they are under a board symmetry."""
+        return self.logp[idx], self.adv[idx]
 
 
 class Augment:
@@ -412,6 +447,55 @@ def losses(model, x, legal, action, pi, value, aux, value_weight, aux_weight=0.0
             aux_loss = F.mse_loss(predicted[known], aux[known])
             total = total + aux_weight * aux_loss
     return total, policy_loss, value_loss, correct, n_target, aux_loss
+
+
+def pg_losses(
+    model,
+    prior,
+    x,
+    legal,
+    action,
+    ret,
+    old_logp,
+    adv,
+    value_weight=1.0,
+    clip=0.2,
+    entropy_weight=0.01,
+    kl_weight=0.02,
+):
+    """PPO's loss on pg.py's rows (E54): the clipped ratio of the move's new
+    to old probability times its advantage (normalised per batch), the value
+    head's error to the return, an entropy bonus, and the KL divergence from
+    `prior` (a frozen net, e.g. round 73) that keeps the policy near it.
+    Returns (total, policy, value, entropy, kl, share of rows clipped)."""
+    import torch
+    import torch.nn.functional as F
+
+    logits, v = model(x)
+    log_p = F.log_softmax(logits.masked_fill(~legal, -1e9), dim=1)
+    new_logp = log_p.gather(1, action[:, None]).squeeze(1)
+    ratio = torch.exp(new_logp - old_logp)
+    a = (adv - adv.mean()) / (adv.std() + 1e-8) if len(adv) > 1 else adv
+    clipped = ratio.clamp(1 - clip, 1 + clip)
+    policy_loss = -torch.min(ratio * a, clipped * a).mean()
+    value_loss = F.mse_loss(v, ret)
+    p = log_p.exp()
+    entropy = -torch.where(legal, p * log_p, torch.zeros_like(p)).sum(1).mean()
+    kl = torch.zeros((), device=x.device)
+    if prior is not None and kl_weight:
+        with torch.no_grad():
+            prior_logits, _ = prior(x)
+            prior_log_p = F.log_softmax(prior_logits.masked_fill(~legal, -1e9), dim=1)
+        kl = torch.where(legal, p * (log_p - prior_log_p), torch.zeros_like(p))
+        kl = kl.sum(1).mean()
+    total = (
+        policy_loss
+        + value_weight * value_loss
+        - entropy_weight * entropy
+        + kl_weight * kl
+    )
+    clip_share = ((ratio - 1).abs() > clip).float().mean()
+    return total, policy_loss, value_loss, entropy, kl, clip_share
 
 
 def _swap_in(model, weights):
@@ -544,6 +628,21 @@ def main(argv=None):
         help="keep a moving average of the weights with this decay per step "
         "(e.g. 0.9997) and validate and export it; 0 is off",
     )
+    parser.add_argument(
+        "--pg",
+        action="store_true",
+        help="policy-gradient training on pg.py's shards (E54, offline): "
+        "PPO's clipped loss instead of imitation, value target the return",
+    )
+    parser.add_argument(
+        "--pg-prior",
+        default=None,
+        help="with --pg, the frozen net the KL term keeps the policy near "
+        "(default: --init)",
+    )
+    parser.add_argument("--pg-clip", type=float, default=0.2)
+    parser.add_argument("--pg-entropy", type=float, default=0.01)
+    parser.add_argument("--pg-kl", type=float, default=0.02)
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args(argv)
 
@@ -558,7 +657,7 @@ def main(argv=None):
     if args.max_positions:
         paths = select_shards(paths, args.max_positions, args.seed)
     static, train_split, val_split, games = load_split(
-        paths, args.val_fraction, args.value_mix
+        paths, args.val_fraction, args.value_mix, pg=args.pg
     )
     data_device = pick_device(args.data_device) if args.data_device else device
     train = Data(static, train_split, data_device)
@@ -594,6 +693,12 @@ def main(argv=None):
     if args.init:
         load_weights(model, args.init)
     model = model.to(device)
+    prior = None
+    prior_path = args.pg_prior or args.init
+    if args.pg and prior_path and args.pg_kl:
+        prior = torch_model_of(prior_path).to(device).eval()
+        for p in prior.parameters():
+            p.requires_grad_(False)
     params = sum(p.numel() for p in model.parameters())
     opt = torch.optim.AdamW(
         model.parameters(), lr=args.lr, weight_decay=args.weight_decay
@@ -659,15 +764,34 @@ def main(argv=None):
         start = time.time()
         gen.manual_seed(args.seed * 1000 + epoch)  # resumable shuffles
         order = torch.randperm(train.n, generator=gen)[:per_epoch].to(data_device)
-        sums = np.zeros(3)
+        sums, pg_sums = np.zeros(3), np.zeros(3)
         for s in range(steps_per_epoch):
             idx = order[s * args.batch : (s + 1) * args.batch]
             batch = _to(train.batch(idx), device)
             if augment:
                 batch = augment(*batch)
-            total, pl, vl, _, _, _ = losses(
-                model, *batch, args.value_weight, args.aux_weight
-            )
+            if args.pg:
+                x, legal, action, _, ret, _ = batch
+                old_logp, adv = _to(train.pg_batch(idx), device)
+                total, pl, vl, ent, kl, clip_share = pg_losses(
+                    model,
+                    prior,
+                    x,
+                    legal,
+                    action,
+                    ret,
+                    old_logp,
+                    adv,
+                    args.value_weight,
+                    args.pg_clip,
+                    args.pg_entropy,
+                    args.pg_kl,
+                )
+                pg_sums += [ent.item(), kl.item(), clip_share.item()]
+            else:
+                total, pl, vl, _, _, _ = losses(
+                    model, *batch, args.value_weight, args.aux_weight
+                )
             opt.zero_grad(set_to_none=True)
             total.backward()
             opt.step()
@@ -685,6 +809,12 @@ def main(argv=None):
             f"epoch {epoch + 1}: train policy {row[1]:.3f} value {row[2]:.3f} | "
             f"val policy {vp:.3f} value {vv:.3f} accuracy {va:.1%}"
             + ("" if math.isnan(vaux) else f" aux {vaux:.3f}")
+            + (
+                f" | entropy {pg_sums[0] / sums[2]:.3f} kl {pg_sums[1] / sums[2]:.4f}"
+                f" clipped {pg_sums[2] / sums[2]:.1%}"
+                if args.pg
+                else ""
+            )
             + f" | {secs:.0f} s",
             flush=True,
         )
