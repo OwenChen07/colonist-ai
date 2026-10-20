@@ -280,15 +280,12 @@ git checkout of `main-9mnmbh`. It pulls and pushes with a read-write deploy key,
     its code to every worker first.
   - Workers since round 12:
     - GCP `colonist-selfplay-worker-4` (4 cores).
-    - Azure `colonist-az-worker-1` (`Standard_D4as_v4`, 9.160.33.122).
-    - Azure `colonist-az-worker-2` (`Standard_D2s_v4`, 9.160.34.57).
-  - The Azure VMs are in resource group `colonist-ai-workers`, belgiumcentral,
-    paid from the Azure for Students credit. Their firewall allows SSH only from the
-    coordinator's static IP 34.60.203.129 (`colonist-coordinator-ip`) and the
-    owner's Mac.
-  - Students quota is 6 vCPUs per region. The other allowed regions only offer
-    burstable B-series sizes.
-  - Measured self-play speed per Azure vCPU is about the same as per GCP T2A core.
+    - Gone: Azure `colonist-az-worker-1` (`Standard_D4as_v4`, 9.160.33.122) and
+      `colonist-az-worker-2` (`Standard_D2s_v4`, 9.160.34.57). The Azure for
+      Students credit ended on Oct 20, 2026 (about 5:56 PM Toronto they stopped
+      answering); both were taken out of `workers.env` that evening, 6 of about
+      106 worker processes. They were in resource group `colonist-ai-workers`,
+      belgiumcentral; their speed per vCPU was about that of a GCP T2A core.
   - Since 2026-10-09 there are also four AWS workers:
     - `c7i-flex.large` (2 vCPU each), us-east-2, on-demand, user `ubuntu`, in the
       owner's AWS project account 609022620573.
@@ -344,11 +341,10 @@ The notes below are from before the 24/7 setup.
   (flags aren't stored in `state.json`; pass the same ones unless changing them on
   purpose). Re-add the auto-shutdown watcher if you restart.
 
-**Azure (mostly retired):** Azure for Students subscription. The old datagen VM was
-deleted; its OS disk `colonist-datagen-1005-1054_disk1_...` remains in resource group
-`COLONIST-AI-VMS` (canadacentral), costing a little; delete it if the owner agrees.
-The student subscription can't get quota increases and only offers burstable
-`B4ps_v2`/`B4pls_v2` (40% baseline), so it isn't useful for training.
+**Azure (ended):** the Azure for Students subscription's credit ran out on Oct 20,
+2026. Its two self-play workers are gone (see above) and nothing else of ours ran
+there; the old datagen VM's leftover disk went with the subscription. The `azure/`
+scripts and the Azure line in `scripts/credits.py` are kept only as history.
 
 **Mac:** the bridge is running (see above). Self-play on the Mac takes ~1.5–2 h per
 round at 100 sims, but **memory is the bottleneck**: with Cursor/Chrome open, swap
