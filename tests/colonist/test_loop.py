@@ -161,6 +161,28 @@ def test_full_rate_needs_fast_simulations(tiny_args):
         loop.main(args + ["--init", init, "--full-rate", "0.5"])
 
 
+def test_target_scale_goes_to_selfplay(tiny_args, monkeypatch):
+    """E59: --target-scale reaches self-play; unset, self-play gets None."""
+    pytest.importorskip("torch")
+    from catanatron.colonist import loop, selfplay
+
+    run, args, init = tiny_args
+    with pytest.raises(SystemExit):
+        loop.main(args + ["--init", init, "--target-scale", "0"])
+    monkeypatch.setattr(evaluate, "sprt", lambda *a, **k: _fake_result("keep", 0.4))
+    monkeypatch.setattr(evaluate, "match", lambda *a, **k: _fake_result(None, 0.6))
+    seen = []
+    real_run = selfplay.run
+    monkeypatch.setattr(
+        selfplay,
+        "run",
+        lambda *a, **k: seen.append(k["target_scale"]) or real_run(*a, **k),
+    )
+    assert loop.main(args + ["--init", init, "--rounds", "1"]) == 0
+    assert loop.main(args + ["--rounds", "2", "--target-scale", "0.5"]) == 0
+    assert seen == [None, 0.5]
+
+
 def test_loose_gate_promotes_unless_clearly_worse(tiny_args, monkeypatch):
     """An undecided match passes the loose gate; the net is promoted after
     its benchmark, and the SPRT is 46% against 50%."""

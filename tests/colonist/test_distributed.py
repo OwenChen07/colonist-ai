@@ -351,6 +351,35 @@ def _where(played):
     return where
 
 
+@pytest.mark.parametrize("scale", [None, 0.5])
+def test_target_scale_reaches_every_worker_only_when_set(tmp_path, monkeypatch, scale):
+    """E59: --target-scale goes to the coordinator's and the hosts' self-play
+    command lines when set, and to neither when unset."""
+    from catanatron.colonist import distributed
+
+    out, logs, _, _ = _queue_fleet(
+        tmp_path, monkeypatch, ["w@a:2"], {"here": (0, 10**6), "w@a": (0, 10**6)}
+    )
+    argvs = []
+    for name in ("_ssh", "_local"):
+        real = getattr(distributed, name)
+        monkeypatch.setattr(
+            distributed,
+            name,
+            lambda *a, real=real: argvs.append(list(map(str, a[-1]))) or real(*a),
+        )
+    distributed.run(
+        "net.npz", out, games=64, seed=0, workers=1, log=logs.append, target_scale=scale
+    )
+    streams = [a for a in argvs if "--parts-stream" in a]
+    assert len(streams) >= 2  # here and w@a
+    for argv in streams:
+        if scale is None:
+            assert "--target-scale" not in argv
+        else:
+            assert argv[argv.index("--target-scale") + 1] == "0.5"
+
+
 def test_every_machine_draws_parts_from_one_queue(tmp_path, monkeypatch):
     from catanatron.colonist import distributed
 

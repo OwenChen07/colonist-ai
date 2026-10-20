@@ -627,6 +627,7 @@ def run(
     human_starts=None,
     human_start_rate=0.0,
     setup_simulations=None,
+    target_scale=None,
     human_opponent=None,
     human_opponent_rate=0.0,
     part_stream=None,
@@ -654,6 +655,10 @@ def run(
         raise ValueError("playout cap randomization needs fast_simulations")
     if setup_simulations is not None and setup_simulations <= 0:
         raise ValueError("setup_simulations must be positive")
+    if target_scale is not None and not (
+        math.isfinite(target_scale) and target_scale > 0
+    ):
+        raise ValueError("target_scale must be positive and finite")
     os.makedirs(out_dir, exist_ok=True)
     config_path = os.path.join(out_dir, "setup-exploration.json")
     if os.path.exists(config_path):
@@ -684,6 +689,8 @@ def run(
     }
     if setup_simulations is not None:
         search_args["setup_simulations"] = setup_simulations
+    if target_scale is not None:  # E59: softer recorded move targets
+        search_args["target_scale"] = target_scale
     if full_rate < 1:
         search_args["full_rate"] = full_rate
         search_args["fast_simulations"] = fast_simulations
@@ -863,6 +870,13 @@ def main(argv=None):
         help="simulations for the other moves, with --full-rate below 1",
     )
     parser.add_argument(
+        "--target-scale",
+        type=float,
+        default=None,
+        help="sigma's scale for the recorded move targets only (E59); unset "
+        "keeps the search's own",
+    )
+    parser.add_argument(
         "--human-starts",
         default=None,
         help="a starts.py file: start some games from real games' positions",
@@ -932,6 +946,7 @@ def main(argv=None):
         human_starts=args.human_starts,
         human_start_rate=args.human_start_rate,
         setup_simulations=args.setup_simulations,
+        target_scale=args.target_scale,
         human_opponent=args.human_opponent,
         human_opponent_rate=args.human_opponent_rate,
         part_stream=stream,

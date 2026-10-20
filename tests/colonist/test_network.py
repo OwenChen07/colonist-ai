@@ -530,6 +530,35 @@ def test_setup_search_budget_can_stay_fixed_in_a_search_mix_test():
     assert not full and args["simulations"] == 24
 
 
+def test_target_scale_softens_recorded_targets_not_the_games(tmp_path):
+    """E59: a shard played with target_scale has the same games (moves are
+    picked as before) and softer move targets."""
+    from catanatron.colonist.selfplay import run_shard
+
+    net_path = str(tmp_path / "net.npz")
+    random_net(hidden=(16,)).save(net_path)
+    shards = {}
+    for scale in (None, 0.25):
+        args = {"simulations": 16}
+        if scale is not None:
+            args["target_scale"] = scale
+        path, *_ = run_shard((str(tmp_path / f"sp{scale}"), net_path, 0, 2, args))
+        shards[scale] = np.load(path)
+    base, soft = shards[None], shards[0.25]
+    assert np.array_equal(base["turn"], soft["turn"])
+    assert np.array_equal(base["z"], soft["z"])
+    assert np.array_equal(base["dynamic"], soft["dynamic"])
+    peak = lambda s: s["pi"].astype(np.float32).max(axis=1).mean()  # noqa: E731
+    assert peak(soft) < peak(base)  # a random net's prior is nearly flat
+
+
+def test_target_scale_must_be_positive(tmp_path):
+    from catanatron.colonist.selfplay import run
+
+    with pytest.raises(ValueError, match="target_scale"):
+        run("unused.npz", str(tmp_path), games=0, target_scale=0, log=lambda _: None)
+
+
 def test_full_rate_needs_fast_simulations(tmp_path):
     from catanatron.colonist.selfplay import run
 

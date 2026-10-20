@@ -186,6 +186,7 @@ def run(
     setup_noise_scale=1.0,
     full_rate=1.0,
     fast_simulations=None,
+    target_scale=None,
     human_starts=None,
     human_start_rate=0.0,
     human_opponent=None,
@@ -213,6 +214,7 @@ def run(
         setup_noise_scale=setup_noise_scale,
         full_rate=full_rate,
         fast_simulations=fast_simulations,
+        target_scale=target_scale,
         human_starts=human_starts,
         human_start_rate=human_start_rate,
         human_opponent=human_opponent,
@@ -231,6 +233,8 @@ def run(
     ]
     if fast_simulations:
         flags += ["--fast-simulations", fast_simulations]
+    if target_scale is not None:
+        flags += ["--target-scale", target_scale]
     # The coordinator's own command line, with its own paths.
     local_flags = flags + ["--opponents", ",".join(map(str, opponents))]
     remote_starts = remote_nets / "starts.jsonl.gz"

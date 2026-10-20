@@ -311,6 +311,7 @@ def play(run, n, args):
     say(
         f"round {n}: self-play by {source}, {args.games} games, opponents "
         f"{opponents or 'none'}, setup noise scale {args.setup_noise_scale:g}"
+        + ("" if args.target_scale is None else f", target scale {args.target_scale:g}")
     )
     runner(
         net,
@@ -324,6 +325,7 @@ def play(run, n, args):
         setup_noise_scale=args.setup_noise_scale,
         full_rate=args.full_rate,
         fast_simulations=args.fast_simulations,
+        target_scale=args.target_scale,
         human_starts=args.human_starts or None,
         human_start_rate=args.human_start_rate if args.human_starts else 0.0,
         human_opponent=args.human_opponent or None,
@@ -990,6 +992,13 @@ def main(argv=None):
         "randomization; the rest get --fast-simulations and no policy target)",
     )
     parser.add_argument("--fast-simulations", type=int, default=None)
+    parser.add_argument(
+        "--target-scale",
+        type=float,
+        default=None,
+        help="sigma's scale for self-play's recorded move targets only (E59: "
+        "below 1 is softer); unset keeps the search's own",
+    )
     parser.add_argument("--opponent-rate", type=float, default=0.2)
     parser.add_argument(
         "--reference",
@@ -1227,6 +1236,10 @@ def main(argv=None):
         parser.error("--human-opponent-rate must be in [0, 1]")
     if not math.isfinite(args.setup_noise_scale) or args.setup_noise_scale <= 0:
         parser.error("--setup-noise-scale must be positive and finite")
+    if args.target_scale is not None and not (
+        math.isfinite(args.target_scale) and args.target_scale > 0
+    ):
+        parser.error("--target-scale must be positive and finite")
     if not 0 < args.full_rate <= 1:
         parser.error("--full-rate must be in (0, 1]")
     if args.full_rate < 1 and not args.fast_simulations:
