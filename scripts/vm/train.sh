@@ -72,6 +72,9 @@
 # Oct 19 (E59, lead 9 PM): SELFPLAY_TARGET_SCALE (--target-scale) softens
 # self-play's recorded move targets only (sigma's scale in root_targets; the
 # moves played don't change). Unset keeps the search's own scale (1).
+# Oct 20 (E67, lead 2:50 PM): a near miss gets its extra 4000 games only from
+# 50.4% (--extend-below 0.504, was 0.50). Over rounds 96-155 that skips about
+# 14% of gate games and loses no promotion (round 152 was 50.6% at 4000).
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 export COLONIST_RESTART_SCRIPT="$PWD/scripts/vm/gcp_start_spot.sh"
@@ -95,7 +98,7 @@ humanseat=()
 [ "${HUMAN_OPPONENT_RATE:-0}" != 0 ] && humanseat=(--human-opponent "${HUMAN_OPPONENT:-models/human/net.npz}" --human-opponent-rate "$HUMAN_OPPONENT_RATE")
 exec .venv/bin/python -m catanatron.colonist.loop runs/g1 "${init[@]}" \
     --rounds 1000 --games "${SELFPLAY_GAMES:-3500}" --epochs "${TRAIN_EPOCHS:-3}" --window "${TRAIN_WINDOW:-6}" --train-sample "${TRAIN_SAMPLE:-4000000}" --train-max-positions "${TRAIN_MAX_POSITIONS:-4000000}" \
-    --gate "${PROMOTION_GATE:-confidence}" --promote-at 0.51 --max-games 4000 --extend-below 0.50 --extend-above 0.52 --extend-games 4000 --futility-games 1000 --prefetch --train-from best --selfplay-from latest --match-simulations 200 --train-ema 0.9997 --min-games 1000 --anchor runs/g1/nets/round_013.npz --anchor-games 2000 --guard-live 0.01 \
+    --gate "${PROMOTION_GATE:-confidence}" --promote-at 0.51 --max-games 4000 --extend-below 0.504 --extend-above 0.52 --extend-games 4000 --futility-games 1000 --prefetch --train-from best --selfplay-from latest --match-simulations 200 --train-ema 0.9997 --min-games 1000 --anchor runs/g1/nets/round_013.npz --anchor-games 2000 --guard-live 0.01 \
     --distribute-eval \
     --simulations "${SELFPLAY_SIMULATIONS:-400}" --full-rate 0.25 --fast-simulations 24 "${targetscale[@]}" \
     --reference AB:2,F \
