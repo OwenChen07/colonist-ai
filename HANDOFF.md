@@ -187,6 +187,16 @@ ends with 2.79 dead roads against 1.19. Next (step 2): an opponent model from
   bot VM, through an SSH tunnel to port 6080 (noVNC). The owner signs in;
   never type passwords for them.
 
+**bot4, bot5 and bot7 retired (20 Oct, 11:05 am Toronto):** colonist reset
+Sherie3424, Petra4620 and Dale7112 at 9:43-9:47 am (no Start Game, rating and
+rank gone). Like bot2: services stopped and disabled, env files in
+`scripts/vm/bot/accounts-retired/` on their VMs, names in
+`COLONIST_RETIRED_NAMES` (still in `COLONIST_OWN_ACCOUNTS`). **bot9**
+(Tedi4960, port 8766, 5 casual games then ranked, plain best net) took bot5's
+place on bot VM 1. Playing now: bot3 (Dilly6283, VM 2), bot8 (Vasos5306, VM 3,
+people model), bot9. bot10 and bot11 are kept for replacements of Sherie3424
+and Dale7112.
+
 **CatBot77 (ranked) retired (12 Oct, 9:19 pm Toronto):** like Ericha8499, its
 Ranked 1v1 "Start Game" went missing or disabled; colonist-ranked is stopped
 and disabled. **bot6** (hersh3499, port 8767, casual first, then ranked) took
