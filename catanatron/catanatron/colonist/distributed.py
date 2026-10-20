@@ -714,6 +714,17 @@ def _match_weights(names, selfplay):
     return [_match_rates.get(n, w * scale) for n, w in zip(names, selfplay)]
 
 
+def _niced(argv):
+    """argv at COLONIST_MATCH_NICE's niceness on the hosts, for side matches
+    that should yield to the training loop's self-play and gate. Round 161's
+    gate (Oct 20) shared the fleet with research's 12,000 searched games: 265
+    ms per move against 135 in round 162, 62 min against 32. Not the
+    process's own niceness: the loop itself runs at 10 when an agent
+    restarted it."""
+    niceness = int(os.environ.get("COLONIST_MATCH_NICE") or 0)
+    return ["nice", "-n", str(niceness), *argv] if niceness > 0 else argv
+
+
 def run_tasks(tasks, workers=None, hosts=None, log=print):
     """Plays evaluate.py's game tasks here and on the worker hosts, and returns
     the results in task order. This machine plays its share by measured speed;
@@ -749,14 +760,16 @@ def run_tasks(tasks, workers=None, hosts=None, log=print):
         return [json.dumps(list(t)) for t in _remote_specs(host, key, root, tasks)]
 
     def serve(host, processes, lines, out):
-        argv = [
-            root / ".venv/bin/python",
-            "-m",
-            "catanatron.colonist.evaluate",
-            "--tasks-stream",
-            "--workers",
-            processes,
-        ]
+        argv = _niced(
+            [
+                root / ".venv/bin/python",
+                "-m",
+                "catanatron.colonist.evaluate",
+                "--tasks-stream",
+                "--workers",
+                processes,
+            ]
+        )
         process = subprocess.Popen(
             _ssh(host, key, argv),
             stdin=subprocess.PIPE,

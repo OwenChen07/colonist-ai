@@ -198,6 +198,15 @@ def test_a_failed_worker_s_queued_games_go_to_the_other_workers(monkeypatch):
     assert list(distributed._match_rates) == ["local", "w@y"]
 
 
+def test_a_side_match_can_play_at_low_priority_on_the_hosts(monkeypatch):
+    from catanatron.colonist import distributed
+
+    monkeypatch.delenv("COLONIST_MATCH_NICE", raising=False)
+    assert distributed._niced(["python", "-m", "x"]) == ["python", "-m", "x"]
+    monkeypatch.setenv("COLONIST_MATCH_NICE", "19")
+    assert distributed._niced(["python"]) == ["nice", "-n", "19", "python"]
+
+
 def test_evaluation_games_are_split_by_measured_speed(tmp_path, monkeypatch):
     from catanatron.colonist import distributed, evaluate
 
