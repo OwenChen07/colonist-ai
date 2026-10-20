@@ -5,7 +5,6 @@
 
 import csv
 import datetime as dt
-import glob
 import json
 import os
 import sys
@@ -41,10 +40,12 @@ def training():
     return line
 
 
-# Each account folder's colonist username (owner's rule, Oct 19: the live lines
-# name the accounts, not bot2, bot3). ORCHESTRATOR_ACCOUNT_NAMES overrides:
-# "bot3=Dilly6283,bot9=Tedi4960". bot4, bot5 and bot7 retired Oct 20 (colonist's
-# reset).
+# Each active account folder's colonist username (owner's rule, Oct 19: the live
+# lines name the accounts, not bot2, bot3). ORCHESTRATOR_ACCOUNT_NAMES overrides:
+# "bot3=Dilly6283,bot9=Tedi4960". This list is also which accounts the status
+# shows: a retired account (bot2, bot6, ranked; bot4, bot5 and bot7 after
+# colonist's reset of Oct 20) is left out, even with games in the last 24 h or a
+# needs_attention file (owner's instruction, Oct 20, 12:01 PM Toronto).
 DEFAULT_ACCOUNT_NAMES = "bot3=Dilly6283,bot8=Vasos5306,bot9=Tedi4960"
 
 
@@ -66,15 +67,16 @@ def live():
         with urllib.request.urlopen(SITE + "/api/live", timeout=20) as response:
             for bot in json.load(response).get("bots", []):
                 rank = bot.get("rank") or {}
-                ratings[bot.get("name")] = (
-                    f"{rank.get('rating')} {rank.get('tier') or ''} #{rank.get('globalRank')}"
-                )
+                if rank.get("rating"):  # a new account has none yet
+                    ratings[bot.get("name")] = (
+                        f"{rank.get('rating')} {rank.get('tier') or ''} #{rank.get('globalRank')}"
+                    )
     except Exception:  # the site is optional
         pass
     now = dt.datetime.now(dt.timezone.utc).timestamp()
     lines = ["**Live** (ranked, last 24 h):"]
-    for path in sorted(glob.glob(str(ROOT / "data/*/games.jsonl"))):
-        account = Path(path).parent.name
+    for account in names:  # the active accounts only; retired ones are left out
+        path = ROOT / "data" / account / "games.jsonl"
         day = []
         for row in core.read_jsonl(path):
             if (
@@ -87,8 +89,6 @@ def live():
         status = (read_json(Path(path).parent / "runner-status.json") or {}).get(
             "state"
         )
-        if not day and status != "needs_attention":
-            continue  # a retired or idle account
         wins = sum(r["winner"] == r.get("bot_color") for r in day)
         name = names.get(account) or next(
             (n for n in ratings if n and n.lower().startswith(account.lower())), None
