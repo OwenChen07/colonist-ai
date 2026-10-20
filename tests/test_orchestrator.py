@@ -1,7 +1,9 @@
 """The Discord orchestrator's schedule, budget and output parsing
 (scripts/vm/orchestrator/core.py and agent.py)."""
 
+import contextlib
 import datetime as dt
+import io
 import json
 import os
 import re
@@ -229,65 +231,25 @@ def test_rank_watch_counts_only_number_one_global():
     assert rank_watch.level_name(standing[0]) == "Global"
 
 
-def test_rank_watch_queues_once_and_releases_by_day(tmp_path, monkeypatch):
-    import rank_watch
-
+def rank_site(monkeypatch, rank_watch, tmp_path, live):
+    """Fakes colonist's API from live = {name: [rating, global rank]}."""
     monkeypatch.setattr(rank_watch, "STATE", tmp_path)
     monkeypatch.setattr(rank_watch, "SHOTS", tmp_path / "shots")
-    monkeypatch.setattr(rank_watch, "accounts", lambda: ["Petra4620"])
-    pages = {
-        "ranked-seasons": [{"seasonType": 20}, {"seasonType": 21}],
-        "Petra4620/ranked/21": [
-            {
-                "modeType": 1,
-                "skillRating": 2400,
-                "rankedStanding": [
-                    {"name": "Ontario", "rank": "1"},
-                    {
-                        "name": {"key": "strings:leaderboardPage.tabs.global"},
-                        "rank": "1",
-                    },
-                ],
-            }
-        ],
-    }
-    monkeypatch.setattr(
-        rank_watch, "fetch", lambda url: pages[url.split("/profile/")[1]]
-    )
-    shots = []
-    monkeypatch.setattr(
-        rank_watch, "screenshot", lambda name, path: shots.append(path) or path.touch()
-    )
-    rank_watch.main([])  # night: shoot now, post later
-    rank_watch.main([])  # already seen: no second shot
-    assert len(shots) == 1
-    state = json.loads((tmp_path / "rank-watch.json").read_text())
-    assert len(state["queue"]) == 1 and "#1 in Global" in state["queue"][0]["text"]
-    rank_watch.main(["--release"])
-    assert json.loads((tmp_path / "rank-watch.json").read_text())["queue"] == []
-
-
-def test_rank_watch_posts_each_new_rating_record(tmp_path, monkeypatch):
-    import rank_watch
-
-    monkeypatch.setattr(rank_watch, "STATE", tmp_path)
-    monkeypatch.setattr(rank_watch, "SHOTS", tmp_path / "shots")
-    monkeypatch.setattr(rank_watch, "accounts", lambda: ["Petra4620", "Dilly6283"])
-    ratings = {"Petra4620": 2353, "Dilly6283": 2344}
+    monkeypatch.setattr(rank_watch, "accounts", lambda: list(live))
 
     def fetch(url):
         page = url.split("/profile/")[1]
         if page == "ranked-seasons":
-            return [{"seasonType": 21}]
-        name = page.split("/")[0]
+            return [{"seasonType": 20}, {"seasonType": live.get("season", 21)}]
+        rating, rank = live[page.split("/")[0]]
         standing = [
-            {"name": {"key": "strings:leaderboardPage.tabs.global"}, "rank": "61"}
+            {"name": "Ontario", "rank": "1"},
+            {"name": {"key": "strings:leaderboardPage.tabs.global"}, "rank": str(rank)},
         ]
         # The API sends ratings as text, like "2353".
-        rating = str(ratings[name])
         return [
             {"modeType": 2, "skillRating": "9999"},
-            {"modeType": 1, "skillRating": rating, "rankedStanding": standing},
+            {"modeType": 1, "skillRating": str(rating), "rankedStanding": standing},
         ]
 
     monkeypatch.setattr(rank_watch, "fetch", fetch)
@@ -300,30 +262,66 @@ def test_rank_watch_posts_each_new_rating_record(tmp_path, monkeypatch):
         path.touch()
 
     monkeypatch.setattr(rank_watch, "screenshot", screenshot)
+    return shots, fail
 
-    def state():
-        return json.loads((tmp_path / "rank-watch.json").read_text())
 
-    rank_watch.main([])  # no record yet: seeded silently
-    assert shots == [] and state()["queue"] == []
-    assert state()["record"]["rating"] == 2353
-    assert state()["record"]["name"] == "Petra4620"
-    ratings["Dilly6283"] = 2353  # a tie is not a new high
-    rank_watch.main([])
-    assert shots == []
-    ratings["Dilly6283"] = 2361
-    fail.append(True)  # screenshot fails: record kept, retried next run
-    rank_watch.main([])
-    assert state()["record"]["rating"] == 2353 and state()["queue"] == []
+def rank_posts(rank_watch):
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        rank_watch.main(["--release"])
+    return [p["text"] for p in json.loads(out.getvalue())["posts"]]
+
+
+def test_rank_watch_first_run_posts_only_what_beats_the_seed(tmp_path, monkeypatch):
+    import rank_watch
+
+    live = {"Sherie3424": [2461, 16], "Dilly6283": [2414, 33]}
+    shots, _ = rank_site(monkeypatch, rank_watch, tmp_path, live)
+    # Sherie3424 is past 2450 and in the top 25 already: no retroactive posts.
+    [post] = rank_posts(rank_watch)
+    assert post.startswith("📈 **Sherie3424: 2461 rating, global #16**, at ")
+    assert post.endswith(
+        "Toronto. Our best rating yet (was 2460, Sherie3424, Oct 20 8:00 AM)."
+    )
+    assert shots == ["Sherie3424"]
+    assert rank_posts(rank_watch) == []  # nothing new
+    live["Dilly6283"] = [2452, 24]  # 2450 and the top 25 are new for Dilly6283
+    [post] = rank_posts(rank_watch)
+    assert "Dilly6283: 2452 rating, global #24" in post
+    assert post.endswith("Crossed 2450. Into the global top 25.")
+    live["Dilly6283"] = [2440, 30]  # dips, then recrosses: no second post
+    assert rank_posts(rank_watch) == []
+    live["Dilly6283"] = [2455, 22]
+    assert rank_posts(rank_watch) == []
+
+
+def test_rank_watch_milestones_bests_and_number_one(tmp_path, monkeypatch):
+    import rank_watch
+
+    live = {"Sherie3424": [2400, 40], "Dilly6283": [2300, 90]}
+    shots, fail = rank_site(monkeypatch, rank_watch, tmp_path, live)
+    assert rank_posts(rank_watch) == []  # the seed run
+    live["Sherie3424"] = [2512, 8]  # two lines and two tiers in one jump
+    [post] = rank_posts(rank_watch)
+    assert "Crossed 2500. Into the global top 10." in post
+    assert "Our best rating yet (was 2460" in post
+    assert "Our best global rank yet (was #16, Sherie3424)." in post
+    state = json.loads((tmp_path / "rank-watch.json").read_text())
+    assert state["record"]["rating"] == 2512 and state["best_rank"]["rank"] == 8
+    assert "21:Sherie3424:rating:2450" in state["seen"]
+    live["Sherie3424"] = [2650, 1]
+    fail.append(True)  # #1 needs its screenshot: nothing marked, retried
+    assert rank_posts(rank_watch) == []
     fail.clear()
-    rank_watch.main([])
-    rank_watch.main([])  # same rating again: one post per record
-    assert shots == ["Dilly6283"]
-    assert state()["record"]["rating"] == 2361
-    [post] = state()["queue"]
-    assert post["text"].startswith("📈 **New high: Dilly6283 at 2361** (previous ")
-    assert "record 2353 by Petra4620" in post["text"]
-    assert "global #61" in post["text"] and post["text"].endswith(" Toronto")
+    [post] = rank_posts(rank_watch)
+    assert post.startswith("🏆 **Sherie3424: 2650 rating, global #1**")
+    assert "Crossed 2650. #1 Global!" in post
+    assert rank_posts(rank_watch) == []
+    live["season"] = 22  # a new season starts the per-account milestones again
+    live["Sherie3424"] = [2460, 20]
+    [post] = rank_posts(rank_watch)
+    assert post.endswith("Crossed 2450. Into the global top 25.")
+    assert "best" not in post  # all-time bests are kept across seasons
 
 
 def test_decision_options_fit_a_phone():

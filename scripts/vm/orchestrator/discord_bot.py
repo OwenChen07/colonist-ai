@@ -12,10 +12,11 @@ colonist-orchestrator.service, so it keeps going with the owner's laptop off.
 - #experiments: every experiment in data/orchestrator/experiments.json, as
   pinned messages the bot edits in place when the file changes (!experiments
   re-renders now). Messages there do nothing else.
-- #milestones: rank_watch.py's screenshots (a bot at #1 Global, or a new
-  highest 1v1 rating among the bots). Messages there do nothing.
-- From 9 pm to 9 am only account risks (data/*/NEEDS_OWNER.md) and urgent
-  decisions are posted. The workers keep working within the daily budget.
+- #milestones: rank_watch.py's ranked milestones with screenshots (rating
+  lines, top-N ranks, our best rating and rank), also posted in #orchestrator.
+  Messages there do nothing.
+- From 9 pm to 9 am only account risks (data/*/NEEDS_OWNER.md), urgent
+  decisions and ranked milestones are posted. The workers keep working within the daily budget.
 
 Settings come from the environment (see orchestrator.env.example).
 """
@@ -43,7 +44,7 @@ PY = str(ROOT / ".venv/bin/python")
 LEAD = "orchestrator"
 EXPERIMENTS = "experiments"
 MILESTONES = "milestones"
-RANK_EVERY_S = 600  # how often rank_watch.py checks for a #1
+RANK_EVERY_S = 300  # how often rank_watch.py checks for milestones
 FOLLOW_EVERY_S = 10  # how often a restarted bot checks its old workers
 WORKSTREAMS = [
     w.strip()
@@ -241,14 +242,14 @@ class Orchestrator(discord.Client):
         await self.supervise(now)
 
     async def rank_watch(self, now):
-        """Screenshots of any account at #1 Global or a new rating record
-        (rank_watch.py), posted to #milestones by day."""
-        args = ["--release"] if core.daytime(now) else []
-        result, text = await self.execute(str(HERE / "rank_watch.py"), *args)
+        """Ranked milestones (rank_watch.py), posted at once, day or night, to
+        #orchestrator (owner, Oct 20) and #milestones; never a ping."""
+        result, text = await self.execute(str(HERE / "rank_watch.py"), "--release")
         for post in result.get("posts", []):
             image = Path(post.get("image", ""))
-            extra = {"file": discord.File(image)} if image.is_file() else {}
-            await self.say(MILESTONES, post["text"], **extra)
+            for name in (LEAD, MILESTONES):
+                extra = {"file": discord.File(image)} if image.is_file() else {}
+                await self.say(name, post["text"], **extra)
 
     async def post_status(self):
         _, text = await self.execute(str(HERE / "status.py"))
