@@ -94,11 +94,19 @@ starts=()
 # the human opponent model's moves, no search. Off (0) unless set.
 targetscale=()
 [ -n "${SELFPLAY_TARGET_SCALE:-}" ] && targetscale=(--target-scale "$SELFPLAY_TARGET_SCALE")
+# E81 (owner, Oct 21, 1:54 PM Toronto): the gate's third check is a fixed copy
+# of the people model (E68's snapshot, fit from round 152; not the hourly
+# models/human/net.npz, which is re-fit from the best): 4000 games with the
+# anchor's search, at most 2 points under the best's score. AB:2 stays as a
+# reading that never blocks. PEOPLE_GATE= (empty) puts AB:2 back as the check.
+gate_people=${PEOPLE_GATE-data/orchestrator/e81/people_net.npz}
+people=()
+[ -n "$gate_people" ] && people=(--people "$gate_people" --people-games 4000 --guard-people 0.02 --guard-benchmark 1)
 humanseat=()
 [ "${HUMAN_OPPONENT_RATE:-0}" != 0 ] && humanseat=(--human-opponent "${HUMAN_OPPONENT:-models/human/net.npz}" --human-opponent-rate "$HUMAN_OPPONENT_RATE")
 exec .venv/bin/python -m catanatron.colonist.loop runs/g1 "${init[@]}" \
     --rounds 1000 --games "${SELFPLAY_GAMES:-3500}" --epochs "${TRAIN_EPOCHS:-3}" --window "${TRAIN_WINDOW:-6}" --train-sample "${TRAIN_SAMPLE:-4000000}" --train-max-positions "${TRAIN_MAX_POSITIONS:-4000000}" \
-    --gate "${PROMOTION_GATE:-confidence}" --promote-at 0.51 --max-games 4000 --extend-below 0.504 --extend-above 0.52 --extend-games 4000 --futility-games 1000 --prefetch --train-from best --selfplay-from latest --match-simulations 200 --train-ema 0.9997 --min-games 1000 --anchor runs/g1/nets/round_013.npz --anchor-games 2000 --guard-live 0.01 \
+    --gate "${PROMOTION_GATE:-confidence}" --promote-at 0.51 --max-games 4000 --extend-below 0.504 --extend-above 0.52 --extend-games 4000 --futility-games 1000 --prefetch --train-from best --selfplay-from latest --match-simulations 200 --train-ema 0.9997 --min-games 1000 --anchor runs/g1/nets/round_013.npz --anchor-games 2000 --guard-live 0.01 "${people[@]}" \
     --distribute-eval \
     --simulations "${SELFPLAY_SIMULATIONS:-400}" --full-rate 0.25 --fast-simulations 24 "${targetscale[@]}" \
     --reference AB:2,F \
