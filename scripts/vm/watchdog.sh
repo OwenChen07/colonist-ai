@@ -16,9 +16,10 @@ age() { echo $(( $(date +%s) - $(stat -c %Y "$1" 2>/dev/null || echo 0) )); }
 # A problem the watchdog handed to the owner (data/<account>/NEEDS_OWNER.md)
 # only silences that account; everything else is still checked.
 waiting() { [ -e "data/$1/NEEDS_OWNER.md" ]; }
-# Accounts the owner chose not to run (bot10, Oct 20): "inactive" is expected,
-# so only that check is skipped; failed, needs_attention etc. still count.
-not_started="bot10"
+# Accounts not started yet (bot11, the spare slot; bot10 started Oct 20 evening):
+# "inactive" is expected, so only that check is skipped; failed,
+# needs_attention etc. still count.
+not_started="bot11"
 expected_inactive() { [ "$2" = inactive ] && [[ " $not_started " == *" $1 "* ]]; }
 systemctl is-active --quiet colonist-train || problems+=("colonist-train is not active ($(systemctl is-active colonist-train))")
 # The ranked bot runs on its own VM; its data comes back every 5 minutes.
