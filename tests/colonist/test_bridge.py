@@ -174,6 +174,27 @@ def test_bridge_server_end_to_end():
     assert any(g["kind"] == "move" for g in got)
 
 
+def test_bridge_server_never_closes_on_a_late_pong(monkeypatch):
+    import websockets.asyncio.server as server
+
+    seen = {}
+
+    class FakeServe:
+        def __init__(self, handler, host, port, **kwargs):
+            seen.update(kwargs)
+
+        async def __aenter__(self):
+            raise asyncio.CancelledError
+
+        async def __aexit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(server, "serve", FakeServe)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(serve_forever(lambda: None, port=18766))
+    assert seen["ping_timeout"] is None
+
+
 # ----- playing (--play) -----
 def _recorded_log(name):
     from catanatron.colonist.convert import convert

@@ -1247,7 +1247,12 @@ async def serve_forever(make_bridge, host=HOST, port=PORT, info=None):
             flush=True,
         )
 
-    async with serve(handler, host, port, max_size=2**24):
+    # No keepalive timeout: the page is on this machine, and a late pong is a
+    # busy machine, not a dead page. With websockets' 20 s timeout, a 40 s
+    # opening search on a 2-core VM shared by two bots (E80, Oct 21) dropped
+    # the link 11 times in 18 games (once in the log before): the finished move was lost and searched
+    # again with half the clock gone.
+    async with serve(handler, host, port, max_size=2**24, ping_timeout=None):
         print(f"bridge listening on ws://{host}:{port}", flush=True)
         if info:
             print(f"  {describe_info(info)}", flush=True)
