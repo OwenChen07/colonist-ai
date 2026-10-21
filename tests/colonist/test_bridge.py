@@ -946,6 +946,9 @@ def test_info_about_the_net_comes_first(tmp_path):
     filtered = net_info(str(path), 800, True, judgment_filter=True)
     assert filtered["judgment_filter"] == "last_road_v1"
     assert "judgment road filter" in describe_info(filtered)
+    robber = net_info(str(path), 800, True, robber_filter=True)
+    assert robber["robber_filter"] == "own_pips_v1"
+    assert "robber own-pips filter" in describe_info(robber)
     assert describe_info(info) == f"net {path}, epoch 7, 800 simulations, playing"
     assert "epoch" not in net_info(str(tmp_path / "missing.npz"), 50, False)
 

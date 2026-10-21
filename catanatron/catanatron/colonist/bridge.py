@@ -215,6 +215,7 @@ class Bridge:
         opponent_mix=0.0,
         judgment_filter=False,
         endgame_filter=False,
+        robber_filter=False,
     ):
         self.net = net
         # A net trained on people's moves (opponent_model.py): the search
@@ -223,6 +224,7 @@ class Bridge:
         self.opponent_mix = opponent_mix
         self.judgment_filter = judgment_filter
         self.endgame_filter = endgame_filter
+        self.robber_filter = robber_filter
         # Which net and search played (net_info), saved with each capture so
         # every live game's data says which version produced it.
         self.bot = bot
@@ -1104,6 +1106,13 @@ class Bridge:
             root_filter = lambda copy, choices: endgame_root_actions(
                 copy, previous(copy, choices) if previous else choices
             )
+        if self.robber_filter:
+            from catanatron.colonist.robber_policy import robber_root_actions
+
+            earlier = root_filter
+            root_filter = lambda copy, choices: robber_root_actions(
+                copy, earlier(copy, choices) if earlier else choices
+            )
         search = Search(
             self.net,
             simulations or self.simulations,
@@ -1246,6 +1255,7 @@ def net_info(
     opponent_model=None,
     opponent_mix=0,
     judgment_filter=False,
+    robber_filter=False,
 ):
     """What the extension's panel shows about the bot: which net file (and the
     training epoch, when the file records it), how much search, which mode.
@@ -1261,6 +1271,8 @@ def net_info(
         info["label"] = label
     if judgment_filter:
         info["judgment_filter"] = "last_road_v1"
+    if robber_filter:
+        info["robber_filter"] = "own_pips_v1"
     try:
         with open(path, "rb") as f:
             info["sha256"] = hashlib.file_digest(f, "sha256").hexdigest()[:16]
@@ -1298,6 +1310,8 @@ def describe_info(info):
         )
     if info.get("judgment_filter"):
         opponent += ", judgment road filter"
+    if info.get("robber_filter"):
+        opponent += ", robber own-pips filter"
     return (
         f"net {info['net']}{epoch}, {info['simulations']} simulations{opponent}, "
         f"{mode}"
@@ -1349,7 +1363,15 @@ def main(argv=None):
         help="experimental root filter toward a YoP/trade-funded build near the "
         "target; default off",
     )
+    parser.add_argument(
+        "--robber-filter",
+        action="store_true",
+        help="experimental root filter: no robber on your own pips when a clean "
+        "hex blocks as much of the opponent's (or ROBBER_FILTER=1); default off",
+    )
     args = parser.parse_args(argv)
+    # One account's trial (E78) from its env file, like THINK_BUDGETS.
+    args.robber_filter = args.robber_filter or os.environ.get("ROBBER_FILTER") == "1"
     if not 0 <= args.opponent_mix <= 1:
         parser.error("--opponent-mix must be between 0 and 1")
     if args.opponent_mix > 0 and not args.opponent_model:
@@ -1358,6 +1380,8 @@ def main(argv=None):
         parser.error("--judgment-filter requires --simulations of at least 1")
     if args.endgame_filter and args.simulations < 1:
         parser.error("--endgame-filter requires --simulations of at least 1")
+    if args.robber_filter and args.simulations < 1:
+        parser.error("--robber-filter requires --simulations of at least 1")
     if (
         not args.spectator_state
         and args.save
@@ -1387,6 +1411,7 @@ def main(argv=None):
         args.opponent_model,
         args.opponent_mix,
         args.judgment_filter,
+        args.robber_filter,
     )
     try:
         asyncio.run(
@@ -1403,6 +1428,7 @@ def main(argv=None):
                     opponent_mix=args.opponent_mix if opponent_model else 0.0,
                     judgment_filter=args.judgment_filter,
                     endgame_filter=args.endgame_filter,
+                    robber_filter=args.robber_filter,
                 ),
                 port=args.port,
                 info=info,
