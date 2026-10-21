@@ -157,20 +157,45 @@ EXPERIMENT_GROUPS = (
     ("Finished", ("done-kept", "done-reverted", "closed")),
 )
 FINISHED_WORDS = {"done-kept": "kept", "done-reverted": "reverted", "closed": "closed"}
+# The workers write statuses and dates in their own words ("live (step 2)",
+# "closed: round 73 pinned", "Oct 20, 8:45 PM: the lead's research item"),
+# so a status is grouped by its first word and a date is found anywhere in
+# the text (owner's request, Oct 20, 11:13 PM: newest first, which the
+# unparsed stamps had defeated).
+FINISHED_STARTS = ("done", "closed", "kept", "reverted", "failed", "dropped", "skipped")
+PLANNED_STARTS = ("planned", "proposed")
+STAMP = re.compile(
+    r"\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{1,2})"
+    r"(?:, (\d{1,2}:\d{2} [AP]M))?"
+)
 EMBED_TEXT = 4000
 MESSAGE_TEXT = 5800
 MESSAGE_EMBEDS = 10
 
 
 def toronto_stamp(text):
-    """'Oct 18, 6:55 AM' or 'Oct 18' as a datetime for sorting (year 2000:
-    the stamps carry none), else None."""
-    for form in ("%b %d, %I:%M %p", "%b %d"):
-        try:
-            return dt.datetime.strptime(f"2000 {text.strip()}", f"%Y {form}")
-        except (ValueError, AttributeError):
-            pass
-    return None
+    """The first 'Oct 18, 6:55 AM' or 'Oct 18' in the text as a datetime for
+    sorting (year 2000: the stamps carry none), else None."""
+    found = STAMP.search(text or "")
+    if not found:
+        return None
+    month, day, clock = found.groups()
+    form = "%Y %b %d" + (", %I:%M %p" if clock else "")
+    text = f"2000 {month} {day}" + (f", {clock}" if clock else "")
+    try:
+        return dt.datetime.strptime(text, form)
+    except ValueError:
+        return None
+
+
+def experiment_group(status):
+    """'Running now', 'Planned' or 'Finished' for a status in any wording."""
+    word = re.split(r"[\s:(,;.-]+", (status or "").strip().lower(), maxsplit=1)[0]
+    if word in FINISHED_STARTS:
+        return "Finished"
+    if word in PLANNED_STARTS:
+        return "Planned"
+    return "Running now"
 
 
 def experiment_block(e):
@@ -178,9 +203,9 @@ def experiment_block(e):
     lines once finished."""
     status = e.get("status", "")
     head = f"**{e.get('id', '?')} · {e.get('title', '')}**"
-    if status in FINISHED_WORDS:
+    if experiment_group(status) == "Finished":
         ended = (e.get("ended") or "").split(",")[0]
-        word = FINISHED_WORDS[status] + (f" {ended}" if ended else "")
+        word = FINISHED_WORDS.get(status, status) + (f" {ended}" if ended else "")
         lines = [f"{head} · _{word}_"]
         if e.get("result"):
             lines.append(e["result"])
@@ -206,23 +231,21 @@ def experiment_messages(entries, updated=""):
     first within a group. As few messages as the limits allow."""
 
     def newest(e):
+        finished = experiment_group(e.get("status")) == "Finished"
         stamp = toronto_stamp(
             (e.get("ended") or e.get("started") or "")
-            if e.get("status") in FINISHED_WORDS
+            if finished
             else (e.get("started") or "")
         )
         number = re.match(r"E(\d+)", e.get("id", ""))
         return (stamp or dt.datetime.min, int(number.group(1)) if number else 0)
 
-    known = {s for _, statuses in EXPERIMENT_GROUPS for s in statuses}
     title = f"**🧪 Experiments: {len(entries)}**" + (
         f" (updated {updated})" if updated else ""
     )
     blocks = []
-    for name, statuses in EXPERIMENT_GROUPS:
-        group = [e for e in entries if e.get("status") in statuses]
-        if name == "Finished":
-            group += [e for e in entries if e.get("status") not in known]
+    for name, _ in EXPERIMENT_GROUPS:
+        group = [e for e in entries if experiment_group(e.get("status")) == name]
         if not group:
             continue
         group.sort(key=newest, reverse=True)

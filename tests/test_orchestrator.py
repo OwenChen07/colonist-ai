@@ -376,6 +376,36 @@ def test_experiments_render_running_first_newest_first_within_discord_limits():
     assert "**What:**" not in finished and "_reverted Oct 18_" in finished
     assert len(messages) == 1
 
+    # The workers' own wording: a date inside a sentence still sorts, and a
+    # status is grouped by its first word (owner's request, Oct 20, 11:13 PM).
+    worded = entries + [
+        entry(7, "live (step 2)", "Oct 19, 3:40 PM: on Petra4620 first."),
+        entry(
+            8,
+            "closed: round 73 pinned",
+            "Oct 20, 8:28 AM",
+            "Oct 20, 3:24 PM (the owner's call)",
+        ),
+        entry(
+            9,
+            "done (study, nothing live)",
+            "Oct 20, 10:57 PM: the owner's question.",
+            "Oct 20, 11:05 PM",
+        ),
+        entry(10, "proposed", ""),
+    ]
+    text = "\n".join(t for m in core.experiment_messages(worded) for t in m)
+    order = [int(n) for n in re.findall(r"\*\*E(\d+) ·", text)]
+    assert order == [7, 5, 3, 4, 10, 9, 8, 6, 2, 1]  # no date sorts last
+    assert (
+        "Running now (3)" in text and "Planned (2)" in text and "Finished (5)" in text
+    )
+    assert "_closed: round 73 pinned Oct 20_" in text
+    assert core.toronto_stamp(
+        "Oct 20, 8:45 PM: the lead's research item"
+    ) == dt.datetime(2000, 10, 20, 20, 45)
+    assert core.toronto_stamp("Watch set by the lead") is None
+
     many = [entry(n, "running", "Oct 18") for n in range(60)]
     messages = core.experiment_messages(many)
     assert len(messages) > 1
