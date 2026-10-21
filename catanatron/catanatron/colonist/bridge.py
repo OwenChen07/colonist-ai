@@ -460,10 +460,14 @@ class Bridge:
             # The game's first snapshot carries the opening settlement's 60 s:
             # without it the first seat's first settlement (no diff yet) got
             # a plain search, or a previous game's expired deadline.
+            # A replayed start counts too: the extension reconnecting as a game
+            # began (2 of E80's first 4 games, Oct 21) left the first
+            # settlement with no timer, so a plain search of 1.5-6 s.
             self.deadline = self.early_discard = None
             self.timer_start = self.timer_allocated = None
-            if not replaying:
-                self.note_deadline(payload["gameState"].get("currentState"), frame.t)
+            self.note_deadline(
+                payload["gameState"].get("currentState"), frame.t, replaying
+            )
             if not self.live.error and in_progress(payload) and opening is None:
                 # A game joined midway (e.g. after a page reload) comes as a
                 # snapshot without its history, and the converter can only
@@ -526,8 +530,7 @@ class Bridge:
                     return declines + [
                         self.status("following", "waiting for setup snapshot")
                     ]
-            if not replaying:
-                self.note_deadline(diff.get("currentState"), frame.t)
+            self.note_deadline(diff.get("currentState"), frame.t, replaying)
             self.last_log_id = max([self.last_log_id, *(int(k) for k in logs)])
             # The 64 comes in the same update as the discards it chose.
             self.timer_discarded = any(
@@ -829,17 +832,21 @@ class Bridge:
             return [self.status("stopped", self.live.error)]
         return []
 
-    def note_deadline(self, current, t):
+    def note_deadline(self, current, t, replay=False):
         """colonist's currentState gives each decision's time: startTime (ms)
         and allocatedTime (s). A 7's discards get 20 s (seen live), then
-        colonist's timer picks the cards."""
+        colonist's timer picks the cards. A replayed frame (the page resending
+        its game to a new connection) arrived at t, not now: the page runs on
+        the bridge's machine, so t is on our clock."""
         if not isinstance(current, dict):
             return
         start, allocated = current.get("startTime"), current.get("allocatedTime")
         if isinstance(start, (int, float)):
-            # colonist's clock in ours: now, less how long ago it started.
+            # colonist's clock in ours: when the frame came, less how long
+            # before that it started.
             lag = max(0.0, (t - start) / 1000) if t else 0.0
-            self.timer_start = time.time() - lag
+            arrived = t / 1000 if replay and t else time.time()
+            self.timer_start = arrived - lag
         if isinstance(allocated, (int, float)):
             # A build, buy or trade adds 5 s to the turn: the allowance grows
             # with no new start time.

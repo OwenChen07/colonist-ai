@@ -1267,6 +1267,26 @@ def test_game_start_snapshot_sets_the_first_settlements_timer():
     bridge.handle({"kind": "frame", "dir": "in", "socket": 1, "b64": b64})
     assert allocated - 2 < bridge.time_left() <= allocated + 0.1
 
+    # The extension reconnecting as the game began: the page resends the start
+    # 3 s after it came, and its timer still counts (from when it came).
+    bridge.reset()
+    came = time.time() * 1000 - 3000
+    payload["gameState"]["currentState"]["startTime"] = came
+    b64 = base64.b64encode(
+        msgpack.packb({"id": "1", "data": {"type": 4, "payload": payload}})
+    ).decode()
+    bridge.handle(
+        {
+            "kind": "frame",
+            "dir": "in",
+            "socket": 1,
+            "b64": b64,
+            "t": came,
+            "replay": True,
+        }
+    )
+    assert allocated - 5 < bridge.time_left() <= allocated - 2.9
+
 
 def _position(prompt):
     from catanatron.game import Game
