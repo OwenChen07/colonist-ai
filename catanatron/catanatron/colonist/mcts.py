@@ -570,7 +570,9 @@ class SamplingNetPlayer(Player):
 
 class NetPlayer(Player):
     """The network with search: Z:<net.npz>:<simulations>. With 0 simulations
-    it plays the policy's top move."""
+    it plays the policy's top move. setup_simulations, when above 0, is the
+    budget for the two setup settlements only (the live bots' opening clock):
+    Z:<net.npz>:2400:0:20000."""
 
     LABEL = "Net+MCTS"
 
@@ -579,6 +581,7 @@ class NetPlayer(Player):
         path: str = "models/net.npz"
         simulations: int = 50
         seed: int = 0
+        setup_simulations: int = 0
 
     _nets = {}  # path -> Net, shared by the players of a process
 
@@ -603,7 +606,14 @@ class NetPlayer(Player):
             static, dynamic = E.encode(game, color)
             logits, _ = self.net.forward(static, dynamic[None, :])
             return playable_actions[int(np.argmax(logits[0, legal]))]
-        search = Search(self.net, self.simulations, rng=self.rng)
+        simulations = self.simulations
+        setup = getattr(self.params, "setup_simulations", 0)
+        if (
+            setup > 0
+            and game.state.current_prompt == ActionPrompt.BUILD_INITIAL_SETTLEMENT
+        ):
+            simulations = setup
+        search = Search(self.net, simulations, rng=self.rng)
         action, _ = search.run(game)
         # The search ran on a copy; hand back the move as the game listed it.
         key = E.action_key(action)

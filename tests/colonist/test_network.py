@@ -183,6 +183,39 @@ def test_net_player_finishes_games():
         assert game.winning_color() is not None or game.state.num_turns >= 1000
 
 
+def test_net_player_setup_simulations_only_on_setup_settlements(monkeypatch):
+    from catanatron.colonist import mcts
+    from catanatron.models.enums import ActionPrompt
+
+    budgets = []
+
+    class Recording(mcts.Search):
+        def __init__(self, net, simulations, **kwargs):
+            budgets.append((self_prompt[0], simulations))
+            super().__init__(net, simulations, **kwargs)
+
+    self_prompt = [None]
+    monkeypatch.setattr(mcts, "Search", Recording)
+    net = random_net(hidden=(32, 32))
+    player = NetPlayer(
+        Color.RED, NetPlayer.Params(simulations=4, setup_simulations=12), net=net
+    )
+    decide = player.decide
+
+    def watched(game, playable_actions):
+        self_prompt[0] = game.state.current_prompt
+        return decide(game, playable_actions)
+
+    player.decide = watched
+    game = new_game([player, RandomPlayer(Color.BLUE)], seed=5)
+    while game.winning_color() is None and game.state.num_turns < 20:
+        game.play_tick()
+    settle = [s for p, s in budgets if p == ActionPrompt.BUILD_INITIAL_SETTLEMENT]
+    other = [s for p, s in budgets if p != ActionPrompt.BUILD_INITIAL_SETTLEMENT]
+    assert settle == [12, 12]
+    assert other and set(other) == {4}
+
+
 def test_net_registered():
     import catanatron.players  # noqa: F401
     from catanatron.registry import REGISTRY
