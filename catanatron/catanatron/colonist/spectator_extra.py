@@ -76,7 +76,9 @@ def people_model(folder="models/human", limit=REFRESHES):
 
 STAMP = re.compile(r"^\[(\w{3} \d{1,2}, \d{1,2}:\d\d [AP]M)\] ")
 PLAYED = re.compile(r"\] iter (\d+): played (\d+) games in (\d+) s")
-EVAL = re.compile(r"^(\d+)\t.*round_(\d+)\.npz:\d+: ([\d.]+)% ± ([\d.]+)%.*?; (\d+) games")
+EVAL = re.compile(
+    r"^(\d+)\t.*round_(\d+)\.npz:\d+: ([\d.]+)% ± ([\d.]+)%.*?; (\d+) games"
+)
 RESULT = re.compile(
     r"\] ([\w.-]+): \S*iter-(\d+)/net\.npz:\d+ vs \S*round_(\d+)\.npz:\d+: "
     r"([\d.]+)% ± ([\d.]+)%.*?; (\d+) games"

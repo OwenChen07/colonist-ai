@@ -20,7 +20,11 @@ def _verdict(at, replaced, new, current):
         "replaced": replaced,
         "scores": {
             "new": {"rows": 35786, "accuracy": new[0], "cross_entropy": new[1]},
-            "current": {"rows": 35786, "accuracy": current[0], "cross_entropy": current[1]},
+            "current": {
+                "rows": 35786,
+                "accuracy": current[0],
+                "cross_entropy": current[1],
+            },
         },
     }
 
@@ -62,10 +66,14 @@ def _e54(folder):
 
 def test_people_model_keeps_the_last_refreshes_and_adds_the_latest(tmp_path):
     old = [
-        _verdict(f"2026-10-20T{h:02d}:46:00+00:00", h % 2 == 0, (0.7, 0.82), (0.69, 0.83))
+        _verdict(
+            f"2026-10-20T{h:02d}:46:00+00:00", h % 2 == 0, (0.7, 0.82), (0.69, 0.83)
+        )
         for h in range(3)
     ]
-    latest = _verdict("2026-10-20T23:46:41+00:00", False, (0.705, 0.8178), (0.706, 0.8177))
+    latest = _verdict(
+        "2026-10-20T23:46:41+00:00", False, (0.705, 0.8178), (0.706, 0.8177)
+    )
     _human(tmp_path / "human", old, latest)
     rows = spectator_extra.people_model(tmp_path / "human", limit=3)["refreshes"]
     assert [r["at"][11:13] for r in rows] == ["01", "02", "23"]
@@ -112,7 +120,11 @@ def test_e54_iterations_evaluations_and_gates(tmp_path):
 def _body(tmp_path):
     data = tmp_path / "data"
     data.mkdir()
-    _human(tmp_path / "human", [], _verdict("2026-10-20T23:46:41+00:00", True, (0.7, 0.8), (0.7, 0.8)))
+    _human(
+        tmp_path / "human",
+        [],
+        _verdict("2026-10-20T23:46:41+00:00", True, (0.7, 0.8), (0.7, 0.8)),
+    )
     _e54(tmp_path / "e54")
     spectator_extra.main(
         [
@@ -166,7 +178,9 @@ def test_the_site_accepts_the_snapshot(tmp_path):
     site = tmp_path / "site"
     site.mkdir()
     shutil.copy(SITE / "api" / "ingest.js", site / "ingest.js")
-    (site / "_store.js").write_text("export const KEY = 'k'; export async function redis() {}\n")
+    (site / "_store.js").write_text(
+        "export const KEY = 'k'; export async function redis() {}\n"
+    )
     (site / "package.json").write_text('{"type": "module"}')
     body = _body(tmp_path)
     bad = json.loads(json.dumps(body))
