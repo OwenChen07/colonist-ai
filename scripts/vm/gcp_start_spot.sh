@@ -18,6 +18,7 @@ gcloud=$(command -v gcloud || echo /snap/bin/gcloud)
 [ -x "$gcloud" ] || exit 0
 GPU_ZONES=${GPU_ZONES:-"us-east1-c us-east1-b us-east1-d"} # T4 zones, in order
 GPU_LOG=${GPU_LOG:-runs/gcp_gpu_start.log}
+SPOT_LOG=${SPOT_LOG:-runs/gcp_spot_start.log}
 
 stockout() { grep -q "ZONE_RESOURCE_POOL_EXHAUSTED\|does not have enough resources\|stockout" <<<"$1"; }
 
@@ -72,8 +73,37 @@ start_gpu() { # $1 name, $2 zone, $3 configuration; synchronous
     echo "no zone had capacity for $name; it stays in $zone for the next round"
 }
 
+# distributed.py runs this the moment a host drops out, when a preempted VM is
+# usually still STOPPING (about a minute), so the TERMINATED filter alone
+# missed it and it waited for a later call: 4-17 min down per preemption on
+# Oct 20, and over an hour once. A STOPPING VM gets a background waiter that
+# starts it as soon as it is TERMINATED.
+start_after_stop() { # $1 name, $2 zone, $3 configuration
+    local conf=(${3:+--configuration "$3"}) status
+    exec 9>"/tmp/gcp_start_spot-$1.lock"
+    flock -n 9 || return 0
+    for _ in $(seq "${STOP_POLLS:-30}"); do
+        sleep "${STOP_POLL_WAIT:-10}"
+        status=$("$gcloud" compute instances describe "$1" "${conf[@]}" --zone "$2" \
+            --format="value(status)" 2>/dev/null)
+        case $status in
+        TERMINATED)
+            echo "$(date '+%b %d %H:%M:%S') gcp_start_spot: starting $1 ($2${3:+, $3}) after its stop"
+            "$gcloud" compute instances start "$1" "${conf[@]}" --zone "$2" --async --quiet 2>&1 | tail -1
+            return 0
+            ;;
+        STOPPING) ;;
+        *) return 0 ;; # running again, or gone
+        esac
+    done
+}
+
 if [ "${1:-}" = --gpu ]; then
     start_gpu "$2" "$3" "${4:-}"
+    exit 0
+fi
+if [ "${1:-}" = --after-stop ]; then
+    start_after_stop "$2" "$3" "${4:-}"
     exit 0
 fi
 
@@ -81,9 +111,15 @@ start_stopped() { # $1: gcloud configuration ("" for the default one)
     local conf=()
     [ -n "$1" ] && conf=(--configuration "$1")
     "$gcloud" compute instances list "${conf[@]}" \
-        --filter="(name~^selfplay-spot- OR name~^gpu-train-) AND status=TERMINATED" \
-        --format="value(name,zone.basename())" 2>/dev/null |
-        while read -r name zone; do
+        --filter="(name~^selfplay-spot- OR name~^gpu-train-) AND (status=TERMINATED OR status=STOPPING)" \
+        --format="value(name,zone.basename(),status)" 2>/dev/null |
+        while read -r name zone status; do
+            if [ "$status" = STOPPING ]; then
+                [[ $name == selfplay-spot-* ]] || continue # a GPU VM: the next round's call
+                echo "gcp_start_spot: $name ($zone${1:+, $1}) is stopping; starting it once stopped, log $SPOT_LOG"
+                setsid "$0" --after-stop "$name" "$zone" "$1" </dev/null >>"$SPOT_LOG" 2>&1 &
+                continue
+            fi
             if [[ $name == gpu-train-* ]]; then
                 echo "gcp_start_spot: starting $name ($zone${1:+, $1}) in the background, log $GPU_LOG"
                 setsid "$0" --gpu "$name" "$zone" "$1" </dev/null >>"$GPU_LOG" 2>&1 &
