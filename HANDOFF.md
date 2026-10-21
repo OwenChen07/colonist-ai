@@ -195,7 +195,11 @@ rank gone). Like bot2: services stopped and disabled, env files in
 (Tedi4960, port 8766, 5 casual games then ranked, plain best net) took bot5's
 place on bot VM 1. Playing now: bot3 (Dilly6283, VM 2), bot8 (Vasos5306, VM 3,
 people model), bot9. bot10 and bot11 are kept for replacements of Sherie3424
-and Dale7112.
+and Dale7112. The owner skipped bot10 (Oct 20, 8:36 PM Toronto), so its
+service is stopped on purpose: the watchdog's health check (`not_started` in
+`scripts/vm/watchdog.sh`) no longer reports bot10 as "inactive" (34 agent runs
+from 12:17 PM did); any other problem with bot10 is still reported. Take it
+out of that list when bot10 is started.
 
 **E54 live, and bot10 (20 Oct, evening, owner's decisions of 8:36 pm Toronto):**
 Tedi4960 (bot9) plays research's E54 step 30 net (`NET_PATH` =

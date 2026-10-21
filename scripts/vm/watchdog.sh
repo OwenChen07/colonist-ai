@@ -16,6 +16,10 @@ age() { echo $(( $(date +%s) - $(stat -c %Y "$1" 2>/dev/null || echo 0) )); }
 # A problem the watchdog handed to the owner (data/<account>/NEEDS_OWNER.md)
 # only silences that account; everything else is still checked.
 waiting() { [ -e "data/$1/NEEDS_OWNER.md" ]; }
+# Accounts the owner chose not to run (bot10, Oct 20): "inactive" is expected,
+# so only that check is skipped; failed, needs_attention etc. still count.
+not_started="bot10"
+expected_inactive() { [ "$2" = inactive ] && [[ " $not_started " == *" $1 "* ]]; }
 systemctl is-active --quiet colonist-train || problems+=("colonist-train is not active ($(systemctl is-active colonist-train))")
 # The ranked bot runs on its own VM; its data comes back every 5 minutes.
 bot=$(scripts/vm/bot_ctl.sh is-active 2>&1)
@@ -31,7 +35,7 @@ while read -r name service state; do
     touch "data/watchdog/.activating-$name"
   else
     rm -f "data/watchdog/.activating-$name"
-    [ "$service" = active ] || problems+=("bot account $name: service $service")
+    [ "$service" = active ] || expected_inactive "$name" "$service" || problems+=("bot account $name: service $service")
   fi
   [ "$state" = needs_attention ] && problems+=("bot account $name: runner needs_attention")
 done < <(scripts/vm/bot_ctl.sh accounts 2>/dev/null)

@@ -499,6 +499,25 @@ def test_a_timed_out_run_keeps_what_it_said(tmp_path):
     assert "working on slow" in log and log.endswith("(timed out)\n")
 
 
+def test_watchdog_skips_only_bot10_being_inactive():
+    script = Path(__file__).resolve().parents[1] / "scripts/vm/watchdog.sh"
+    lines = script.read_text().splitlines()
+    rule = "\n".join(
+        l for l in lines if l.startswith(("not_started=", "expected_inactive()"))
+    )
+    cases = {
+        ("bot10", "inactive"): True,
+        ("bot10", "failed"): False,
+        ("bot9", "inactive"): False,
+        ("bot1", "inactive"): False,
+    }
+    for (name, service), expected in cases.items():
+        run = subprocess.run(
+            ["bash", "-c", f"{rule}\nexpected_inactive {name} {service}"]
+        )
+        assert (run.returncode == 0) == expected, (name, service)
+
+
 KILL_LANDING = (
     Path(__file__).resolve().parents[1] / "scripts/vm/orchestrator/kill_landing.sh"
 )
