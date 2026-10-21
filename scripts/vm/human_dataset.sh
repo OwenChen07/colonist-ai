@@ -14,7 +14,7 @@ exec 9>/tmp/human_dataset.lock
 flock 9  # the weekly cron run and a round's run never overlap
 nice -n 19 .venv/bin/python -m catanatron.colonist.human_dataset \
     "captures/*/bridge-*.json" --games "data/*/games.jsonl" --out data/human \
-    --own-accounts CatBot77,Ericha8499,Dilly6283,Sherie3424,Petra4620,hersh3499,Dale7112,Vasos5306,Tedi4960,Finlay3621 \
+    --own-accounts CatBot77,Ericha8499,Dilly6283,Sherie3424,Petra4620,hersh3499,Dale7112,Vasos5306,Tedi4960,Finlay3621,fymouushii \
     >> data/human/build.log 2>&1
 nice -n 19 .venv/bin/python -m catanatron.colonist.starts data/human \
     --out data/human/starts.jsonl.gz >> data/human/build.log 2>&1

@@ -209,7 +209,11 @@ Tedi4960 (bot9) plays research's E54 step 30 net (`NET_PATH` =
 live search. **bot10** (Finlay3621, bot VM 2, port 8767) is its control on round
 73 (`NET_PATH=.../runs/g1/nets/round_073.npz`, `NET_NAME=round 73`); it is in
 the name maps of status.py and rank_watch.py and in human_dataset's own
-accounts.
+accounts. bot10 started 8:55 pm. **bot11** (fymouushii, bot VM 1, port 8767)
+is E54's second account (same `NET_PATH`/`NET_NAME` as bot9); its env file and
+the name maps are ready, and it starts once the lead confirms the sign-in.
+Dilly6283 (bot3) reruns E61 (`THINK_BUDGETS` in bot3.env) from its first game
+after 8:55 pm.
 
 **CatBot77 (ranked) retired (12 Oct, 9:19 pm Toronto):** like Ericha8499, its
 Ranked 1v1 "Start Game" went missing or disabled; colonist-ranked is stopped

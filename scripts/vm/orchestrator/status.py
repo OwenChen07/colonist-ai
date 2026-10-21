@@ -46,7 +46,9 @@ def training():
 # shows: a retired account (bot2, bot6, ranked; bot4, bot5 and bot7 after
 # colonist's reset of Oct 20) is left out, even with games in the last 24 h or a
 # needs_attention file (owner's instruction, Oct 20, 12:01 PM Toronto).
-DEFAULT_ACCOUNT_NAMES = "bot3=Dilly6283,bot8=Vasos5306,bot9=Tedi4960,bot10=Finlay3621"
+DEFAULT_ACCOUNT_NAMES = (
+    "bot3=Dilly6283,bot8=Vasos5306,bot9=Tedi4960,bot10=Finlay3621,bot11=fymouushii"
+)
 
 
 def account_names():
