@@ -39,6 +39,7 @@ def _run(tmp_path, listing, statuses=(), args=(), running=""):
         GPU_LOG=str(tmp_path / "gpu.log"),
         STOP_POLL_WAIT="0",
         STOP_POLLS="5",
+        RUN_POLLS="5",
     )
     out = subprocess.run(
         ["bash", str(SCRIPT), *args],
@@ -130,7 +131,7 @@ def test_lost_host_that_stays_running_is_left_alone(tmp_path):
             break
         time.sleep(0.05)
         calls = _calls(tmp_path)
-    assert sum("instances describe" in c for c in calls) == 5  # STOP_POLLS
+    assert sum("instances describe" in c for c in calls) == 5  # RUN_POLLS
     assert not any("instances start" in c for c in calls)
 
 

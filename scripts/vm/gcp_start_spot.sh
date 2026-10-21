@@ -80,12 +80,15 @@ start_gpu() { # $1 name, $2 zone, $3 configuration; synchronous
 # starts it as soon as it is TERMINATED. distributed.py names the host that
 # dropped out (user@internal-ip): it usually drops a minute or more before GCP
 # marks its VM STOPPING, so a RUNNING VM of that IP gets a waiter too ($4), and
-# a VM that stays RUNNING (a network blip) is left alone after 5 min.
+# a VM that stays RUNNING (a network blip) is left alone after 15 min. 5 min
+# was too short: spot-7 dropped out about 7 min before its preemption (Oct 21,
+# 1:55-2:02 PM Toronto), its waiter had already quit, and it stayed down 42 min.
 start_after_stop() { # $1 name, $2 zone, $3 configuration, $4 "running": wait while RUNNING too
-    local conf=(${3:+--configuration "$3"}) status
+    local conf=(${3:+--configuration "$3"}) status polls=${STOP_POLLS:-30}
+    [ -n "${4:-}" ] && polls=${RUN_POLLS:-90}
     exec 9>"/tmp/gcp_start_spot-$1.lock"
     flock -n 9 || return 0
-    for _ in $(seq "${STOP_POLLS:-30}"); do
+    for _ in $(seq "$polls"); do
         sleep "${STOP_POLL_WAIT:-10}"
         status=$("$gcloud" compute instances describe "$1" "${conf[@]}" --zone "$2" \
             --format="value(status)" 2>/dev/null)
