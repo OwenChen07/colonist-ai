@@ -14,9 +14,13 @@ import json
 
 from catanatron.models.enums import (
     BRICK,
+    CITY,
+    DEVELOPMENT_CARDS,
     ORE,
     RESOURCES,
+    ROAD,
     SHEEP,
+    VICTORY_POINT,
     WHEAT,
     WOOD,
     ActionPrompt,
@@ -51,6 +55,7 @@ class Diagnostics(GameObserver):
     def before(self, game):
         self.counts = {color: empty_counts() for color in game.state.colors}
         self.opening_done = False
+        self.rolls = 0
 
     def _opening(self, game):
         state = game.state
@@ -77,7 +82,9 @@ class Diagnostics(GameObserver):
         color = action.color
         row = self.counts[color]
         kind = action.action_type
-        if kind == ActionType.BUILD_ROAD:
+        if kind == ActionType.ROLL:
+            self.rolls += 1
+        elif kind == ActionType.BUILD_ROAD:
             row["roads"] += 1
         elif kind == ActionType.BUILD_SETTLEMENT:
             row["settlements"] += 1
@@ -144,6 +151,27 @@ class Diagnostics(GameObserver):
             and game.state.current_prompt == ActionPrompt.PLAY_TURN
         ):
             self._opening(game)
+        # The end of the game, as human_dataset counts people's games: pieces on
+        # the board, not builds. Not in empty_counts, so summary() skips them.
+        state = game.state
+        for color, row in self.counts.items():
+            key = player_key(state, color)
+            built = state.buildings_by_color[color]
+            row["final"] = {
+                "vp": state.player_state[f"{key}_ACTUAL_VICTORY_POINTS"],
+                "roads": len({tuple(sorted(e)) for e in built[ROAD]}),
+                "settlements": len(built[SETTLEMENT]),
+                "cities": len(built[CITY]),
+                "longest_road": state.player_state[f"{key}_HAS_ROAD"],
+                "road_length": state.player_state[f"{key}_LONGEST_ROAD_LENGTH"],
+                "largest_army": state.player_state[f"{key}_HAS_ARMY"],
+                "dev_played": {
+                    card: state.player_state[f"{key}_PLAYED_{card}"]
+                    for card in DEVELOPMENT_CARDS
+                    if card != VICTORY_POINT
+                },
+                "rolls": self.rolls,
+            }
 
     def rows(self, winner=None, source="simulated"):
         return [
