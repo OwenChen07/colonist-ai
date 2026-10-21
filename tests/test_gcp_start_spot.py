@@ -90,6 +90,17 @@ def test_stopping_vm_is_started_once_stopped(tmp_path):
     assert "after its stop" in (tmp_path / "spot.log").read_text()
 
 
+def test_labelled_vm_outside_the_fleet_is_started_once_stopped(tmp_path):
+    # a research VM with autostart=yes (E83's e54-vm, Oct 21)
+    _run(tmp_path, "e54-vm\tus-central1-a\tSTOPPING\n", ["STOPPING", "TERMINATED"])
+    calls = _calls(tmp_path, "instances start")
+    assert any("labels.autostart=yes" in c for c in calls if "instances list" in c)
+    starts = [c for c in calls if "instances start" in c]
+    assert starts == [
+        "compute instances start e54-vm --zone us-central1-a --async --quiet"
+    ]
+
+
 def test_stopping_vm_that_runs_again_is_left_alone(tmp_path):
     _run(tmp_path, "selfplay-spot-7\tus-east1-c\tSTOPPING\n", ["RUNNING"])
     _calls(tmp_path, "instances describe")

@@ -115,15 +115,18 @@ if [ "${1:-}" = --after-stop ]; then
 fi
 lost_ip=${1:-} lost_ip=${lost_ip#*@} # distributed.py's lost host, or empty for --before-round
 
+# A spot VM outside the fleet (a research job's, like E83's e54-vm) is started
+# the same way if it carries the label autostart=yes (gcloud compute instances
+# add-labels NAME --labels autostart=yes); delete the VM or the label when done.
 start_stopped() { # $1: gcloud configuration ("" for the default one)
     local conf=()
     [ -n "$1" ] && conf=(--configuration "$1")
     "$gcloud" compute instances list "${conf[@]}" \
-        --filter="(name~^selfplay-spot- OR name~^gpu-train-) AND (status=TERMINATED OR status=STOPPING)" \
+        --filter="(name~^selfplay-spot- OR name~^gpu-train- OR labels.autostart=yes) AND (status=TERMINATED OR status=STOPPING)" \
         --format="value(name,zone.basename(),status)" 2>/dev/null |
         while read -r name zone status; do
             if [ "$status" = STOPPING ]; then
-                [[ $name == selfplay-spot-* ]] || continue # a GPU VM: the next round's call
+                [[ $name == gpu-train-* ]] && continue # a GPU VM: the next round's call
                 echo "gcp_start_spot: $name ($zone${1:+, $1}) is stopping; starting it once stopped, log $SPOT_LOG"
                 setsid "$0" --after-stop "$name" "$zone" "$1" </dev/null >>"$SPOT_LOG" 2>&1 &
                 continue
