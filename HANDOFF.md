@@ -197,6 +197,14 @@ place on bot VM 1. Playing now: bot3 (Dilly6283, VM 2), bot8 (Vasos5306, VM 3,
 people model), bot9. bot10 and bot11 are kept for replacements of Sherie3424
 and Dale7112.
 
+**E54 live, and bot10 (20 Oct, evening, owner's decisions of 8:36 pm Toronto):**
+Tedi4960 (bot9) plays research's E54 step 30 net (`NET_PATH` =
+`models/e54/iter30.npz` on bot VM 1, `NET_NAME=E54 iter30`) inside the usual
+live search. **bot10** (Finlay3621, bot VM 2, port 8767) is its control on round
+73 (`NET_PATH=.../runs/g1/nets/round_073.npz`, `NET_NAME=round 73`); it is in
+the name maps of status.py and rank_watch.py and in human_dataset's own
+accounts.
+
 **CatBot77 (ranked) retired (12 Oct, 9:19 pm Toronto):** like Ericha8499, its
 Ranked 1v1 "Start Game" went missing or disabled; colonist-ranked is stopped
 and disabled. **bot6** (hersh3499, port 8767, casual first, then ranked) took
