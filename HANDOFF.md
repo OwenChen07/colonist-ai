@@ -201,7 +201,8 @@ service is stopped on purpose: the watchdog's health check (`not_started` in
 from 12:17 PM did); any other problem with bot10 is still reported. Take it
 out of that list when bot10 is started. bot10 was started that evening (round
 73 control, below), and bot11, the slot that has never run, replaced it in
-`not_started` (watchdog, Oct 20, 9:02 PM Toronto). Take bot11 out when it starts.
+`not_started` (watchdog, Oct 20, 9:02 PM Toronto). bot11 started 9:33 PM, so
+`not_started` is empty now; put a slot there only while it waits to start.
 
 **E54 live, and bot10 (20 Oct, evening, owner's decisions of 8:36 pm Toronto):**
 Tedi4960 (bot9) plays research's E54 step 30 net (`NET_PATH` =
@@ -210,8 +211,13 @@ live search. **bot10** (Finlay3621, bot VM 2, port 8767) is its control on round
 73 (`NET_PATH=.../runs/g1/nets/round_073.npz`, `NET_NAME=round 73`); it is in
 the name maps of status.py and rank_watch.py and in human_dataset's own
 accounts. bot10 started 8:55 pm. **bot11** (fymouushii, bot VM 1, port 8767)
-is E54's second account (same `NET_PATH`/`NET_NAME` as bot9); its env file and
-the name maps are ready, and it starts once the lead confirms the sign-in.
+is E54's second account (same `NET_PATH`/`NET_NAME` as bot9), started 9:33 pm
+(its `data/bot11` and `models/bot11` folders had to be made first: the unit's
+log file lives there and systemd fails with status 209 without it). **bot12**
+(wifedat, bot VM 3 next to bot8, port 8767) is E54's third account (the owner's
+choice, 9:10 pm; `models/e54/iter30.npz` copied to VM 3, sha256 checked),
+started 9:35 pm. No account follows promotions now; the lead decides where the
+next promoted net goes. sync_bot.sh does not touch `models/e54`.
 Dilly6283 (bot3) reruns E61 (`THINK_BUDGETS` in bot3.env) from its first game
 after 8:55 pm.
 

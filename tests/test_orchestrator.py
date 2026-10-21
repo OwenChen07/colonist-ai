@@ -499,14 +499,16 @@ def test_a_timed_out_run_keeps_what_it_said(tmp_path):
     assert "working on slow" in log and log.endswith("(timed out)\n")
 
 
-def test_watchdog_skips_only_bot11_being_inactive():
+def test_watchdog_expects_no_account_to_be_inactive():
+    # Oct 20: bot11 and bot12 started, so no slot is waiting to start.
     script = Path(__file__).resolve().parents[1] / "scripts/vm/watchdog.sh"
     lines = script.read_text().splitlines()
     rule = "\n".join(
         l for l in lines if l.startswith(("not_started=", "expected_inactive()"))
     )
     cases = {
-        ("bot11", "inactive"): True,
+        ("bot11", "inactive"): False,
+        ("bot12", "inactive"): False,
         ("bot11", "failed"): False,
         ("bot10", "inactive"): False,
         ("bot9", "inactive"): False,

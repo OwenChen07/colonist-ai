@@ -47,7 +47,8 @@ def training():
 # colonist's reset of Oct 20) is left out, even with games in the last 24 h or a
 # needs_attention file (owner's instruction, Oct 20, 12:01 PM Toronto).
 DEFAULT_ACCOUNT_NAMES = (
-    "bot3=Dilly6283,bot8=Vasos5306,bot9=Tedi4960,bot10=Finlay3621,bot11=fymouushii"
+    "bot3=Dilly6283,bot8=Vasos5306,bot9=Tedi4960,bot10=Finlay3621,bot11=fymouushii,"
+    "bot12=wifedat"
 )
 
 

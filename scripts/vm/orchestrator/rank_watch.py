@@ -35,7 +35,7 @@ from context import SITE, STATE, read_json  # noqa: E402
 API = "https://colonist.io/api"
 HEADERS = {"User-Agent": "colonist-ai-status/1.0", "Accept": "application/json"}
 SHOTS = STATE / "screenshots"
-DEFAULT_ACCOUNTS = "Dilly6283,Vasos5306,Tedi4960,Finlay3621,fymouushii"  # Oct 20: 3 retired; Tedi4960, Finlay3621, fymouushii new
+DEFAULT_ACCOUNTS = "Dilly6283,Vasos5306,Tedi4960,Finlay3621,fymouushii,wifedat"  # Oct 20: 3 retired; Tedi4960, Finlay3621, fymouushii, wifedat new
 RATING_LINES = (2450, 2500, 2550, 2600, 2650)  # per account, upward only
 RANK_TIERS = (25, 10, 5, 3, 1)  # global top N, per account, improvements only
 # Our bests before this watch tracked them (lead, Oct 20 8 AM report).
