@@ -46,6 +46,25 @@ def test_a_start_is_a_turn_start_in_range_and_fixed_by_its_seed(entry):
     assert a.state.development_listdeck == b.state.development_listdeck
 
 
+def test_a_match_game_plays_from_a_packed_start_in_the_chosen_chair(entry):
+    from catanatron.colonist.evaluate import play_game
+
+    cut = entry["cuts"][len(entry["cuts"]) // 2]
+    packed = S.pack(entry, cut)
+    assert S.unpack(packed)["log"] == json.loads(json.dumps(entry["log"][:cut]))
+    reference = S.start_game(S.unpack(packed), 3)
+    for color in entry["seats"]:
+        # as a host gets it: a JSON line
+        task = tuple(json.loads(json.dumps(["R", "R", 3, True, {}, False, {}])))
+        task[6].update(start=packed, a=color)
+        game = play_game(task)
+        assert game.a_first == (reference.state.colors[0].value == color)
+        assert game.turns >= reference.state.num_turns
+        assert game == play_game(task)  # fixed by the seed
+    plain = ("R", "R", 3, True, {}, False)
+    assert play_game((*plain, None)) == play_game(plain)  # no start: as before
+
+
 def test_build_reads_only_the_training_split(tmp_path, monkeypatch):
     captures = tmp_path / "captures" / "acct"
     captures.mkdir(parents=True)

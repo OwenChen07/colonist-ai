@@ -116,7 +116,11 @@ class MatchResult:
 # ----- one game -----
 def play_game(task):
     """Runs in a worker. A plays RED, B plays BLUE; `a_first` puts A in the
-    first seat. Everything random comes from the seed."""
+    first seat. Everything random comes from the seed.
+
+    An optional `start` after the diagnostics flag, {"start": starts.pack(),
+    "a": "<color>"}, plays from that position of a real game instead, A in
+    the given color's chair (`rules` and `a_first` are then the game's)."""
     spec_a, spec_b, seed, a_first, rules, *options = task
     from catanatron.colonist.rules import new_game
     import catanatron.players  # noqa: F401  (registers the bots)
@@ -124,15 +128,26 @@ def play_game(task):
 
     stream = seed * 2 + int(a_first)
     random.seed(stream)  # for bots that draw from the global stream
-    a = _build(spec_a, COLORS[0])
-    b = _build(spec_b, COLORS[1])
-    game = new_game([a, b], seed=seed, **rules)
-    _seat(game, [a, b] if a_first else [b, a])
-    # The board and dev card deck are dealt from `seed`, so both games of a
-    # pair share them. From here on (dice, steals, random bots) each game gets
-    # its own stream; otherwise two random bots would replay one game mirrored
-    # and an identical-bots check would always say exactly 50%.
-    game.random.seed(stream)
+    start = options[1] if len(options) > 1 else None
+    if start:
+        from catanatron.colonist.starts import start_game, unpack
+
+        game = start_game(unpack(start["start"]), seed)
+        colors = game.state.colors
+        a = _build(spec_a, Color[start["a"]])
+        b = _build(spec_b, next(c for c in colors if c != a.color))
+        _seat(game, [a if c == a.color else b for c in colors])
+        a_first = colors[0] == a.color
+    else:
+        a = _build(spec_a, COLORS[0])
+        b = _build(spec_b, COLORS[1])
+        game = new_game([a, b], seed=seed, **rules)
+        _seat(game, [a, b] if a_first else [b, a])
+        # The board and dev card deck are dealt from `seed`, so both games of
+        # a pair share them. From here on (dice, steals, random bots) each
+        # game gets its own stream; otherwise two random bots would replay
+        # one game mirrored and an identical-bots check would always say 50%.
+        game.random.seed(stream)
     clock_a, clock_b = _clock(a), _clock(b)
     diagnostic = None
     if options and options[0]:
@@ -140,7 +155,7 @@ def play_game(task):
 
         diagnostic = Diagnostics()
     winner = game.play(accumulators=[diagnostic] if diagnostic else [])
-    score = 0.5 if winner is None else float(winner == COLORS[0])
+    score = 0.5 if winner is None else float(winner == a.color)
     counts = (
         {color.value: row for color, row in diagnostic.counts.items()}
         if diagnostic

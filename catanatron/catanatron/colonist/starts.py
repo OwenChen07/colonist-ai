@@ -22,6 +22,7 @@ anyway (mcts.redeal_hidden_cards).
 """
 
 import argparse
+import base64
 import gzip
 import json
 import os
@@ -147,6 +148,19 @@ def build(dataset, out, min_turn=MIN_TURN, max_turn=MAX_TURN, log=print, full=Fa
 def load(path):
     with gzip.open(path, "rt") as stream:
         return [json.loads(line) for line in stream]
+
+
+def pack(entry, cut):
+    """One cut of the entry as a short string (its log up to the cut,
+    gzipped, base64), for a match task's start (evaluate.play_game)."""
+    small = {k: v for k, v in entry.items() if k != "source_cut_count"}
+    small.update(log=entry["log"][:cut], cuts=[cut])
+    text = json.dumps(small, separators=(",", ":")).encode()
+    return base64.b64encode(gzip.compress(text, mtime=0)).decode("ascii")
+
+
+def unpack(text):
+    return json.loads(gzip.decompress(base64.b64decode(text)))
 
 
 def start_game(entry, seed):
