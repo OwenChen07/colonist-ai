@@ -49,7 +49,11 @@ def _calls(tmp_path, wait_for=None):
     deadline = time.time() + 10
     while True:
         calls = (tmp_path / "calls").read_text().splitlines()
-        if wait_for is None or any(wait_for in c for c in calls) or time.time() > deadline:
+        if (
+            wait_for is None
+            or any(wait_for in c for c in calls)
+            or time.time() > deadline
+        ):
             return calls
         time.sleep(0.05)
 
