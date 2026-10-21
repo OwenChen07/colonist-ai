@@ -77,8 +77,11 @@ start_gpu() { # $1 name, $2 zone, $3 configuration; synchronous
 # usually still STOPPING (about a minute), so the TERMINATED filter alone
 # missed it and it waited for a later call: 4-17 min down per preemption on
 # Oct 20, and over an hour once. A STOPPING VM gets a background waiter that
-# starts it as soon as it is TERMINATED.
-start_after_stop() { # $1 name, $2 zone, $3 configuration
+# starts it as soon as it is TERMINATED. distributed.py names the host that
+# dropped out (user@internal-ip): it usually drops a minute or more before GCP
+# marks its VM STOPPING, so a RUNNING VM of that IP gets a waiter too ($4), and
+# a VM that stays RUNNING (a network blip) is left alone after 5 min.
+start_after_stop() { # $1 name, $2 zone, $3 configuration, $4 "running": wait while RUNNING too
     local conf=(${3:+--configuration "$3"}) status
     exec 9>"/tmp/gcp_start_spot-$1.lock"
     flock -n 9 || return 0
@@ -93,7 +96,8 @@ start_after_stop() { # $1 name, $2 zone, $3 configuration
             return 0
             ;;
         STOPPING) ;;
-        *) return 0 ;; # running again, or gone
+        RUNNING) [ -n "${4:-}" ] || return 0 ;; # running again
+        *) return 0 ;;                         # gone
         esac
     done
 }
@@ -103,9 +107,10 @@ if [ "${1:-}" = --gpu ]; then
     exit 0
 fi
 if [ "${1:-}" = --after-stop ]; then
-    start_after_stop "$2" "$3" "${4:-}"
+    start_after_stop "$2" "$3" "${4:-}" "${5:-}"
     exit 0
 fi
+lost_ip=${1:-} lost_ip=${lost_ip#*@} # distributed.py's lost host, or empty for --before-round
 
 start_stopped() { # $1: gcloud configuration ("" for the default one)
     local conf=()
@@ -130,6 +135,15 @@ start_stopped() { # $1: gcloud configuration ("" for the default one)
         done
 }
 start_stopped ""
+if [[ $lost_ip =~ ^[0-9.]+$ ]]; then
+    "$gcloud" compute instances list \
+        --filter="name~^selfplay-spot- AND status=RUNNING AND networkInterfaces[0].networkIP=$lost_ip" \
+        --format="value(name,zone.basename())" 2>/dev/null |
+        while read -r name zone; do
+            echo "gcp_start_spot: $name ($zone) dropped out while RUNNING; starting it once stopped, log $SPOT_LOG"
+            setsid "$0" --after-stop "$name" "$zone" "" running </dev/null >>"$SPOT_LOG" 2>&1 &
+        done
+fi
 # E42's GPU VM lives in the owner's trial project (configuration trial2,
 # static external IP gpu-train-1-ip, so the train host's address survives).
 "$gcloud" config configurations describe trial2 >/dev/null 2>&1 && start_stopped trial2

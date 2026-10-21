@@ -67,11 +67,13 @@ def test_a_lost_host_starts_the_restart_script_once_per_host(tmp_path, monkeypat
     ]
     for _ in range(100):  # it runs in the background
         if (tmp_path / "ran").exists() and len(
-            (tmp_path / "ran").read_text().split()
+            (tmp_path / "ran").read_text().splitlines()
         ) == 3:
             break
         time.sleep(0.05)
-    assert (tmp_path / "ran").read_text().split() == ["x"] * 3
+    # the lost host is the script's argument
+    ran = sorted((tmp_path / "ran").read_text().splitlines())
+    assert ran == ["x w@a", "x w@a", "x w@b"]
 
 
 @pytest.mark.parametrize("games", [5000, 640, 65, 3])

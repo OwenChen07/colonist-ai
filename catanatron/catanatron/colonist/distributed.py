@@ -538,7 +538,11 @@ def _restart(host, log=print, environ=os.environ):
     starts every preempted spot VM) in the background when a host can't be
     prepared or drops out, at most once per host in RESTART_EVERY seconds.
     Before, only the next round's --before-round restarted a VM, about 20 min
-    down per preemption (16 a day, Oct 18-19). Never blocks or fails."""
+    down per preemption (16 a day, Oct 18-19). The host is the script's
+    argument: a host usually drops out a minute or more before GCP marks its
+    VM STOPPING, and a VM still RUNNING then waited about 20 min for the
+    next call (Oct 21: spot-7 at 9:34 AM, spot-9 at 11:08 AM Toronto). Never
+    blocks or fails."""
     script = environ.get("COLONIST_RESTART_SCRIPT")
     if not script or host == HERE:
         return False
@@ -549,7 +553,7 @@ def _restart(host, log=print, environ=os.environ):
         _restarts[host] = now
     try:
         subprocess.Popen(
-            ["bash", "-c", script],
+            ["bash", "-c", script + ' "$@"', "restart", host],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
