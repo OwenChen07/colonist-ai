@@ -3,7 +3,8 @@
 #   scripts/vm/openhex/setup.sh HOST
 # The code of the main checkout (~/colonist-ai, which land.sh keeps at
 # main-9mnmbh; never a worktree), as sync_bot.sh copies it to the bot VMs,
-# the net it plays (round 73, best since Oct 18; round 66 before), and the API
+# the net it plays (round 152 from Oct 20, lead's E20 switch; round 73 from
+# Oct 18; round 66 before), and the API
 # key (mode 600, never printed). The VM's startup.sh then installs and starts
 # openhex-client.service; a changed unit needs `sudo cp` into
 # /etc/systemd/system and `systemctl daemon-reload` at the restart.
@@ -21,6 +22,6 @@ R=colonist-ai
 $SSH "$HOST" "mkdir -p $R/runs/g1/nets $R/data/openhex/games"
 rsync -a --exclude "*.egg-info" --exclude __pycache__ -e "$SSH" \
     "$MAIN/catanatron" "$MAIN/scripts" "$MAIN/pyproject.toml" "$HOST:$R/"
-rsync -a -e "$SSH" "$MAIN/runs/g1/nets/round_073.npz" "$HOST:$R/runs/g1/nets/round_073.npz"
+rsync -a -e "$SSH" "$MAIN/runs/g1/nets/round_152.npz" "$HOST:$R/runs/g1/nets/round_152.npz"
 rsync -a --chmod=F600 -e "$SSH" "$MAIN/data/openhex/bot.json" "$HOST:$R/data/openhex/bot.json"
-echo "setup: $HOST has the code, round 73 and the key"
+echo "setup: $HOST has the code, round 152 and the key"
