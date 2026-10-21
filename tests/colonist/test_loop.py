@@ -989,6 +989,41 @@ def test_the_anchor_is_scored_again_at_a_new_search_budget(tmp_path, monkeypatch
     assert run.state["anchor"]["simulations"] == 200
 
 
+def test_the_people_model_check_holds_back_a_clear_drop(tmp_path, monkeypatch):
+    from catanatron.colonist import loop
+
+    run = loop.Run(str(tmp_path / "run"))
+    run.state = {"best_round": 189, "history": []}
+    run.save = lambda: None
+    played = []
+    scores = {"best": 0.56, "new": 0.535}
+    monkeypatch.setattr(
+        loop,
+        "_people_match",
+        lambda run, net, args: played.append(net)
+        or scores["best" if net.endswith("189.npz") else "new"],
+    )
+    args = SimpleNamespace(
+        gate="progress",
+        anchor="",
+        people="p.npz",
+        guard_people=0.02,
+        benchmark="",
+        live_data=[],
+        match_simulations=200,
+    )
+    # The best is scored once, then the candidate: 2.5 points down is held.
+    record = {}
+    ok, reasons = loop.guardrails(run, 190, args, record)
+    assert not ok and reasons == ["people model 0.535 vs best's 0.56"]
+    assert record["people"] == 0.535 and record["best_people"] == 0.56
+    assert len(played) == 2 and run.state["people"]["round"] == 189
+    # 1.5 points down is within the margin, and the reference isn't replayed.
+    scores["new"] = 0.545
+    assert loop.guardrails(run, 190, args, {}) == (True, [])
+    assert len(played) == 3
+
+
 def test_a_slow_early_self_play_is_stopped_after_the_wait_limit(tmp_path, monkeypatch):
     import signal
     import subprocess

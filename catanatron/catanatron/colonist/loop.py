@@ -29,7 +29,8 @@ Each round:
      benchmark and its live value error (--live-data) are not clearly worse
      than the best's, and, with --anchor, its score against that fixed net
      isn't either (a match against last round's net can't see a slow slide,
-     or tell 1% gains from noise; the same anchor every round can).
+     or tell 1% gains from noise; the same anchor every round can). With
+     --people, the same holds against a fixed copy of the people model.
   4. When the best net changed (or, with --gate loose, before a net that
      passed is promoted), it plays --benchmark (default AlphaBeta) on
      a fixed set of boards, to track progress toward the 65% gate, and each
@@ -699,42 +700,67 @@ def _reference(run, key):
     return rows[-1][key] if rows else None
 
 
-def _anchor_match(run, net, args):
+# The fixed opponents a net that passed its match also plays (--anchor,
+# --people), each on its own boards every time.
+FIXED_SEEDS = {"anchor": 700_000_000, "people": 600_000_000}
+
+
+def _opponent_match(run, net, args, key):
     from catanatron.colonist.evaluate import match as play_match
 
     result = play_match(
         f"Z:{net}:{args.match_simulations}",
-        f"Z:{args.anchor}:{args.match_simulations}",
-        games=args.anchor_games,
-        seed=args.seed + 700_000_000,  # the same boards every time
+        f"Z:{getattr(args, key)}:{args.match_simulations}",
+        games=getattr(args, f"{key}_games"),
+        seed=args.seed + FIXED_SEEDS[key],
         workers=args.workers,
         hosts=_eval_hosts(args),
     )
-    say(f"  anchor: {result.summary()}")
+    say(f"  {key}: {result.summary()}")
     return round(result.score, 4)
 
 
-def anchor_reference(run, args):
-    """The current best net's score against --anchor, played once per best
-    net (and again if the anchor changes)."""
+def _anchor_match(run, net, args):
+    return _opponent_match(run, net, args, "anchor")
+
+
+def _people_match(run, net, args):
+    return _opponent_match(run, net, args, "people")
+
+
+def _fixed_reference(run, args, key, play):
+    """The current best net's score against a fixed opponent, played once per
+    best net (and again if the opponent or the search budget changes)."""
     best = run.state["best_round"]
-    known = run.state.get("anchor") or {}
+    known = run.state.get(key) or {}
     if (
         known.get("round") != best
-        or known.get("net") != args.anchor
+        or known.get("net") != getattr(args, key)
         # Scores at another search budget aren't comparable: play it again.
         or known.get("simulations", 100) != args.match_simulations
     ):
-        say(f"  anchor: scoring the best net (round {best}) first")
+        say(f"  {key}: scoring the best net (round {best}) first")
         known = {
             "round": best,
-            "net": args.anchor,
-            "score": _anchor_match(run, run.net(best), args),
+            "net": getattr(args, key),
+            "score": play(run.net(best)),
             "simulations": args.match_simulations,
         }
-        run.state["anchor"] = known
+        run.state[key] = known
         run.save()
     return known["score"]
+
+
+def anchor_reference(run, args):
+    return _fixed_reference(
+        run, args, "anchor", lambda net: _anchor_match(run, net, args)
+    )
+
+
+def people_reference(run, args):
+    return _fixed_reference(
+        run, args, "people", lambda net: _people_match(run, net, args)
+    )
 
 
 def guardrails(run, n, args, record):
@@ -748,6 +774,12 @@ def guardrails(run, n, args, record):
         record["best_anchor"] = reference
         if record["anchor"] < reference - args.guard_anchor:
             reasons.append(f"anchor {record['anchor']} vs best's {reference}")
+    if getattr(args, "people", ""):
+        reference = people_reference(run, args)
+        record["people"] = _people_match(run, run.net(n), args)
+        record["best_people"] = reference
+        if record["people"] < reference - args.guard_people:
+            reasons.append(f"people model {record['people']} vs best's {reference}")
     bench = _reference(run, "benchmark")
     if args.gate == "confidence" and args.benchmark and bench is None:
         reasons.append("best model's benchmark reference unavailable")
@@ -914,13 +946,14 @@ def benchmark(run, n, args):
             run.state["best_round"] = n
             run.state["since_promotion"] = 0
             record["promoted"] = True
-            if "anchor" in record:
-                run.state["anchor"] = {
-                    "round": n,
-                    "net": args.anchor,
-                    "score": record["anchor"],
-                    "simulations": args.match_simulations,
-                }
+            for key in FIXED_SEEDS:
+                if key in record:
+                    run.state[key] = {
+                        "round": n,
+                        "net": getattr(args, key),
+                        "score": record[key],
+                        "simulations": args.match_simulations,
+                    }
             say(f"  promoted: round {n} is the new best (guardrails held)")
             # Saved now, not after the gauntlet (400 more games): the bots
             # and the site read the best round from state.json.
@@ -1182,6 +1215,20 @@ def main(argv=None):
         type=float,
         default=0.02,
         help="largest drop allowed below the best's score against --anchor",
+    )
+    parser.add_argument(
+        "--people",
+        default="",
+        help="a fixed copy of the people model (.npz) every net that passes its "
+        "match also plays, with the same search as the anchor match; it must "
+        "not score clearly worse against it than the best did",
+    )
+    parser.add_argument("--people-games", type=int, default=4000)
+    parser.add_argument(
+        "--guard-people",
+        type=float,
+        default=0.02,
+        help="largest drop allowed below the best's score against --people",
     )
     parser.add_argument("--batch-pairs", type=int, default=50)
     parser.add_argument("--benchmark", default="AB:2")
