@@ -159,6 +159,62 @@ function renderTraining(training, records) {
   document.getElementById('rounds').replaceChildren(...rows);
 }
 
+const when = (iso) => (iso ? new Date(iso).toLocaleString('en-CA', {
+  timeZone: 'America/Toronto', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+}) : '—');
+const loss = (x) => (x == null ? '—' : x.toFixed(3));
+const thousands = (n) => n.toLocaleString('en-CA');
+
+// The live accounts whose net label matches, e.g. "Vasos5306 and Tedi4960".
+function players(bots, pattern) {
+  const names = bots.filter((b) => b.status !== 'retired' && pattern.test(b.net || '')).map((b) => b.name);
+  if (!names.length) return 'No account plays it right now.';
+  const list = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0];
+  return `Played by ${list}.`;
+}
+
+function renderPeople(model, bots) {
+  const box = document.getElementById('people');
+  const rows = model?.refreshes || [];
+  if (!rows.length) { box.hidden = true; return; }
+  box.hidden = false;
+  const last = rows.at(-1);
+  document.getElementById('peopleNow').replaceChildren(
+    `${players(bots, /people/i)} Last refresh ${when(last.at)}: the new net picks the person's move `,
+    el('strong', {}, pct(last.newAccuracy)), ` of the time (${last.replaced ? 'now in use' : 'kept the previous net'}).`);
+  document.getElementById('refreshes').replaceChildren(...[...rows].reverse().map((r) => el('tr', {},
+    el('td', {}, when(r.at)),
+    el('td', {}, r.rows ? thousands(r.rows) : '—'),
+    el('td', {}, pct(r.newAccuracy)),
+    el('td', {}, loss(r.newCrossEntropy)),
+    el('td', {}, pct(r.currentAccuracy)),
+    el('td', {}, loss(r.currentCrossEntropy)),
+    el('td', {}, el('span', { class: `result-tag ${r.replaced ? 'up' : 'kept'}` }, r.replaced ? 'Replaced' : 'Kept')))));
+}
+
+function renderE54(run, bots) {
+  const box = document.getElementById('e54');
+  if (!run || !(run.iterations.length || run.gates.length)) { box.hidden = true; return; }
+  box.hidden = false;
+  const last = run.iterations.at(-1);
+  const games = run.iterations.reduce((a, r) => a + r.games, 0);
+  document.getElementById('e54Now').replaceChildren(
+    `${players(bots, /e54/i)} `,
+    ...(last ? ['Iteration ', el('strong', {}, String(last.iter)), ` (${when(last.at)}); `,
+      el('strong', {}, thousands(games)), ' training games in all.'] : []));
+  const margin = (r) => `${pct(r.score)} ± ${(100 * r.margin).toFixed(1)}%`;
+  document.getElementById('e54Gates').replaceChildren(...[...run.gates].reverse().map((r) =>
+    el('tr', { class: r.pooled ? 'best' : '' },
+      el('td', {}, r.pooled ? 'Pooled' : r.name, r.pooled ? el('span', { class: 'chip' }, 'overall') : ''),
+      el('td', {}, String(r.iter)),
+      el('td', {}, `round ${r.opponent}`),
+      el('td', {}, thousands(r.games)),
+      el('td', {}, margin(r)),
+      el('td', {}, when(r.at)))));
+  document.getElementById('e54Evals').replaceChildren(...[...run.evals].reverse().map((r) =>
+    el('tr', {}, el('td', {}, String(r.iter)), el('td', {}, thousands(r.games)), el('td', {}, margin(r)))));
+}
+
 function renderCredits(rows) {
   const box = document.getElementById('credits');
   if (!rows || !rows.length) { box.hidden = true; return; }
@@ -184,6 +240,8 @@ async function refresh() {
     const data = await response.json();
     if (!response.ok || !Array.isArray(data.bots)) throw new Error('bad response');
     renderTraining(data.training, data.netRecords);
+    renderPeople(data.peopleModel, data.bots);
+    renderE54(data.e54, data.bots);
     renderCredits(data.credits);
     const active = data.bots.filter((b) => b.status !== 'retired');
     const retired = data.bots.filter((b) => b.status === 'retired');

@@ -11,7 +11,7 @@
     <main>
       <header>
         <h1>Colonist AI</h1>
-        <p>Four bots playing 1v1 against people on colonist.io. Open a live game to watch.</p>
+        <p>Bots playing 1v1 against people on colonist.io. Open a live game to watch.</p>
       </header>
       <section id="bots" class="bots" aria-live="polite">
         <p class="empty">Loading…</p>
@@ -41,6 +41,50 @@
           </table>
         </div>
         <p class="note">Each round plays self-play games, trains a new net on them, then matches it against the best net so far. It is promoted (and the bots switch to it) only if it is clearly better there (about 52%), and isn't worse against a fixed older net, the AlphaBeta bot, or at judging real games.</p>
+      </section>
+      <section class="training" id="people" hidden>
+        <h2>People model</h2>
+        <p id="peopleNow" class="now"></p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Refresh (Toronto)</th>
+                <th title="Held-out people's moves the nets were scored on">Moves scored</th>
+                <th title="How often the net's top move is the person's move">New net: top move</th>
+                <th title="Lower is better">New net: cross-entropy</th>
+                <th>Net in use: top move</th>
+                <th>Net in use: cross-entropy</th>
+                <th>Result</th>
+              </tr>
+            </thead>
+            <tbody id="refreshes"></tbody>
+          </table>
+        </div>
+        <p class="note">Every hour a copy of the best net is retrained on people's games to predict the moves people make. It replaces the net in use if it predicts held-out people's moves at least as well. The bot playing it expects its opponent to move like a person.</p>
+      </section>
+      <section class="training" id="e54" hidden>
+        <h2>E54: league training</h2>
+        <p id="e54Now" class="now"></p>
+        <h3>Searched matches</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Match</th><th>Iteration</th><th>Opponent</th><th>Games</th><th>E54's score</th><th>Finished (Toronto)</th></tr>
+            </thead>
+            <tbody id="e54Gates"></tbody>
+          </table>
+        </div>
+        <h3>Quick checks against round 73 (no search)</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Iteration</th><th>Games</th><th>E54's score</th></tr>
+            </thead>
+            <tbody id="e54Evals"></tbody>
+          </table>
+        </div>
+        <p class="note">A research run that trains a net against a league of earlier nets instead of only itself. Searched matches play with the same search the bots use; pooled rows add up several matches.</p>
       </section>
       <section class="credits" id="credits" hidden>
         <h2>Cloud credits</h2>

@@ -47,7 +47,8 @@ training round, in the background):
 trains a fresh model from the current best net on all the people's moves so
 far, scores it and the model in use on the same held-out moves, and replaces
 the model only if the new one predicts them at least as well (cross-entropy
-within --tolerance). The verdict goes to models/human/refresh.json. The
+within --tolerance). The verdict goes to models/human/refresh.json (and is
+appended to refresh-history.jsonl). The
 bots' runners reload a replaced model between games.
 """
 
@@ -209,6 +210,9 @@ def refresh(data, holdout, init, model, tolerance=0.005, extra=()):
     }
     with open(os.path.join(folder, "refresh.json"), "w") as stream:
         json.dump(verdict, stream, indent=2)
+    # Every verdict, for the spectator site's history (spectator_extra.py).
+    with open(os.path.join(folder, "refresh-history.jsonl"), "a") as stream:
+        stream.write(json.dumps(verdict) + "\n")
     return verdict
 
 

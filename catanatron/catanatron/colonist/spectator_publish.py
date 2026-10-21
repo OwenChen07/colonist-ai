@@ -372,6 +372,18 @@ def credits(data):
     return rows
 
 
+EXTRAS = {"peopleModel", "e54"}
+
+
+def extras(data):
+    """The people model's refreshes and E54's progress (spectator_extra.py on
+    the coordinator, copied here by sync_bot.sh): only the sections present."""
+    doc = _read_json(Path(data) / "spectator-extra.json")
+    if not isinstance(doc, dict):
+        return {}
+    return {k: doc[k] for k in sorted(EXTRAS) if isinstance(doc.get(k), dict)}
+
+
 def retired_status(folder, name, now=None):
     """A retired account: its record, kept on the site, and no live state."""
     now = time.time() if now is None else now
@@ -406,6 +418,7 @@ def snapshot(data, names, source, now=None, run="runs/g1", retired=None):
         "training": training(run),
         "netRecords": net_records(data, {**names, **retired}, run),
         "credits": credits(data),
+        **extras(data),
     }
 
 
@@ -450,7 +463,15 @@ def main(argv=None):
     while True:
         body = snapshot(args.data, names, source, run=args.run, retired=retired)
         try:
-            publish(args.site, key, body)
+            try:
+                publish(args.site, key, body)
+            except urllib.error.HTTPError as exc:
+                # A site deployed before the side-run sections rejects the
+                # whole snapshot: send the bots without them.
+                if exc.code != 400 or not EXTRAS & set(body):
+                    raise
+                body = {k: v for k, v in body.items() if k not in EXTRAS}
+                publish(args.site, key, body)
             playing = sum(b["status"] == "playing" for b in body["bots"])
             print(f"published {len(body['bots'])} bots, {playing} playing", flush=True)
         except (OSError, ValueError, RuntimeError, urllib.error.HTTPError) as exc:

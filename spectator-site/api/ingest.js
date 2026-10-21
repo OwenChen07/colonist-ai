@@ -83,15 +83,47 @@ function validCredits(rows) {
     && ['api', 'console'].includes(row.source)));
 }
 
+function loss(value) { return value === null || (typeof value === 'number' && value >= 0 && value < 10); }
+
+// The people model's hourly refreshes (opponent_model.py refresh).
+function validPeopleModel(p) {
+  return p === null || (exact(p, ['refreshes']) && Array.isArray(p.refreshes)
+    && p.refreshes.length <= 48 && p.refreshes.every((r) =>
+      exact(r, ['at', 'replaced', 'rows', 'newAccuracy', 'newCrossEntropy', 'currentAccuracy', 'currentCrossEntropy'])
+      && iso(r.at) && typeof r.replaced === 'boolean' && count(r.rows)
+      && fraction(r.newAccuracy) && fraction(r.currentAccuracy)
+      && loss(r.newCrossEntropy) && loss(r.currentCrossEntropy)));
+}
+
+function result(row) {
+  return count(row.iter) && count(row.opponent) && count(row.games)
+    && fraction(row.score) && fraction(row.margin);
+}
+
+// E54, research's league run: iterations, raw evaluations, searched gates.
+function validE54(e) {
+  return e === null || (exact(e, ['iterations', 'evals', 'gates'])
+    && Array.isArray(e.iterations) && e.iterations.length <= 200 && e.iterations.every((r) =>
+      exact(r, ['iter', 'games', 'at']) && count(r.iter) && count(r.games) && iso(r.at))
+    && Array.isArray(e.evals) && e.evals.length <= 50 && e.evals.every((r) =>
+      exact(r, ['iter', 'opponent', 'games', 'score', 'margin']) && result(r))
+    && Array.isArray(e.gates) && e.gates.length <= 30 && e.gates.every((r) =>
+      exact(r, ['name', 'iter', 'opponent', 'games', 'score', 'margin', 'pooled', 'at']) && result(r)
+      && typeof r.name === 'string' && /^[\w .-]{1,40}$/.test(r.name)
+      && typeof r.pooled === 'boolean' && (r.at === null || iso(r.at))));
+}
+
 export function validBody(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return false;
   const base = ['schema', 'source', 'updatedAt', 'bots'];
-  const allowed = [...base, 'training', 'netRecords', 'credits'];
+  const allowed = [...base, 'training', 'netRecords', 'credits', 'peopleModel', 'e54'];
   const keys = Object.keys(body);
   return base.every((k) => keys.includes(k)) && keys.every((k) => allowed.includes(k))
     && ('training' in body) === ('netRecords' in body)
     && (!('training' in body) || (validTraining(body.training) && validNetRecords(body.netRecords)))
     && (!('credits' in body) || validCredits(body.credits))
+    && (!('peopleModel' in body) || validPeopleModel(body.peopleModel))
+    && (!('e54' in body) || validE54(body.e54))
     && body.schema === 2
     && typeof body.source === 'string' && /^[a-z0-9-]{1,32}$/.test(body.source)
     && typeof body.updatedAt === 'string' && !Number.isNaN(Date.parse(body.updatedAt))

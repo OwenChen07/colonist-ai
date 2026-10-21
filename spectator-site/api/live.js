@@ -37,10 +37,18 @@ export default async function handler(request, response) {
       total.wins += row.wins;
       total.losses += row.losses;
     }
-    const credits = sources.filter((s) => Array.isArray(s.credits))
-      .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))[0]?.credits || null;
+    // Credits and the side runs: every VM has the same copy, so the newest.
+    const newest = (key) => sources.filter((s) => s[key] && typeof s[key] === 'object')
+      .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))[0]?.[key] || null;
     return response.status(200).json({
-      schema: 2, updatedAt: updated, bots, training, netRecords: Object.values(byRound), credits,
+      schema: 2,
+      updatedAt: updated,
+      bots,
+      training,
+      netRecords: Object.values(byRound),
+      credits: newest('credits'),
+      peopleModel: newest('peopleModel'),
+      e54: newest('e54'),
     });
   } catch (error) {
     console.error('spectator read failed', error?.name || 'unknown');

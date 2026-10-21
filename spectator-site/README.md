@@ -13,6 +13,12 @@ login).
 `spectator:bots` hash in Redis (Redis Cloud free plan, `REDIS_URL`). `/api/live` merges the VMs and shows a
 VM silent for 3 minutes as offline. The page polls it every 15 seconds.
 
+The people model's last 48 hourly refreshes and research's E54 run (iterations,
+raw checks against round 73, searched matches) come from
+`catanatron.colonist.spectator_extra`, which `scripts/vm/sync_bot.sh` runs on the
+coordinator and copies to each bot VM as `data/spectator-extra.json`. A site
+that rejects those sections still gets the bots (the publisher resends without them).
+
 The bots shown and their colonist names come from `COLONIST_BOT_NAMES` in each
 VM's `scripts/vm/bot/own_accounts.env`. Nothing about opponents, chat, cards or
 captures is sent.

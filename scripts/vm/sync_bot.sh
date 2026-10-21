@@ -24,6 +24,8 @@ tail -n 3000 runs/train.log > runs/g1/.train-tail.log 2>/dev/null \
 epochs=$(sed -n 's/^TRAIN_EPOCHS=\([0-9]*\).*/\1/p' scripts/vm/workers.env 2>/dev/null | tail -1)
 games=$(sed -n 's/^SELFPLAY_GAMES=\([0-9]*\).*/\1/p' scripts/vm/workers.env 2>/dev/null | tail -1)
 printf '{"epochs": %s, "games": %s}\n' "${epochs:-3}" "${games:-3500}" > runs/g1/train-config.json
+# The people model's refreshes and E54's progress for the site.
+.venv/bin/python -m catanatron.colonist.spectator_extra --out data/spectator-extra.json 2>/dev/null
 # Every bot VM: COLONIST_BOT_HOSTS (space-separated), or the one ranked host.
 for B in ${COLONIST_BOT_HOSTS:-$COLONIST_BOT_HOST}; do
   rsync -a --exclude "*.egg-info" --exclude __pycache__ -e "$SSH" \
@@ -38,6 +40,7 @@ for B in ${COLONIST_BOT_HOSTS:-$COLONIST_BOT_HOST}; do
       && rsync -a -e "$SSH" models/human/net.npz "$B:$R/models/human/net.npz"
   # Cloud credits for the site (scripts/credits.py on the owner's Mac).
   [ -e data/credits.json ] && rsync -a -e "$SSH" data/credits.json "$B:$R/data/credits.json"
+  [ -e data/spectator-extra.json ] && rsync -a -e "$SSH" data/spectator-extra.json "$B:$R/data/spectator-extra.json"
   # Every account's folders (data/ranked, data/<account>, ...), not the
   # extension copies or keys.
   rsync -a --exclude chrome-profile --exclude ".spectator-ingest-key" \
