@@ -103,6 +103,24 @@ def test_a_pause_survives_a_restart_without_reading_the_rank(tmp_path):
     assert fetch.calls == [] and len(sleep.slept) == 2
 
 
+def test_a_pause_from_a_wider_line_lifts_itself(tmp_path):
+    (tmp_path / "runner-status.json").write_text(json.dumps({"state": "paused_top10"}))
+    marker = tmp_path / top_pause.PAUSE_FILE
+    marker.write_text(json.dumps({"rank": 10, "rating": 2480}))
+    sleep = Sleeper()
+    asyncio.run(top_pause.Watch(tmp_path, "Amy", 1, _fetcher(10), sleep).check("x"))
+    assert not marker.exists() and sleep.slept == []
+    status = json.loads((tmp_path / "runner-status.json").read_text())
+    assert status["state"] == "running" and status["paused"] is None
+
+
+def test_the_line_is_first_place_by_default(monkeypatch):
+    monkeypatch.delenv("TOP_PAUSE_RANK", raising=False)
+    assert top_pause.threshold() == 1
+    monkeypatch.setenv("TOP_PAUSE_RANK", "10")
+    assert top_pause.threshold() == 10
+
+
 def test_an_unreadable_rank_holds_only_near_the_line(tmp_path):
     far = top_pause.Watch(tmp_path, "Amy", 10, _fetcher(0, fail=True), Sleeper())
     asyncio.run(far.check("x"))  # never read: plays on

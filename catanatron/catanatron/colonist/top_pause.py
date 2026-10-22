@@ -35,11 +35,12 @@ POLL_SECONDS = 60
 
 
 def threshold():
-    """TOP_PAUSE_RANK (default 10); 0 turns the pause off."""
+    """TOP_PAUSE_RANK (default 1, global #1 only, owner's rule Oct 22, 11:58 AM
+    Toronto; it was the top ten before); 0 turns the pause off."""
     try:
-        return int(os.environ.get("TOP_PAUSE_RANK", "10"))
+        return int(os.environ.get("TOP_PAUSE_RANK", "1"))
     except ValueError:
-        return 10
+        return 1
 
 
 def _fetch(path, timeout=15):
@@ -126,6 +127,16 @@ class Watch:
         if not self.name or self.line <= 0:
             return
         found = paused(self.data)
+        stale = _number((found or {}).get("rank"))
+        if stale is not None and stale > self.line:
+            # Written under a wider line (the top ten, before Oct 22, 11:58 AM).
+            (self.data / PAUSE_FILE).unlink(missing_ok=True)
+            print(
+                f"top-ten pause lifted: #{stale} is outside the top {self.line}",
+                flush=True,
+            )
+            update_status(self.data, state="running", paused=None, at=int(time.time()))
+            found = None
         if found is None:
             hit = await self.should_pause()
             if hit is None:
