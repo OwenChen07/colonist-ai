@@ -231,6 +231,28 @@ def test_rank_watch_counts_only_number_one_global():
     assert rank_watch.level_name(standing[0]) == "Global"
 
 
+def test_rank_watch_posts_a_top_ten_pause_once(tmp_path):
+    import rank_watch
+
+    folder = tmp_path / "data" / "bot9"
+    folder.mkdir(parents=True)
+    (tmp_path / "data" / "bot8").mkdir()
+    (tmp_path / "data" / "bot8" / "runner-status.json").write_text(
+        json.dumps({"state": "running"})
+    )
+    paused = {"rank": 9, "rating": 2471, "name": "Amy", "net": "E54", "at": 1792680000}
+    (folder / "runner-status.json").write_text(
+        json.dumps({"state": "paused_top10", "paused": paused})
+    )
+    state = {"seen": [], "queue": []}
+    now = dt.datetime.now(dt.timezone.utc)
+    rank_watch.pauses(state, now, tmp_path)
+    rank_watch.pauses(state, now, tmp_path)
+    assert len(state["queue"]) == 1
+    text = state["queue"][0]["text"]
+    assert "Amy (bot9) paused at global #9, 2471 rating" in text and "E54" in text
+
+
 def rank_site(monkeypatch, rank_watch, tmp_path, live):
     """Fakes colonist's API from live = {name: [rating, global rank]}."""
     monkeypatch.setattr(rank_watch, "STATE", tmp_path)

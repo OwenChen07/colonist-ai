@@ -43,7 +43,7 @@ from pathlib import Path
 from catanatron.colonist.capture import load as load_capture
 from catanatron.colonist.convert import convert
 from catanatron.colonist.human_data import export_capture
-from catanatron.colonist import own_queue
+from catanatron.colonist import own_queue, top_pause
 from catanatron.colonist.spectator_publish import parse_names
 
 
@@ -527,6 +527,9 @@ async def _run(args):
     own_name = bot_names.get(args.account or "ranked")
     if args.avoid_own_site and not own_name:
         print("--avoid-own-site: no COLONIST_BOT_NAMES entry; off", flush=True)
+    if not own_name:
+        print("top-ten pause: no COLONIST_BOT_NAMES entry; off", flush=True)
+    top_ten = top_pause.Watch(data, own_name)
     captures.mkdir(parents=True, exist_ok=True, mode=0o700)
     data.mkdir(parents=True, exist_ok=True, mode=0o700)
     process = log = None
@@ -672,6 +675,8 @@ async def _run(args):
                         "overnight time limit reached; no new game queued", flush=True
                     )
                     break
+                # Owner's rule: an account in the global top ten stops queueing.
+                await top_ten.check(label)
                 before = set(captures.glob("bridge-*.json"))
                 log_offset = (data / "bridge.log").stat().st_size
                 queue = next_queue(args.queue, args.ranked_after, data, args.account)

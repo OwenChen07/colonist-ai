@@ -30,7 +30,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import core  # noqa: E402
-from context import SITE, STATE, read_json  # noqa: E402
+from context import ROOT, SITE, STATE, read_json  # noqa: E402
 
 API = "https://colonist.io/api"
 HEADERS = {"User-Agent": "colonist-ai-status/1.0", "Accept": "application/json"}
@@ -222,6 +222,31 @@ def check(state, now, dry_run=False):
                 state["seen"].append(key)
 
 
+def pauses(state, now, root=None):
+    """One post per top-ten pause a runner reports (top_pause.py, owner's rule
+    Oct 22): runner-status.json state paused_top10, synced from the bot VMs."""
+    for path in sorted(Path(root or ROOT, "data").glob("*/runner-status.json")):
+        status = read_json(path) or {}
+        info = status.get("paused") or {}
+        if status.get("state") != "paused_top10" or not info:
+            continue
+        key = f"pause:{path.parent.name}:{info.get('at')}"
+        if key in state["seen"]:
+            continue
+        state["seen"].append(key)
+        when = dt.datetime.fromtimestamp(
+            info.get("at") or now.timestamp(), dt.timezone.utc
+        )
+        state["queue"].append(
+            {
+                "text": f"⏸️ **{info.get('name')} ({path.parent.name}) paused at "
+                f"global #{info.get('rank')}, {info.get('rating')} rating**, net "
+                f"{info.get('net')}, at {stamp(when)} Toronto. Owner's top-ten rule: "
+                "it stays paused until the owner says otherwise."
+            }
+        )
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--release", action="store_true", help="hand over the queue")
@@ -236,6 +261,7 @@ def main(argv=None):
         check(state, now, dry_run=args.dry_run)
     except Exception as error:  # colonist unreachable: try next time
         print(f"rank check failed: {error}", file=sys.stderr)
+    pauses(state, now)
     posts = state["queue"] if args.release or args.dry_run else []
     if args.release:
         state["queue"] = []
