@@ -408,11 +408,40 @@ class Augment:
         return x, legal, action, pi, value, aux  # aux: the same in every symmetry
 
 
-def losses(model, x, legal, action, pi, value, aux, value_weight, aux_weight=0.0):
+def kl_to(prior, x, legal, log_p):
+    """Mean KL divergence of the policy `log_p` from frozen `prior`'s, over
+    the legal moves."""
+    import torch
+    import torch.nn.functional as F
+
+    with torch.no_grad():
+        prior_logits, _ = prior(x)
+        prior_log_p = F.log_softmax(prior_logits.masked_fill(~legal, -1e9), dim=1)
+    p = log_p.exp()
+    kl = torch.where(legal, p * (log_p - prior_log_p), torch.zeros_like(p))
+    return kl.sum(1).mean()
+
+
+def losses(
+    model,
+    x,
+    legal,
+    action,
+    pi,
+    value,
+    aux,
+    value_weight,
+    aux_weight=0.0,
+    policy_weight=1.0,
+    prior=None,
+    kl_weight=0.0,
+):
     """Returns (total, policy loss, value loss, correct top moves, number of
     policy targets, auxiliary loss). The auxiliary loss is over the rows that
     have auxiliary targets (NaN where a shard had none), and only for a graph
-    net, whose auxiliary head nothing else uses."""
+    net, whose auxiliary head nothing else uses. With `prior`, the total adds
+    `kl_weight` times the policy's KL from it (e.g. policy_weight 0: a
+    value-only fine-tune that keeps the policy where it was)."""
     import torch
     import torch.nn.functional as F
 
@@ -439,7 +468,9 @@ def losses(model, x, legal, action, pi, value, aux, value_weight, aux_weight=0.0
         if known_value.any()
         else torch.zeros((), device=x.device)
     )
-    total = policy_loss + value_weight * value_loss
+    total = policy_weight * policy_loss + value_weight * value_loss
+    if prior is not None and kl_weight:
+        total = total + kl_weight * kl_to(prior, x, legal, log_p)
     aux_loss = torch.zeros((), device=x.device)
     if use_aux:
         known = torch.isfinite(aux[:, 0])
@@ -483,11 +514,7 @@ def pg_losses(
     entropy = -torch.where(legal, p * log_p, torch.zeros_like(p)).sum(1).mean()
     kl = torch.zeros((), device=x.device)
     if prior is not None and kl_weight:
-        with torch.no_grad():
-            prior_logits, _ = prior(x)
-            prior_log_p = F.log_softmax(prior_logits.masked_fill(~legal, -1e9), dim=1)
-        kl = torch.where(legal, p * (log_p - prior_log_p), torch.zeros_like(p))
-        kl = kl.sum(1).mean()
+        kl = kl_to(prior, x, legal, log_p)
     total = (
         policy_loss
         + value_weight * value_loss
@@ -643,6 +670,20 @@ def main(argv=None):
     parser.add_argument("--pg-clip", type=float, default=0.2)
     parser.add_argument("--pg-entropy", type=float, default=0.01)
     parser.add_argument("--pg-kl", type=float, default=0.02)
+    parser.add_argument(
+        "--policy-weight",
+        type=float,
+        default=1.0,
+        help="weight of the policy loss (without --pg); 0 trains the value "
+        "(and auxiliary) heads only, with --policy-kl holding the policy",
+    )
+    parser.add_argument(
+        "--policy-kl",
+        type=float,
+        default=0.0,
+        help="without --pg, weight of the policy's KL from --pg-prior "
+        "(default --init's net); 0 is off",
+    )
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args(argv)
 
@@ -695,7 +736,7 @@ def main(argv=None):
     model = model.to(device)
     prior = None
     prior_path = args.pg_prior or args.init
-    if args.pg and prior_path and args.pg_kl:
+    if prior_path and (args.pg_kl if args.pg else args.policy_kl):
         prior = torch_model_of(prior_path).to(device).eval()
         for p in prior.parameters():
             p.requires_grad_(False)
@@ -790,7 +831,13 @@ def main(argv=None):
                 pg_sums += [ent.item(), kl.item(), clip_share.item()]
             else:
                 total, pl, vl, _, _, _ = losses(
-                    model, *batch, args.value_weight, args.aux_weight
+                    model,
+                    *batch,
+                    args.value_weight,
+                    args.aux_weight,
+                    args.policy_weight,
+                    prior,
+                    args.policy_kl,
                 )
             opt.zero_grad(set_to_none=True)
             total.backward()

@@ -264,3 +264,44 @@ def test_training_reads_moves_without_results(tmp_path, capsys):
     assert main(args) == 0
     (epoch,) = [l for l in capsys.readouterr().out.splitlines() if "epoch 1" in l]
     assert "train policy" in epoch and "nan" not in epoch
+
+
+def test_value_only_training_holds_the_policy(tmp_path):
+    import pytest
+
+    torch = pytest.importorskip("torch")
+    from catanatron.colonist import graph as G
+    from catanatron.colonist.train import losses, main, torch_model_of
+
+    model, other = G.torch_model(8, 8, 1), G.torch_model(8, 8, 1)
+    x, legal = torch.rand(4, 1297), torch.ones(4, 313, dtype=torch.bool)
+    action = torch.zeros(4, dtype=torch.long)
+    value = torch.tensor([1.0, -1.0, 0.5, -0.5])
+    args = (model, x, legal, action, None, value, None, 1.0, 0.0, 0.0)
+    total, _, vl, *_ = losses(*args)
+    assert torch.isclose(total, vl)  # no policy term
+    same, *_ = losses(*args, model, 0.02)
+    assert torch.isclose(same, vl, atol=1e-6)  # no KL from itself
+    moved, *_ = losses(*args, other, 0.02)
+    assert moved > vl
+
+    out = tmp_path / "human"
+    H.build(_captures(tmp_path), out=str(out), log=lambda _: None)
+    row = _person_won(out)
+    H.policy_won(str(out), log=lambda _: None)
+    net = str(tmp_path / "net.npz")
+    G.random_graph_net(8, 8, 1, seed=1).save(net)
+    run = [str(out / row["split"] / f) for f in ("policy_won", "value")]
+    run += ["--init", net, "--epochs", "2"]
+    run += ["--batch", "16", "--device", "cpu", "--val-fraction", "0"]
+    run += ["--no-augment", "--lr", "1e-2"]
+    assert main(run + ["--out", str(tmp_path / "v"), "--policy-weight", "0"]) == 0
+    assert main(run + ["--out", str(tmp_path / "p")]) == 0
+    start = torch_model_of(net).eval()
+    drift = {}
+    for name in ("v", "p"):
+        trained = torch_model_of(str(tmp_path / name / "last.npz")).eval()
+        with torch.no_grad():
+            drift[name] = (trained(x)[0] - start(x)[0]).abs().mean().item()
+    # the policy head gets no gradient; only the shared trunk moves it
+    assert drift["v"] < drift["p"]
