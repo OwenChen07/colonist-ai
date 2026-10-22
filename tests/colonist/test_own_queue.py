@@ -53,6 +53,32 @@ def test_the_site_shows_queued_and_waiting_accounts():
     }
 
 
+def test_a_name_shown_twice_reads_its_live_entry():
+    # VM 3 posted under two hostnames: one card offline, one current.
+    bots = [
+        {"name": "Amy", "status": "searching", "queue": "ranked"},
+        {"name": "Amy", "status": "offline", "queue": None},
+        {"name": "Bob", "status": "offline", "queue": None},
+        {"name": "Bob", "status": "searching", "queue": None},
+        {"name": "Cat", "status": "playing", "updatedAt": "2026-10-22T16:00:00Z"},
+        {"name": "Cat", "status": "searching", "queue": "ranked"},
+        {"name": "Cat", "status": "searching", "updatedAt": "2026-10-22T16:05:00Z"},
+    ]
+    assert own_queue.site_states(bots) == {
+        "Amy": "queued",
+        "Bob": "waiting",
+        "Cat": "waiting",
+    }
+
+
+def test_the_wait_is_on_unless_turned_off():
+    assert own_queue.site_setting(None) == own_queue.SITE
+    assert own_queue.site_setting("https://x.example/") == "https://x.example/"
+    assert own_queue.site_setting("0") is None
+    assert own_queue.site_setting("off") is None
+    assert own_queue.site_setting("") is None
+
+
 def test_this_vms_folders_override_the_site(tmp_path):
     _runner(tmp_path / "bot3", queue_state="queued")
     _runner(tmp_path / "bot4", queue_state="queued")

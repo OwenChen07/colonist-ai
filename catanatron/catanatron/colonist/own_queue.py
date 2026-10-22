@@ -23,9 +23,20 @@ from pathlib import Path
 
 from catanatron.colonist.spectator_publish import live_game
 
+SITE = "https://colonist-ai-spectator.vercel.app"
 MAX_WAIT = 90
 POLL_SECONDS = 12
 JITTER_SECONDS = 20
+
+
+def site_setting(value):
+    """AVOID_OWN_SITE: unset is the spectator site (on for every account,
+    E62 step 2); empty, 0 or off turns the wait off; anything else is a URL."""
+    if value is None:
+        return SITE
+    if value.strip().lower() in ("", "0", "off"):
+        return None
+    return value.strip()
 
 
 def _read_json(path):
@@ -71,13 +82,24 @@ def local_states(data, names, alive=_runner_alive):
     return states
 
 
+def _freshness(bot):
+    """A name can appear under two sources (a VM that posted under a second
+    hostname): an entry that isn't offline wins, then the newest updatedAt."""
+    return (bot.get("status") != "offline", str(bot.get("updatedAt") or ""))
+
+
 def site_states(bots):
     """The same from /api/live's bots: searching in ranked = queued, searching
     with no queue = waiting to queue; casual accounts don't count."""
-    states = {}
+    newest = {}
     for bot in bots or []:
         if not isinstance(bot, dict) or not isinstance(bot.get("name"), str):
             continue
+        seen = newest.get(bot["name"])
+        if seen is None or _freshness(bot) > _freshness(seen):
+            newest[bot["name"]] = bot
+    states = {}
+    for bot in newest.values():
         if bot.get("status") != "searching":
             states[bot["name"]] = "other"
         elif bot.get("queue") == "ranked":

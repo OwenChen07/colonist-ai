@@ -911,9 +911,10 @@ def main(argv=None):
     )
     parser.add_argument(
         "--avoid-own-site",
-        default=os.environ.get("AVOID_OWN_SITE") or None,
-        help="the spectator site (or AVOID_OWN_SITE): before a ranked queue, "
-        "wait up to 90 s while another of our accounts is queued (own_queue)",
+        default=own_queue.site_setting(os.environ.get("AVOID_OWN_SITE")),
+        help="the spectator site (or AVOID_OWN_SITE; on by default, 0 turns it "
+        "off): before a ranked queue, wait up to 90 s while another of our "
+        "accounts is queued (own_queue)",
     )
     parser.add_argument("--captures", default=None)
     parser.add_argument("--data", default=None)
