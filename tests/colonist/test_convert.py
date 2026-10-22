@@ -103,6 +103,16 @@ def test_player_embargo_notice_does_not_change_the_game(frames):
     assert report.ok, report.summary()
 
 
+def test_lifted_embargo_notice_does_not_change_the_game(frames):
+    # bot12 bridge-20261022-155258: type 114 carries the same fields as 113.
+    changed = with_extra_log_entry(
+        frames, {"type": 114, "playerColor": 1, "embargoedPlayerColor": 2}
+    )
+    conv = convert(changed)
+    assert not conv.unsupported, conv.unsupported
+    assert replay(conv.record).ok
+
+
 def test_unknown_log_entry_stops_the_record(frames):
     conv = convert(with_extra_log_entry(frames, {"type": 9999, "playerColor": 1}))
     assert conv.ended == "unsupported"

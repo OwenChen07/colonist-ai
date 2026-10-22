@@ -120,7 +120,8 @@ LOG_PIECE_NOTICE = {72, 87}  # before matching setup road / settlement placement
 #: (118: an offer alone changes nothing; an accepted trade
 #: logs its own entry, which is not mapped yet and so stops the record), and
 #: a player embargoing another (113: only blocks player-to-player trades,
-#: which this bot never offers or accepts), and
+#: which this bot never offers or accepts) or lifting it (114, same fields;
+#: seen live in a ranked game, where it stopped the bot at a 99% win chance), and
 #: a pre-game counter (130), and a player disconnecting (140, logged with
 #: isConnected false in the same update, seen live in a ranked game), and a
 #: player starting a vote to pause the game (124, sent with a type 51 vote
@@ -154,6 +155,7 @@ LOG_IGNORED = {
     67,
     68,
     113,
+    114,
     118,
     124,
     128,
