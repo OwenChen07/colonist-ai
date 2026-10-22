@@ -22,6 +22,6 @@ R=colonist-ai
 $SSH "$HOST" "mkdir -p $R/runs/g1/nets $R/data/openhex/games"
 rsync -a --exclude "*.egg-info" --exclude __pycache__ -e "$SSH" \
     "$MAIN/catanatron" "$MAIN/scripts" "$MAIN/pyproject.toml" "$HOST:$R/"
-rsync -a -e "$SSH" "$MAIN/runs/g1/nets/round_152.npz" "$HOST:$R/runs/g1/nets/round_152.npz"
+rsync -a -e "$SSH" "$MAIN/data/orchestrator/e54/run1/iter-50/net.npz" "$HOST:$R/runs/g1/nets/e54_step50.npz"
 rsync -a --chmod=F600 -e "$SSH" "$MAIN/data/openhex/bot.json" "$HOST:$R/data/openhex/bot.json"
-echo "setup: $HOST has the code, round 152 and the key"
+echo "setup: $HOST has the code, E54 step 50 and the key"

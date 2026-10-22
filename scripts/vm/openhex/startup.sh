@@ -23,7 +23,7 @@ UNIT="$ROOT/scripts/vm/openhex/openhex-client.service"
 systemctl stop openhex-install 2>/dev/null || true
 systemd-run --unit=openhex-install /bin/bash -c "
   for _ in \$(seq 720); do
-    if [ -f $UNIT ] && [ -f $ROOT/runs/g1/nets/round_152.npz ] && [ -f $ROOT/data/openhex/bot.json ]; then
+    if [ -f $UNIT ] && [ -f $ROOT/runs/g1/nets/e54_step50.npz ] && [ -f $ROOT/data/openhex/bot.json ]; then
       cp $UNIT /etc/systemd/system/openhex-client.service
       systemctl daemon-reload
       systemctl enable --now openhex-client.service
