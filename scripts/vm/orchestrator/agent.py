@@ -44,7 +44,8 @@ TIMEOUT = int(os.environ.get("ORCHESTRATOR_TIMEOUT_S", "3000"))
 # Cost charged for a run killed by the timeout, which reports none.
 TIMEOUT_COST = float(os.environ.get("ORCHESTRATOR_TIMEOUT_COST_USD", "3"))
 LIMIT = re.compile(
-    r"usage limit|weekly limit|limit reached|hit your limit|rate limit|out of (credits|usage)",
+    r"usage limit|weekly limit|session limit|limit reached|hit your (\w+ )?limit"
+    r"|rate limit|out of (credits|usage)",
     re.I,
 )
 # Ignored by git in the main checkout and shared with every worktree.
@@ -255,6 +256,31 @@ def final_json(text):
     return found
 
 
+def limit_message(text):
+    """True when the result is nothing but Claude's limit notice: one short
+    line, no work in it (a task's summary is paragraphs and a JSON block)."""
+    text = str(text or "").strip()
+    return bool(text) and len(text) < 200 and "\n" not in text and bool(LIMIT.search(text))
+
+
+RESETS = re.compile(r"resets\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*\((UTC)\)", re.I)
+
+
+def limit_resets(text, at):
+    """The reset time in Claude's notice ("resets 6:50pm (UTC)"), as the next
+    such UTC time after `at`, plus two minutes; None when there is none."""
+    m = RESETS.search(text or "")
+    if not m:
+        return None
+    hour, minute, half = int(m.group(1)) % 12, int(m.group(2) or 0), m.group(3).lower()
+    hour += 12 if half == "pm" else 0
+    base = at.astimezone(dt.timezone.utc)
+    when = base.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if when <= base:
+        when += dt.timedelta(days=1)
+    return (when + dt.timedelta(minutes=2)).astimezone(at.tzinfo)
+
+
 def claude_blocked():
     data = read(STATE / "claude-blocked.json")
     try:
@@ -386,7 +412,12 @@ def run_agent(prompt, *, role, workstream=None, model, cwd, log, env=None, resum
         cost = float(result.get("total_cost_usd") or 0)
         # Not the whole stream: tool output quoting "rate limit" isn't a limit.
         seen = other + str(result.get("result") or "")
-        limited = bool(LIMIT.search(seen)) and (result.get("is_error") or not result)
+        # Oct 22: "You've hit your session limit · resets 6:50pm (UTC)" came
+        # back as the whole result, not flagged is_error, and every run for
+        # 1 h 40 min failed on it as if it were an ordinary task failure.
+        limited = bool(LIMIT.search(seen)) and (
+            result.get("is_error") or not result or limit_message(result.get("result"))
+        )
         record_usage(
             role,
             workstream,
@@ -399,7 +430,7 @@ def run_agent(prompt, *, role, workstream=None, model, cwd, log, env=None, resum
         if not limited:
             text = result.get("result") or said
             return text, result.get("session_id"), "claude"
-        until = now() + dt.timedelta(hours=1)
+        until = limit_resets(seen, now()) or now() + dt.timedelta(hours=1)
         (STATE / "claude-blocked.json").write_text(
             json.dumps({"until": until.isoformat(timespec="seconds")})
         )

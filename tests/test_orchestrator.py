@@ -839,3 +839,21 @@ def test_only_the_lead_may_restart_the_bot():
     assert restart in agent.allowed_tools("lead")
     assert restart not in agent.allowed_tools("worker")
     assert not any("sudo" in t for t in agent.allowed_tools("lead"))
+
+
+def test_session_limit_notice_is_a_limit_with_its_reset_time():
+    # Oct 22, 2026, 1:11-2:44 PM Toronto: every run came back with only this
+    # line, not flagged is_error; the bot took each as a failed task and
+    # retried every 30 min instead of waiting for the reset.
+    notice = "You've hit your session limit · resets 6:50pm (UTC)"
+    assert agent.LIMIT.search(notice)
+    assert agent.limit_message(notice)
+    assert not agent.limit_message(notice + "\n\nDone: 3 files changed.\n```json\n{}\n```")
+    assert not agent.limit_message("The tool output quoted 'rate limit' here.\n" * 5)
+    at = dt.datetime(2026, 10, 22, 17, 11, tzinfo=dt.timezone.utc)
+    until = agent.limit_resets(notice, at)
+    assert until == dt.datetime(2026, 10, 22, 18, 52, tzinfo=dt.timezone.utc)
+    # A reset time already past today means tomorrow.
+    late = dt.datetime(2026, 10, 22, 19, 0, tzinfo=dt.timezone.utc)
+    assert agent.limit_resets(notice, late).day == 23
+    assert agent.limit_resets("Usage limit reached.", at) is None
