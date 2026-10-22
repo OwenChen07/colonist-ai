@@ -439,8 +439,12 @@ def main(argv=None):
     parser.add_argument("--data", default="data")
     parser.add_argument("--key-file", default="data/.spectator-ingest-key")
     parser.add_argument("--site", required=True)
+    # SPECTATOR_SOURCE (own_accounts.env) pins the name: a VM restarted before
+    # GCP sets its hostname would otherwise post its bots under a new key.
     parser.add_argument(
-        "--source", default=socket.gethostname(), help="this VM's name on the site"
+        "--source",
+        default=os.environ.get("SPECTATOR_SOURCE") or socket.gethostname(),
+        help="this VM's name on the site",
     )
     parser.add_argument(
         "--names",
@@ -460,6 +464,7 @@ def main(argv=None):
     names = parse_names(args.names)
     retired = parse_names(args.retired)
     source = re.sub(r"[^a-z0-9-]", "-", args.source.lower())[:32]
+    print(f"publishing as {source}", flush=True)
     while True:
         body = snapshot(args.data, names, source, run=args.run, retired=retired)
         try:

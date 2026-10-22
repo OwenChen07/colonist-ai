@@ -7,6 +7,7 @@ User=ubuntu
 WorkingDirectory=/home/ubuntu/colonist-ai
 Environment=PYTHONUNBUFFERED=1
 # COLONIST_BOT_NAMES=account=colonist name,... (which bots the site shows)
+# SPECTATOR_SOURCE=bot-vm-N (this VM's key on the site; the hostname if unset)
 EnvironmentFile=-/home/ubuntu/colonist-ai/scripts/vm/bot/own_accounts.env
 ExecStart=/home/ubuntu/colonist-ai/.venv/bin/python -m catanatron.colonist.spectator_publish \
     --key-file data/.spectator-ingest-key \

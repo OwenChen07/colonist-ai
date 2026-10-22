@@ -3,6 +3,8 @@ import { ranks } from './_rank.js';
 
 // A VM that hasn't posted for this long is shown as offline.
 const STALE_MS = 3 * 60 * 1000;
+// One that hasn't posted for this long isn't shown at all.
+const GONE_MS = 60 * 60 * 1000;
 
 export default async function handler(request, response) {
   if (request.method !== 'GET') {
@@ -12,14 +14,23 @@ export default async function handler(request, response) {
   response.setHeader('Cache-Control', 'no-store');
   try {
     const db = await redis();
+    const now = Date.now();
+    // A source silent for an hour is a VM gone or renamed: drop it.
     const sources = Object.values(await db.hGetAll(KEY))
       .map((text) => { try { return JSON.parse(text); } catch { return null; } })
-      .filter((s) => s && s.schema === 2);
-    const now = Date.now();
-    const bots = sources.flatMap((source) => {
-      const stale = now - Date.parse(source.updatedAt) > STALE_MS;
-      return source.bots.map((bot) => (stale && bot.status !== 'retired' ? { ...bot, status: 'offline', gameId: null } : bot));
-    });
+      .filter((s) => s && s.schema === 2 && now - Date.parse(s.updatedAt) <= GONE_MS);
+    // A bot posted by several sources (a VM that changed hostname) is shown
+    // once, from the source that posted last.
+    const latest = new Map();
+    for (const source of sources) {
+      const at = Date.parse(source.updatedAt);
+      const stale = now - at > STALE_MS;
+      for (const bot of source.bots) {
+        if (latest.has(bot.name) && latest.get(bot.name).at >= at) continue;
+        latest.set(bot.name, { at, bot: stale && bot.status !== 'retired' ? { ...bot, status: 'offline', gameId: null } : bot });
+      }
+    }
+    const bots = [...latest.values()].map((entry) => entry.bot);
     bots.sort((a, b) => a.name.localeCompare(b.name));
     const standing = await ranks(db, bots.map((b) => b.name));
     for (const bot of bots) bot.rank = standing[bot.name] ?? null;

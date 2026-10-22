@@ -3,6 +3,7 @@ import json
 import os
 import time
 
+from catanatron.colonist import spectator_publish
 from catanatron.colonist.spectator_publish import (
     parse_names,
     round_progress,
@@ -28,6 +29,22 @@ def test_parse_names():
         "ranked": "CatBot77",
         "bot2": "Ericha8499",
     }
+
+
+def test_source_comes_from_spectator_source_not_the_hostname(tmp_path, monkeypatch):
+    key = tmp_path / "key"
+    key.write_text("k")
+    sent = []
+    monkeypatch.setattr(
+        spectator_publish, "publish", lambda s, k, body: sent.append(body)
+    )
+    monkeypatch.setattr(spectator_publish.socket, "gethostname", lambda: "renamed-host")
+    monkeypatch.setenv("SPECTATOR_SOURCE", "bot-vm-3")
+    argv = ["--data", str(tmp_path), "--key-file", str(key), "--site", "x", "--once"]
+    spectator_publish.main(argv)
+    monkeypatch.delenv("SPECTATOR_SOURCE")
+    spectator_publish.main(argv)
+    assert [b["source"] for b in sent] == ["bot-vm-3", "renamed-host"]
 
 
 def test_snapshot_reports_live_game_and_record(tmp_path):

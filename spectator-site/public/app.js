@@ -245,7 +245,10 @@ async function refresh() {
     renderCredits(data.credits);
     const active = data.bots.filter((b) => b.status !== 'retired');
     const retired = data.bots.filter((b) => b.status === 'retired');
-    box.replaceChildren(...(active.length ? active.map(card) : [el('p', { class: 'empty' }, 'No bots reporting yet.')]));
+    const words = ['No', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten'];
+    document.getElementById('intro').textContent = `${words[active.length] ?? active.length} `
+      + `bot${active.length === 1 ? '' : 's'} playing 1v1 against people on colonist.io. Open a live game to watch.`;
+    box.replaceChildren(...(active.length ?active.map(card) : [el('p', { class: 'empty' }, 'No bots reporting yet.')]));
     document.getElementById('retired').hidden = !retired.length;
     document.getElementById('retiredBots').replaceChildren(...retired.map(card));
     document.getElementById('updated').textContent = data.updatedAt
