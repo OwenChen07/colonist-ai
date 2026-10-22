@@ -260,7 +260,9 @@ def limit_message(text):
     """True when the result is nothing but Claude's limit notice: one short
     line, no work in it (a task's summary is paragraphs and a JSON block)."""
     text = str(text or "").strip()
-    return bool(text) and len(text) < 200 and "\n" not in text and bool(LIMIT.search(text))
+    return (
+        bool(text) and len(text) < 200 and "\n" not in text and bool(LIMIT.search(text))
+    )
 
 
 RESETS = re.compile(r"resets\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*\((UTC)\)", re.I)
