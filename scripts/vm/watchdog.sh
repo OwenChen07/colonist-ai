@@ -21,6 +21,10 @@ waiting() { [ -e "data/$1/NEEDS_OWNER.md" ]; }
 # needs_attention etc. still count.
 not_started=""
 expected_inactive() { [ "$2" = inactive ] && [[ " $not_started " == *" $1 "* ]]; }
+# An account in the global top ten is held by the owner's rule (Oct 22): its
+# runner-status says paused_top10, and it may be stopped outright (bot9, Oct 22,
+# 14:56Z). That is not a fault; it stays down until the owner lifts it.
+top10_stopped() { [ "$2" = inactive ] && [ "$3" = paused_top10 ]; }
 systemctl is-active --quiet colonist-train || problems+=("colonist-train is not active ($(systemctl is-active colonist-train))")
 # The ranked bot runs on its own VM; its data comes back every 5 minutes.
 bot=$(scripts/vm/bot_ctl.sh is-active 2>&1)
@@ -36,7 +40,7 @@ while read -r name service state; do
     touch "data/watchdog/.activating-$name"
   else
     rm -f "data/watchdog/.activating-$name"
-    [ "$service" = active ] || expected_inactive "$name" "$service" || problems+=("bot account $name: service $service")
+    [ "$service" = active ] || expected_inactive "$name" "$service" || top10_stopped "$name" "$service" "$state" || problems+=("bot account $name: service $service")
   fi
   [ "$state" = needs_attention ] && problems+=("bot account $name: runner needs_attention")
 done < <(scripts/vm/bot_ctl.sh accounts 2>/dev/null)

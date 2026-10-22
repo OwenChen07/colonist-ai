@@ -257,6 +257,7 @@ def rank_site(monkeypatch, rank_watch, tmp_path, live):
     """Fakes colonist's API from live = {name: [rating, global rank]}."""
     monkeypatch.setattr(rank_watch, "STATE", tmp_path)
     monkeypatch.setattr(rank_watch, "SHOTS", tmp_path / "shots")
+    monkeypatch.setattr(rank_watch, "ROOT", tmp_path)  # not the live data/ pauses
     monkeypatch.setattr(rank_watch, "accounts", lambda: list(live))
 
     def fetch(url):
