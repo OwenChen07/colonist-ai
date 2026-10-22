@@ -834,6 +834,79 @@ def test_an_image_only_message_reaches_the_inbox_and_the_lead(tmp_path, monkeypa
     assert len(chats) == 2
 
 
+def test_experiments_edit_only_changed_pages_at_most_every_two_minutes(
+    tmp_path, monkeypatch
+):
+    import asyncio
+
+    import discord_bot
+
+    monkeypatch.setattr(discord_bot, "STATE", tmp_path)
+    monkeypatch.setattr(discord_bot, "WORKSTREAMS", [])
+    clock = [1000.0]
+    monkeypatch.setattr(discord_bot.time, "monotonic", lambda: clock[0])
+    orchestrator = discord_bot.Orchestrator(1, 2)
+    orchestrator.save = lambda: None
+    edits, sent = [], []
+
+    class Message:
+        def __init__(self, ident):
+            self.id = ident
+
+        async def edit(self, **kwargs):
+            edits.append(self.id)
+
+        async def delete(self):
+            pass
+
+        async def pin(self):
+            pass
+
+    class Channel:
+        async def send(self, embeds):
+            sent.append(len(sent) + 1)
+            return Message(sent[-1])
+
+        async def fetch_message(self, ident):
+            return Message(ident)
+
+        def get_partial_message(self, ident):
+            return Message(ident)
+
+    orchestrator.channels[discord_bot.EXPERIMENTS] = Channel()
+    path = tmp_path / "experiments.json"
+    entries = [
+        {"id": f"E{n}", "title": "t", "status": "running", "what": "x" * 3000}
+        for n in range(8)
+    ]
+
+    def write(stamp):
+        path.write_text(json.dumps({"experiments": entries}))
+        os.utime(path, (stamp, stamp))
+
+    write(1_700_000_000)
+    asyncio.run(orchestrator.post_experiments())
+    pages = len(sent)
+    assert pages >= 3 and edits == []
+    # The newest-first order puts E7 on the first page; only it (and the
+    # first page's "updated" title) changes, and only after two minutes.
+    entries[7]["what"] = "y" * 3000
+    write(1_700_000_060)
+    clock[0] += 60
+    asyncio.run(orchestrator.post_experiments())
+    assert edits == []
+    clock[0] += 61
+    asyncio.run(orchestrator.post_experiments())
+    assert edits == [1] and len(sent) == pages
+    # Nothing new: no render at all.
+    clock[0] += 300
+    asyncio.run(orchestrator.post_experiments())
+    assert edits == [1]
+    # !experiments renders at once, but pages already right stay untouched.
+    asyncio.run(orchestrator.post_experiments(force=True))
+    assert edits == [1] and len(sent) == pages
+
+
 def test_only_the_lead_may_restart_the_bot():
     restart = "Bash(scripts/vm/orchestrator/restart_bot.sh:*)"
     assert restart in agent.allowed_tools("lead")
@@ -848,7 +921,9 @@ def test_session_limit_notice_is_a_limit_with_its_reset_time():
     notice = "You've hit your session limit · resets 6:50pm (UTC)"
     assert agent.LIMIT.search(notice)
     assert agent.limit_message(notice)
-    assert not agent.limit_message(notice + "\n\nDone: 3 files changed.\n```json\n{}\n```")
+    assert not agent.limit_message(
+        notice + "\n\nDone: 3 files changed.\n```json\n{}\n```"
+    )
     assert not agent.limit_message("The tool output quoted 'rate limit' here.\n" * 5)
     at = dt.datetime(2026, 10, 22, 17, 11, tzinfo=dt.timezone.utc)
     until = agent.limit_resets(notice, at)

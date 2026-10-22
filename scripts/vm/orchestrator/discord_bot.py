@@ -29,6 +29,7 @@ import logging
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 import discord
@@ -46,6 +47,7 @@ EXPERIMENTS = "experiments"
 MILESTONES = "milestones"
 RANK_EVERY_S = 300  # how often rank_watch.py checks for milestones
 FOLLOW_EVERY_S = 10  # how often a restarted bot checks its old workers
+EXPERIMENTS_EVERY_S = 120  # #experiments re-renders at most this often
 WORKSTREAMS = [
     w.strip()
     for w in os.environ.get(
@@ -124,7 +126,8 @@ class Orchestrator(discord.Client):
             ("rest", {}),
             ("paused", []),
             ("workers", {}),  # workstream -> {"pid", "started"}, across restarts
-            ("experiments", {}),  # #experiments: {"ids": [...], "mtime": ...}
+            # #experiments: {"ids": [...], "mtime": ..., "texts": [...]}
+            ("experiments", {}),
         ):
             self.state.setdefault(key, default)
         # The newest run post per workstream; seeded so old posts stay unposted.
@@ -133,6 +136,7 @@ class Orchestrator(discord.Client):
         )
         self.recovered = False
         self.experiments_checked = False  # stored messages still there?
+        self.experiments_rendered = 0.0  # monotonic time of the last render
         self.experiments_lock = asyncio.Lock()
         self.state.setdefault(
             "max_workers", int(os.environ.get("ORCHESTRATOR_MAX_WORKERS", "1"))
@@ -400,6 +404,14 @@ class Orchestrator(discord.Client):
                 ids = []
         if not force and stamp == self.state["experiments"].get("mtime"):
             return
+        # The file changes often; each render costs Discord's rate limit, so a
+        # change waits until the last render is EXPERIMENTS_EVERY_S old.
+        if not force and time.monotonic() - self.experiments_rendered < (
+            EXPERIMENTS_EVERY_S
+        ):
+            return
+        self.experiments_rendered = time.monotonic()
+        old = self.state["experiments"].get("texts", [])
         self.state["experiments"]["mtime"] = stamp
         try:
             entries = json.loads(path.read_text())["experiments"]
@@ -413,6 +425,9 @@ class Orchestrator(discord.Client):
         for n, texts in enumerate(pages):
             embeds = [discord.Embed(description=t, colour=0x2B8A3E) for t in texts]
             if n < len(ids):
+                if n < len(old) and old[n] == texts:
+                    kept.append(ids[n])  # unchanged: no edit, no rate limit
+                    continue
                 try:
                     await channel.get_partial_message(ids[n]).edit(
                         content=None, embeds=embeds
@@ -434,7 +449,7 @@ class Orchestrator(discord.Client):
                 await channel.get_partial_message(i).delete()
             except discord.HTTPException:
                 pass
-        self.state["experiments"] = {"ids": kept, "mtime": stamp}
+        self.state["experiments"] = {"ids": kept, "mtime": stamp, "texts": pages}
         self.save()
 
     # Workers ----------------------------------------------------------------
