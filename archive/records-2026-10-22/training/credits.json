@@ -1,0 +1,29 @@
+{
+  "updatedAt": "2026-10-12T18:50:17+00:00",
+  "credits": [
+    {
+      "provider": "GCP",
+      "remaining": 351.0,
+      "asOf": "2026-10-12T01:31:13+00:00",
+      "total": 425.0,
+      "source": "console",
+      "currency": "CAD"
+    },
+    {
+      "provider": "Azure",
+      "remaining": 68.5,
+      "asOf": "2026-10-12T18:50:17+00:00",
+      "total": 100.0,
+      "source": "api",
+      "currency": "USD"
+    },
+    {
+      "provider": "AWS",
+      "remaining": 78.62,
+      "asOf": "2026-10-12T18:50:17+00:00",
+      "total": 100.0,
+      "source": "api",
+      "currency": "USD"
+    }
+  ]
+}

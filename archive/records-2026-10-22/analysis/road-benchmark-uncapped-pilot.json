@@ -1,0 +1,21 @@
+{
+  "decisions": {
+    "captures_scanned": 21,
+    "captures_with_positions": 10,
+    "positions": 10,
+    "base_simulations": 800,
+    "deep_simulations": 1600,
+    "time_limit_seconds": null,
+    "decisions_changed": 1,
+    "base_agrees_with_recorded": 9,
+    "deep_agrees_with_recorded": 8,
+    "base_road_choices": 2,
+    "deep_road_choices": 2,
+    "base_mean_seconds": 2.948674799100263,
+    "base_mean_simulations": 799.9,
+    "base_mean_root_value": -0.07914938172385705,
+    "deep_mean_seconds": 6.098465527012013,
+    "deep_mean_simulations": 1599.9,
+    "deep_mean_root_value": -0.07595614061620369
+  }
+}

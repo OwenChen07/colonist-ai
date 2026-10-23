@@ -1,0 +1,389 @@
+"""
+Move-generation functions (these return a list of actions that can be taken
+by current player). Main function is generate_playable_actions.
+"""
+
+import operator as op
+from functools import reduce
+from typing import Any, Dict, List, Set, Tuple, Union
+
+from catanatron.models.decks import (
+    CITY_COST_FREQDECK,
+    ROAD_COST_FREQDECK,
+    SETTLEMENT_COST_FREQDECK,
+    freqdeck_can_draw,
+    freqdeck_contains,
+    freqdeck_count,
+    freqdeck_from_listdeck,
+)
+from catanatron.models.enums import (
+    RESOURCES,
+    Action,
+    ActionPrompt,
+    ActionType,
+    BRICK,
+    ORE,
+    FastResource,
+    SETTLEMENT,
+    SHEEP,
+    WHEAT,
+    WOOD,
+)
+from catanatron.state import State
+from catanatron.state_functions import (
+    get_visible_victory_points,
+    get_player_buildings,
+    get_player_freqdeck,
+    player_can_afford_dev_card,
+    player_can_play_dev,
+    player_has_rolled,
+    player_key,
+    player_num_resource_cards,
+    player_resource_freqdeck_contains,
+)
+
+
+def generate_playable_actions(state: State) -> List[Action]:
+    action_prompt = state.current_prompt
+    color = state.current_color()
+
+    if action_prompt == ActionPrompt.BUILD_INITIAL_SETTLEMENT:
+        return settlement_possibilities(state, color, True)
+    elif action_prompt == ActionPrompt.BUILD_INITIAL_ROAD:
+        return initial_road_possibilities(state, color)
+    elif action_prompt == ActionPrompt.MOVE_ROBBER:
+        return robber_possibilities(state, color)
+    elif action_prompt == ActionPrompt.PLAY_TURN:
+        if state.is_road_building:
+            return road_building_possibilities(state, color, False)
+        actions = []
+        # Allow playing dev cards before and after rolling
+        if player_can_play_dev(state, color, "YEAR_OF_PLENTY"):
+            actions.extend(year_of_plenty_possibilities(color, state.resource_freqdeck))
+        if player_can_play_dev(state, color, "MONOPOLY"):
+            actions.extend(monopoly_possibilities(color))
+        if player_can_play_dev(state, color, "KNIGHT"):
+            actions.append(Action(color, ActionType.PLAY_KNIGHT_CARD, None))
+        if (
+            player_can_play_dev(state, color, "ROAD_BUILDING")
+            and len(road_building_possibilities(state, color, False)) > 0
+        ):
+            actions.append(Action(color, ActionType.PLAY_ROAD_BUILDING, None))
+        if not player_has_rolled(state, color):
+            actions.append(Action(color, ActionType.ROLL, None))
+        else:
+            actions.append(Action(color, ActionType.END_TURN, None))
+            actions.extend(road_building_possibilities(state, color))
+            actions.extend(settlement_possibilities(state, color))
+            actions.extend(city_possibilities(state, color))
+
+            can_buy_dev_card = (
+                player_can_afford_dev_card(state, color)
+                and len(state.development_listdeck) > 0
+            )
+            if can_buy_dev_card:
+                actions.append(Action(color, ActionType.BUY_DEVELOPMENT_CARD, None))
+
+            # Trade
+            actions.extend(maritime_trade_possibilities(state, color))
+        return actions
+    elif action_prompt == ActionPrompt.DISCARD:
+        return discard_possibilities(state, color)
+    elif action_prompt == ActionPrompt.DECIDE_TRADE:
+        actions = [Action(color, ActionType.REJECT_TRADE, state.current_trade)]
+
+        # can only accept if have enough cards
+        freqdeck = get_player_freqdeck(state, color)
+        asked = state.current_trade[5:10]
+        if freqdeck_contains(freqdeck, asked):
+            actions.append(Action(color, ActionType.ACCEPT_TRADE, state.current_trade))
+
+        return actions
+    elif action_prompt == ActionPrompt.DECIDE_ACCEPTEES:
+        # you should be able to accept for each of the "accepting players"
+        actions = [Action(color, ActionType.CANCEL_TRADE, None)]
+
+        for other_color, accepted in zip(state.colors, state.acceptees):
+            if accepted:
+                actions.append(
+                    Action(
+                        color,
+                        ActionType.CONFIRM_TRADE,
+                        (*state.current_trade[:10], other_color),
+                    )
+                )
+        return actions
+    else:
+        raise RuntimeError("Unknown ActionPrompt: " + str(action_prompt))
+
+
+def monopoly_possibilities(color) -> List[Action]:
+    return [Action(color, ActionType.PLAY_MONOPOLY, card) for card in RESOURCES]
+
+
+def year_of_plenty_possibilities(color, freqdeck: List[int]) -> List[Action]:
+    options: Set[Union[Tuple[FastResource, FastResource], Tuple[FastResource]]] = set()
+    for i, first_card in enumerate(RESOURCES):
+        for j in range(i, len(RESOURCES)):
+            second_card = RESOURCES[j]  # doing it this way to not repeat
+
+            to_draw = freqdeck_from_listdeck([first_card, second_card])
+            if freqdeck_contains(freqdeck, to_draw):
+                options.add((first_card, second_card))
+            else:  # try allowing player select 1 card only.
+                if freqdeck_can_draw(freqdeck, 1, first_card):
+                    options.add((first_card,))
+                if freqdeck_can_draw(freqdeck, 1, second_card):
+                    options.add((second_card,))
+
+    # Sorted, so the order (and so a bot's tie-breaks) doesn't depend on string
+    # hashing, which changes from run to run.
+    return [
+        Action(color, ActionType.PLAY_YEAR_OF_PLENTY, tuple(cards))
+        for cards in sorted(options)
+    ]
+
+
+def road_building_possibilities(state, color, check_money=True) -> List[Action]:
+    key = player_key(state, color)
+
+    # Check if can't build any more roads.
+    has_roads_available = state.player_state[f"{key}_ROADS_AVAILABLE"] > 0
+    if not has_roads_available:
+        return []
+
+    # Check if need to pay for roads but can't afford them.
+    has_money = player_resource_freqdeck_contains(state, color, ROAD_COST_FREQDECK)
+    if check_money and not has_money:
+        return []
+
+    buildable_edges = state.board.buildable_edges(color)
+    return [Action(color, ActionType.BUILD_ROAD, edge) for edge in buildable_edges]
+
+
+def settlement_possibilities(state, color, initial_build_phase=False) -> List[Action]:
+    if initial_build_phase:
+        buildable_node_ids = state.board.buildable_node_ids(
+            color, initial_build_phase=True
+        )
+        return [
+            Action(color, ActionType.BUILD_SETTLEMENT, node_id)
+            for node_id in buildable_node_ids
+        ]
+    else:
+        key = player_key(state, color)
+        has_money = player_resource_freqdeck_contains(
+            state, color, SETTLEMENT_COST_FREQDECK
+        )
+        has_settlements_available = (
+            state.player_state[f"{key}_SETTLEMENTS_AVAILABLE"] > 0
+        )
+        if has_money and has_settlements_available:
+            buildable_node_ids = state.board.buildable_node_ids(color)
+            return [
+                Action(color, ActionType.BUILD_SETTLEMENT, node_id)
+                for node_id in buildable_node_ids
+            ]
+        else:
+            return []
+
+
+def city_possibilities(state, color) -> List[Action]:
+    key = player_key(state, color)
+
+    can_buy_city = player_resource_freqdeck_contains(state, color, CITY_COST_FREQDECK)
+    if not can_buy_city:
+        return []
+
+    has_cities_available = state.player_state[f"{key}_CITIES_AVAILABLE"] > 0
+    if not has_cities_available:
+        return []
+
+    return [
+        Action(color, ActionType.BUILD_CITY, node_id)
+        for node_id in get_player_buildings(state, color, SETTLEMENT)
+    ]
+
+
+def robber_possibilities(state, color) -> List[Action]:
+    """Every tile but the robber's: one move-and-steal action per player with
+    cards and a building on it (not `color`), else one move-only action.
+
+    With the friendly robber, moves onto a tile touching a player with 2 or
+    fewer visible points are left out, unless that leaves none. That includes
+    the player moving the robber: colonist.io's friendly robber protects every
+    low-point player. A live game showed it: colonist ignored the bot moving
+    the robber onto its own tile at 2 points, then placed it on a tile
+    touching nobody.
+
+    One pass over the tiles, with each color's card count and points looked
+    up once: this runs for every robber move the search considers."""
+    board = state.board
+    buildings = board.buildings
+    robber = board.robber_coordinate
+    friendly = state.friendly_robber
+    has_cards = {}  # color -> holds at least one resource card
+    is_low = {}  # color -> 2 or fewer visible points
+    actions = []
+    allowed = []  # with the friendly robber: the moves blocking nobody low
+    for coordinate, node_ids in _tile_nodes(board.map):
+        if coordinate == robber:
+            continue  # ignore. must move robber.
+
+        # each tile can yield a (move-but-cant-steal) action or
+        #   several (move-and-steal-from-x) actions.
+        to_steal_from = set()
+        blocks_low = False
+        for node_id in node_ids:
+            building = buildings.get(node_id)
+            if building is None:
+                continue
+            candidate_color = building[0]
+            if candidate_color != color:  # can't steal from yourself
+                cards = has_cards.get(candidate_color)
+                if cards is None:
+                    cards = player_num_resource_cards(state, candidate_color) >= 1
+                    has_cards[candidate_color] = cards
+                if cards:
+                    to_steal_from.add(candidate_color)
+            if friendly and not blocks_low:
+                low = is_low.get(candidate_color)
+                if low is None:
+                    # Visible points only: counting hidden victory point cards
+                    # would let the legal moves reveal them.
+                    low = get_visible_victory_points(state, candidate_color) < 3
+                    is_low[candidate_color] = low
+                blocks_low = low
+
+        if len(to_steal_from) == 0:
+            moves = [Action(color, ActionType.MOVE_ROBBER, (coordinate, None))]
+        else:
+            moves = [
+                Action(color, ActionType.MOVE_ROBBER, (coordinate, enemy_color))
+                for enemy_color in to_steal_from
+            ]
+        actions.extend(moves)
+        if friendly and not blocks_low:
+            allowed.extend(moves)
+
+    if friendly and allowed:
+        return allowed
+    return actions
+
+
+def _tile_nodes(catan_map):
+    """((coordinate, node ids), ...) of the map's land tiles, in order; cached
+    on the map, which never changes."""
+    cached = catan_map.__dict__.get("_tile_nodes")
+    if cached is None:
+        cached = tuple(
+            (coordinate, tuple(tile.nodes.values()))
+            for coordinate, tile in catan_map.land_tiles.items()
+        )
+        catan_map._tile_nodes = cached
+    return cached
+
+
+def initial_road_possibilities(state, color) -> List[Action]:
+    # Must be connected to last settlement
+    last_settlement_node_id = state.buildings_by_color[color][SETTLEMENT][-1]
+
+    buildable_edges = filter(
+        lambda edge: last_settlement_node_id in edge,
+        state.board.buildable_edges(color),
+    )
+    return [Action(color, ActionType.BUILD_ROAD, edge) for edge in buildable_edges]
+
+
+def discard_possibilities(state: State, color) -> List[Action]:
+    if state.discard_counts[state.color_to_index[color]] <= 0:
+        return []
+
+    return [
+        Action(color, ActionType.DISCARD_RESOURCE, resource)
+        for resource in RESOURCES
+        if player_num_resource_cards(state, color, resource) > 0
+    ]
+
+
+def ncr(n, r):
+    """n choose r. helper for discard_possibilities"""
+    r = min(r, n - r)
+    numer = reduce(op.mul, range(n, n - r, -1), 1)
+    denom = reduce(op.mul, range(1, r + 1), 1)
+    return numer // denom
+
+
+# (resource, its index in a freqdeck, the "<key>_<resource>_IN_HAND" suffix),
+# in alphabetical order, which is the order _trade_sort_key gives the offers:
+# by the resource given, then by the one asked for.
+_SORTED_TRADE_RESOURCES = tuple(
+    (r, RESOURCES.index(r), f"_{r}_IN_HAND") for r in sorted(RESOURCES)
+)
+# _TRADE_OFFERS[rate][resource] = [(bank index of j, offer tuple), ...]
+_TRADE_OFFERS = {
+    rate: {
+        r: [
+            (j_index, tuple([r] * rate + [None] * (4 - rate) + [j]))
+            for j, j_index, _ in _SORTED_TRADE_RESOURCES
+            if j != r
+        ]
+        for r in RESOURCES
+    }
+    for rate in (2, 3, 4)
+}
+
+
+def maritime_trade_possibilities(state, color) -> List[Action]:
+    # Same offers, in the same (sorted) order, as sorting the set from
+    # inner_maritime_trade_possibilities by _trade_sort_key: sorted because
+    # the offers are tuples holding None, whose hash (before Python 3.12) is
+    # its memory address, so set order changed from run to run and with it a
+    # bot's choice between equally good trades.
+    key = player_key(state, color)
+    player_state = state.player_state
+    port_resources = state.board.get_player_port_resources(color)
+    base_rate = 3 if None in port_resources else 4
+    bank = state.resource_freqdeck
+    trade = ActionType.MARITIME_TRADE
+    actions = []
+    for resource, _, suffix in _SORTED_TRADE_RESOURCES:
+        rate = 2 if resource in port_resources else base_rate
+        if player_state[key + suffix] >= rate:
+            for j_index, offer in _TRADE_OFFERS[rate][resource]:
+                if bank[j_index] > 0:
+                    actions.append(Action(color, trade, offer))
+    return actions
+
+
+def _trade_sort_key(offer):
+    return tuple("" if r is None else r for r in offer)
+
+
+def inner_maritime_trade_possibilities(hand_freqdeck, bank_freqdeck, port_resources):
+    """This inner function is to make this logic more shareable"""
+    trade_offers = set()
+
+    # Get lowest rate per resource
+    rates: Dict[FastResource, int] = {WOOD: 4, BRICK: 4, SHEEP: 4, WHEAT: 4, ORE: 4}
+    if None in port_resources:
+        rates = {WOOD: 3, BRICK: 3, SHEEP: 3, WHEAT: 3, ORE: 3}
+    for resource in port_resources:
+        if resource != None:
+            rates[resource] = 2
+
+    # For resource in hand
+    for index, resource in enumerate(RESOURCES):
+        amount = hand_freqdeck[index]
+        if amount >= rates[resource]:
+            resource_out: List[Any] = [resource] * rates[resource]
+            resource_out += [None] * (4 - rates[resource])
+            for j_resource in RESOURCES:
+                if (
+                    resource != j_resource
+                    and freqdeck_count(bank_freqdeck, j_resource) > 0
+                ):
+                    trade_offer = tuple(resource_out + [j_resource])
+                    trade_offers.add(trade_offer)
+
+    return trade_offers

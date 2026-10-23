@@ -1,0 +1,45 @@
+{
+ "base": 4800,
+ "deep": 12000,
+ "early": {
+  "positions": 60,
+  "live_city": 43,
+  "base1_city": 39,
+  "base2_city": 40,
+  "deep_city": 39,
+  "base_vs_base_changed": 6,
+  "base_vs_deep_changed": 11,
+  "base2_vs_deep_changed": 10,
+  "deep_types": {
+   "BUILD_CITY": 39,
+   "BUY_DEVELOPMENT_CARD": 6,
+   "END_TURN": 8,
+   "BUILD_ROAD": 5,
+   "MARITIME_TRADE": 1,
+   "BUILD_SETTLEMENT": 1
+  },
+  "mean_base_s": 5.077865342597943,
+  "mean_deep_s": 12.860332678623188
+ },
+ "late": {
+  "positions": 60,
+  "live_city": 37,
+  "base1_city": 43,
+  "base2_city": 41,
+  "deep_city": 42,
+  "base_vs_base_changed": 7,
+  "base_vs_deep_changed": 10,
+  "base2_vs_deep_changed": 14,
+  "deep_types": {
+   "BUILD_CITY": 42,
+   "MARITIME_TRADE": 3,
+   "BUILD_ROAD": 2,
+   "BUY_DEVELOPMENT_CARD": 9,
+   "BUILD_SETTLEMENT": 2,
+   "END_TURN": 1,
+   "PLAY_KNIGHT_CARD": 1
+  },
+  "mean_base_s": 4.742726712755394,
+  "mean_deep_s": 12.014581764795972
+ }
+}

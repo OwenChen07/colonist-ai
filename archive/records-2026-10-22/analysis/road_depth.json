@@ -1,0 +1,26 @@
+{
+ "base": 4800,
+ "deep": 12000,
+ "road": {
+  "positions": 60,
+  "base_vs_base_changed": 7,
+  "base_vs_deep_changed": 12,
+  "base2_vs_deep_changed": 13,
+  "deep_road_moves": 17,
+  "base_road_moves": 18,
+  "mean_base_s": 5.3277483072869165,
+  "mean_deep_s": 13.575816032053748,
+  "mean_abs_value_shift": 0.04378237223482624
+ },
+ "control": {
+  "positions": 60,
+  "base_vs_base_changed": 6,
+  "base_vs_deep_changed": 8,
+  "base2_vs_deep_changed": 10,
+  "deep_road_moves": 8,
+  "base_road_moves": 8,
+  "mean_base_s": 6.087053882022156,
+  "mean_deep_s": 15.118930209041961,
+  "mean_abs_value_shift": 0.03444488366293417
+ }
+}
