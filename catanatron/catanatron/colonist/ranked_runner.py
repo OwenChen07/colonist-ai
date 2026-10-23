@@ -43,7 +43,7 @@ from pathlib import Path
 from catanatron.colonist.capture import load as load_capture
 from catanatron.colonist.convert import convert
 from catanatron.colonist.human_data import export_capture
-from catanatron.colonist import own_queue, top_pause
+from catanatron.colonist import own_queue, season_pause, top_pause
 from catanatron.colonist.spectator_publish import parse_names
 
 
@@ -530,6 +530,14 @@ async def _run(args):
     if not own_name:
         print("top-ten pause: no COLONIST_BOT_NAMES entry; off", flush=True)
     top_ten = top_pause.Watch(data, own_name)
+    peers = os.environ.get("SEASON_PEERS", "")
+    season_high = season_pause.Watch(
+        data,
+        own_name,
+        [p.strip() for p in peers.split(",")] if peers else bot_names.values(),
+    )
+    if season_high.on:
+        print("season pause: on (SEASON_HIGH_PAUSE=1)", flush=True)
     captures.mkdir(parents=True, exist_ok=True, mode=0o700)
     data.mkdir(parents=True, exist_ok=True, mode=0o700)
     process = log = None
@@ -677,6 +685,8 @@ async def _run(args):
                     break
                 # Owner's rule: an account in the global top ten stops queueing.
                 await top_ten.check(label)
+                # Off unless SEASON_HIGH_PAUSE=1: pause at a high near the end.
+                await season_high.check(label)
                 before = set(captures.glob("bridge-*.json"))
                 log_offset = (data / "bridge.log").stat().st_size
                 queue = next_queue(args.queue, args.ranked_after, data, args.account)
