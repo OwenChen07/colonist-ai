@@ -14,6 +14,13 @@
 # old VM deleted only once the new one runs. This runs in the background (log
 # runs/gcp_gpu_start.log) under a lock, so the round isn't held up.
 set -uo pipefail
+# The owner's GCP credits ran out (Oct 22, 10:01 PM Toronto): while this file
+# exists, start nothing. Delete it to let the fleet restart again.
+PAUSED=${GCP_PAUSED_FILE:-$(dirname "$0")/../../data/orchestrator/GCP_PAUSED}
+[ -e "$PAUSED" ] && {
+    echo "gcp_start_spot: $PAUSED exists; starting nothing"
+    exit 0
+}
 gcloud=$(command -v gcloud || echo /snap/bin/gcloud)
 [ -x "$gcloud" ] || exit 0
 GPU_ZONES=${GPU_ZONES:-"us-east1-c us-east1-b us-east1-d"} # T4 zones, in order

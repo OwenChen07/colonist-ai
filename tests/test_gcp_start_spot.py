@@ -40,6 +40,7 @@ def _run(tmp_path, listing, statuses=(), args=(), running=""):
         STOP_POLL_WAIT="0",
         STOP_POLLS="5",
         RUN_POLLS="5",
+        GCP_PAUSED_FILE=str(tmp_path / "paused"),
     )
     out = subprocess.run(
         ["bash", str(SCRIPT), *args],
@@ -63,6 +64,13 @@ def _calls(tmp_path, wait_for=None):
         ):
             return calls
         time.sleep(0.05)
+
+
+def test_pause_file_starts_nothing(tmp_path):
+    (tmp_path / "paused").write_text("")
+    out = _run(tmp_path, "selfplay-spot-7\tus-east1-c\tTERMINATED\n")
+    assert "starting nothing" in out
+    assert not (tmp_path / "calls").exists()
 
 
 def test_terminated_vm_is_started_at_once(tmp_path):
