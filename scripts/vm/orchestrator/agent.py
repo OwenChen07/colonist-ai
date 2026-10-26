@@ -177,6 +177,9 @@ def allowed_tools(role):
             "Bash(aws sts get-caller-identity*)",
             "Bash(aws ce *)",
             "Bash(aws budgets *)",
+            # The new account's vCPU quota: read it and ask for more (lead's
+            # brief, Oct 26, 4:50 PM Toronto).
+            "Bash(aws service-quotas *)",
             # The worker key the ssh/scp entries above use, at that path only.
             'Bash(ssh-keygen -t ed25519 -N "" -C colonist-worker -f '
             "~/.ssh/colonist_worker_ed25519)",

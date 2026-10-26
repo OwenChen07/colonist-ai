@@ -485,7 +485,11 @@ def test_workers_manage_gcp_workers_but_not_the_machines_we_run_on():
 
 def test_workers_manage_aws_bot_vms_but_never_terminate():
     worker, denied = agent.allowed_tools("worker"), agent.disallowed_tools("worker")
-    for tool in ("Bash(aws ec2 *)", "Bash(aws ec2-instance-connect *)"):
+    for tool in (
+        "Bash(aws ec2 *)",
+        "Bash(aws ec2-instance-connect *)",
+        "Bash(aws service-quotas *)",
+    ):
         assert tool in worker and tool in agent.allowed_tools("lead")
     assert "Bash(aws sts get-caller-identity*)" in worker
     assert "Bash(aws ec2 terminate-instances*)" in denied
