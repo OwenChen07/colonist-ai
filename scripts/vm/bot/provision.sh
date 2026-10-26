@@ -15,7 +15,7 @@
 #   and point a VNC viewer at localhost:5901. The display listens on the VM's
 #   localhost only, so it is reachable through the ssh tunnel alone.
 set -euo pipefail
-cd "$(dirname "$0")/../.."
+cd "$(dirname "$0")/../../.."
 
 if [ "${1:-}" = "login" ]; then
   ACCOUNT=${2:?usage: provision.sh login ACCOUNT}

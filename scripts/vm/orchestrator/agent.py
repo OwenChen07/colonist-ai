@@ -115,6 +115,21 @@ def allowed_tools(role):
         "Bash(rm data/orchestrator/scratch/*)",
         "Bash(bash -n:*)",
     ]
+    # The AWS MCP server the owner added (lead's brief, Oct 26, 5:15 PM
+    # Toronto), so the lead and the chat can check AWS without a worker. Not
+    # the presigned-URL tool. run_script reaches every AWS API, so the aws
+    # denials in disallowed_tools do not cover it.
+    tools += [
+        f"mcp__aws-mcp__aws___{name}"
+        for name in (
+            "run_script",
+            "search_documentation",
+            "read_documentation",
+            "get_tasks",
+            "list_regions",
+            "get_regional_availability",
+        )
+    ]
     for script in CONTROL:
         for root in ("", f"{ROOT}/", f"{HOME_ROOT}/"):
             tools.append(f"Bash({root}{script}:*)")
