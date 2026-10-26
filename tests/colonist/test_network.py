@@ -305,10 +305,21 @@ def test_a_lone_shard_is_played_in_parts_and_merged_to_the_same_data(tmp_path):
     assert os.listdir(tmp_path / "sp" / "parts") == []
     merged = glob.glob(str(tmp_path / "sp" / "*.npz"))
     assert [os.path.basename(p) for p in merged] == [os.path.basename(whole)]
-    with np.load(whole) as a, np.load(merged[0]) as b:
+    assert_same_shard(whole, merged[0])
+
+
+def assert_same_shard(path_a, path_b):
+    """The parts batch other games together, and OpenBLAS's matmul rounds
+    differently by batch size: a value target can move by one float16 step.
+    Everything else (moves, legal sets, outcomes) must match exactly."""
+    with np.load(path_a) as a, np.load(path_b) as b:
         assert a.files == b.files
         for key in a.files:
-            assert np.array_equal(a[key], b[key]), key
+            if np.issubdtype(a[key].dtype, np.floating):
+                assert a[key].shape == b[key].shape, key
+                assert np.allclose(a[key], b[key], rtol=0, atol=1e-3), key
+            else:
+                assert np.array_equal(a[key], b[key]), key
 
 
 def test_parts_streamed_on_stdin_merge_to_the_same_shard(tmp_path):
@@ -339,10 +350,7 @@ def test_parts_streamed_on_stdin_merge_to_the_same_shard(tmp_path):
     assert sorted(done) == [os.path.basename(p) for p in parts]
     merged = str(out / os.path.basename(whole))
     selfplay.merge_parts(merged, parts)
-    with np.load(whole) as a, np.load(merged) as b:
-        assert a.files == b.files
-        for key in a.files:
-            assert np.array_equal(a[key], b[key]), key
+    assert_same_shard(whole, merged)
 
 
 def test_a_stream_worker_starting_parts_as_games_end_writes_the_same_data(
@@ -377,10 +385,7 @@ def test_a_stream_worker_starting_parts_as_games_end_writes_the_same_data(
     ]
     merged = str(tmp_path / os.path.basename(whole))
     selfplay.merge_parts(merged, [str(out / n) for n in names])
-    with np.load(whole) as a, np.load(merged) as b:
-        assert a.files == b.files
-        for key in a.files:
-            assert np.array_equal(a[key], b[key]), key
+    assert_same_shard(whole, merged)
 
 
 def test_a_stopped_parts_stream_worker_ends_with_its_pool(tmp_path):
@@ -439,9 +444,7 @@ def test_shards_past_the_last_full_wave_are_played_in_parts(tmp_path):
     assert os.listdir(tmp_path / "sp" / "parts") == []
     names = sorted(os.path.basename(p) for p in glob.glob(str(tmp_path / "sp/*.npz")))
     assert len(names) == 3 and os.path.basename(last) in names
-    with np.load(last) as a, np.load(tmp_path / "sp" / os.path.basename(last)) as b:
-        for key in a.files:
-            assert np.array_equal(a[key], b[key]), key
+    assert_same_shard(last, tmp_path / "sp" / os.path.basename(last))
 
 
 def test_selfplay_shard_and_mixed_training(tmp_path):
