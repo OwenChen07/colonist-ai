@@ -483,6 +483,18 @@ def test_workers_manage_gcp_workers_but_not_the_machines_we_run_on():
     assert agent.disallowed_tools("lead") == denied
 
 
+def test_workers_manage_aws_bot_vms_but_never_terminate():
+    worker, denied = agent.allowed_tools("worker"), agent.disallowed_tools("worker")
+    for tool in ("Bash(aws ec2 *)", "Bash(aws ec2-instance-connect *)"):
+        assert tool in worker and tool in agent.allowed_tools("lead")
+    assert "Bash(aws sts get-caller-identity*)" in worker
+    assert "Bash(aws ec2 terminate-instances*)" in denied
+    assert "Bash(aws iam *)" in denied
+    assert not any(t.startswith("Bash(aws iam") for t in worker)
+    keygen = [t for t in worker if "ssh-keygen" in t]
+    assert keygen and all("colonist_worker_ed25519" in t for t in keygen)
+
+
 FAKE_CLAUDE = """
 import json, sys, time
 assert sys.argv[1:] == ["--output-format", "stream-json", "--verbose"]

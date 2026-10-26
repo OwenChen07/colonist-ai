@@ -169,6 +169,17 @@ def allowed_tools(role):
             "Bash(gcloud beta quotas *)",
             "Bash(gcloud alpha quotas *)",
             "Bash(gcloud quotas *)",
+            # The AWS bot VMs in us-east-2 (owner's order, Oct 26, 3:38 PM
+            # Toronto; the profile "colonist" is the owner's EC2-only IAM
+            # user). Stop, never terminate: see disallowed_tools.
+            "Bash(aws ec2 *)",
+            "Bash(aws ec2-instance-connect *)",
+            "Bash(aws sts get-caller-identity*)",
+            "Bash(aws ce *)",
+            "Bash(aws budgets *)",
+            # The worker key the ssh/scp entries above use, at that path only.
+            'Bash(ssh-keygen -t ed25519 -N "" -C colonist-worker -f '
+            "~/.ssh/colonist_worker_ed25519)",
             # Packages for a trial go in a --target directory of the worktree
             # or scratch (WORKER.md), never into .venv, which the live bots and
             # training share (owner's decision, Oct 18, 6:14 PM Toronto).
@@ -203,6 +214,11 @@ def disallowed_tools(role):
     denied.append("Bash(gcloud compute instances delete*--all*)")
     denied.append("Bash(gcloud iam *)")
     denied.append("Bash(gcloud projects *)")
+    # AWS: stop only, never terminate (VM 2 holds the off-site backup), and
+    # no changes to who may do what.
+    denied.append("Bash(aws ec2 terminate-instances*)")
+    denied.append("Bash(aws ec2 delete-volume*)")
+    denied.append("Bash(aws iam *)")
     return denied
 
 
