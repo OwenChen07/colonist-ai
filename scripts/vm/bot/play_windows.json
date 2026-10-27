@@ -1,0 +1,7 @@
+{
+  "_rule": "Owner's order, Oct 27, 8:44 AM Toronto: each account plays at most 6 hours a day, at US Eastern hours, staggered. Read by catanatron/colonist/play_window.py between games; each block moves up to 30 min a day and one short block a week is skipped.",
+  "bot13": "18:00-24:00",
+  "bot14": "12:00-15:00,19:00-22:00",
+  "bot15": "08:00-11:00,20:00-23:00",
+  "bot16": "13:00-16:00,22:00-01:00"
+}

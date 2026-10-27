@@ -43,7 +43,7 @@ from pathlib import Path
 from catanatron.colonist.capture import load as load_capture
 from catanatron.colonist.convert import convert
 from catanatron.colonist.human_data import export_capture
-from catanatron.colonist import own_queue, season_pause, top_pause
+from catanatron.colonist import own_queue, play_window, season_pause, top_pause
 from catanatron.colonist.spectator_publish import parse_names
 
 
@@ -551,6 +551,12 @@ async def _run(args):
         print("season pause: on (SEASON_HIGH_PAUSE=1)", flush=True)
     captures.mkdir(parents=True, exist_ok=True, mode=0o700)
     data.mkdir(parents=True, exist_ok=True, mode=0o700)
+    # Owner's rule (Oct 27): at most 6 h a day, in the env file's PLAY_WINDOWS.
+    window = play_window.Window.from_env(args.account)
+    playing = not (args.login_only or args.inspect or args.smoke)
+    if window.on and playing:
+        # Before the browser opens: the account stays offline between blocks.
+        await window.wait_open(data)
     process = log = None
     completed = False
     active_game = False
@@ -693,6 +699,10 @@ async def _run(args):
                     print(
                         "overnight time limit reached; no new game queued", flush=True
                     )
+                    break
+                if not window.current():
+                    # systemd starts the runner again; it waits for the next block.
+                    print("play window closed; no new game queued", flush=True)
                     break
                 # Owner's rule: an account in the global top ten stops queueing.
                 await top_ten.check(label)
