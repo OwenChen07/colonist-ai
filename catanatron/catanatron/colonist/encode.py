@@ -23,6 +23,7 @@ so the same index means the same move from either seat.
 """
 
 import weakref
+from array import array
 from functools import lru_cache
 
 import numpy as np
@@ -404,7 +405,9 @@ def encode(game, color):
     ]
     v += [n / 19 for n in state.resource_freqdeck]
     _dice_block(v, state.dice, color, them)
-    return cache.static, np.array(v, np.float32)
+    # array("f") rounds each float as np.array(v, np.float32) does, about 40%
+    # faster (E95 item 4: the same bytes on 1,542 actor positions).
+    return cache.static, np.frombuffer(array("f", v), np.float32)
 
 
 PHASE_SIZE = 9 + 5
