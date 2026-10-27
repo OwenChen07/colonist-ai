@@ -3,8 +3,11 @@
 Two of our accounts that queue at the same time at similar ratings are often
 matched together (about 6 games a day in Oct 14-19). Before a ranked queue the
 runner waits while another of our accounts is in the ranked queue, until that
-one is in a game or MAX_WAIT seconds have passed. This is pre-queue only: a
-matched game is always played.
+one is in a game. Step 3 (Oct 27): the wait no longer gives up after 90 s; an
+account seen queued for STALE_QUEUED seconds is taken as dead (a stuck runner
+must not block everyone), and MAX_WAIT is only a last resort. This is
+pre-queue only: a matched game is always played. Every wait is appended to
+own-queue.jsonl in the account's folder.
 
 The signal: each runner records in runner-status.json whether it is waiting to
 queue ("waiting") or in the queue ("queued"). Accounts on this VM are read from
@@ -24,8 +27,10 @@ from pathlib import Path
 from catanatron.colonist.spectator_publish import live_game
 
 SITE = "https://colonist-ai-spectator.vercel.app"
-MAX_WAIT = 90
+MAX_WAIT = 600
+STALE_QUEUED = 180
 POLL_SECONDS = 12
+LOG = "own-queue.jsonl"
 JITTER_SECONDS = 20
 
 
@@ -111,15 +116,18 @@ def site_states(bots):
     return states
 
 
-def blockers(states, me, own):
-    """Our accounts this one should wait for: any in the ranked queue, and
-    any waiting to queue whose name comes first."""
+def blockers(states, me, own, dead=()):
+    """Our accounts this one should wait for: any in the ranked queue (unless
+    taken as dead), and any waiting to queue whose name comes first."""
     return sorted(
         name
         for name, state in states.items()
         if name != me
         and name in own
-        and (state == "queued" or (state == "waiting" and name < me))
+        and (
+            (state == "queued" and name not in dead)
+            or (state == "waiting" and name < me)
+        )
     )
 
 
@@ -155,29 +163,58 @@ async def wait_for_own_accounts(
     jitter=None,
     max_wait=MAX_WAIT,
     poll=POLL_SECONDS,
+    stale=STALE_QUEUED,
 ):
     """Wait before a ranked queue while another of our accounts is queued.
-    Returns the seconds waited (jitter included)."""
+    An account seen queued for `stale` seconds of this wait is ignored (the
+    site has no queue time, so its age counts from when this wait first saw
+    it). Returns the seconds waited (jitter included)."""
     start = clock()
     update_status(data, queue_state="waiting", waiting_since=int(time.time()))
     await sleep(random.uniform(0, JITTER_SECONDS) if jitter is None else jitter)
-    first = None
+    seen = set()
+    queued_since = {}
+    dead = set()
+    outcome = "clear"
     while True:
         states = current_states(site, data, names, fetch, alive)
-        waiting = blockers(states, me, own)
+        now = clock()
+        queued_since = {
+            name: queued_since.get(name, now)
+            for name, state in states.items()
+            if state == "queued"
+        }
+        dead = {name for name, since in queued_since.items() if now - since >= stale}
+        waiting = blockers(states, me, own, dead)
         if not waiting:
             break
-        first = first or waiting
-        if clock() - start >= max_wait:
-            print(f"own-queue check: still {len(waiting)} queued; queueing", flush=True)
+        seen.update(waiting)
+        if now - start >= max_wait:
+            outcome = "cap"
             break
         await sleep(poll)
     waited = clock() - start
-    if first:
+    dead = sorted(dead & set(own) - {me})
+    if outcome == "clear" and dead:
+        outcome = "stale"
+    if seen or dead:
         print(
-            f"own-queue check: waited {waited:.0f} s for {len(first)} of our accounts",
+            f"own-queue check: waited {waited:.0f} s for {len(seen)} of our accounts"
+            f" ({outcome}; {len(dead)} queued over {stale} s ignored)",
             flush=True,
         )
+    row = {
+        "at": int(time.time()),
+        "waited": round(waited, 1),
+        "blockers": len(seen),
+        "outcome": outcome,
+        "stale": len(dead),
+    }
+    try:
+        with (Path(data) / LOG).open("a") as log:
+            log.write(json.dumps(row) + "\n")
+    except OSError:
+        pass
     return waited
 
 

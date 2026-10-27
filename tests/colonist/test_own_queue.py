@@ -101,7 +101,7 @@ def test_an_unreadable_site_counts_as_nobody_queued(tmp_path):
     assert own_queue.current_states("x", tmp_path / "bot4", {}, broken) == {}
 
 
-def _wait(tmp_path, answers, max_wait=90):
+def _wait(tmp_path, answers, max_wait=600):
     clock = [0.0]
     sleeps = []
 
@@ -144,14 +144,42 @@ def test_an_account_waits_until_ours_is_in_a_game(tmp_path):
     assert status["queue_state"] == "queued" and status["pid"] == os.getpid()
 
 
-def test_an_account_queues_after_90_seconds_at_most(tmp_path):
+def _log(tmp_path):
+    lines = (tmp_path / "bot4" / own_queue.LOG).read_text().splitlines()
+    return [json.loads(line) for line in lines]
+
+
+def test_an_account_queued_three_minutes_is_taken_as_dead(tmp_path):
     queued = [{"name": "Amy", "status": "searching", "queue": "ranked"}]
-    waited, _ = _wait(tmp_path, [queued] * 20)
-    assert 90 <= waited < 90 + 12
+    waited, _ = _wait(tmp_path, [queued] * 100)
+    # Amy first seen after the 5 s jitter, ignored 180 s later.
+    assert waited == 5 + 12 * 15
+    assert _log(tmp_path)[-1]["outcome"] == "stale"
+
+
+def test_the_stale_clock_restarts_when_an_account_leaves_the_queue(tmp_path):
+    queued = [{"name": "Amy", "status": "searching", "queue": "ranked"}]
+    playing = [{"name": "Amy", "status": "playing", "queue": "ranked"}]
+    waiting = [{"name": "Bob", "status": "searching", "queue": None}]
+    # Amy queued 120 s, plays while Bob (earlier name) waits, then queues again.
+    answers = [queued] * 11 + [playing + waiting] * 2 + [queued] * 100
+    waited, _ = _wait(tmp_path, answers)
+    # Seen queued again at 161 s: ignored at 161 + 180.
+    assert waited == 5 + 12 * 13 + 180
+
+
+def test_a_waiting_earlier_name_never_times_out_before_the_cap(tmp_path):
+    waiting = [{"name": "Amy", "status": "searching", "queue": None}]
+    waited, _ = _wait(tmp_path, [waiting] * 100)
+    assert 600 <= waited < 600 + 12
+    assert _log(tmp_path)[-1]["outcome"] == "cap"
 
 
 def test_nobody_queued_means_no_wait_beyond_the_jitter(tmp_path):
     assert _wait(tmp_path, [[]]) == (5, [5])
+    (row,) = _log(tmp_path)
+    assert row["waited"] == 5 and row["blockers"] == 0
+    assert row["outcome"] == "clear" and row["stale"] == 0
 
 
 def test_a_waiting_account_is_published_without_a_queue(tmp_path):
