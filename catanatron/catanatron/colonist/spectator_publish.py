@@ -117,7 +117,8 @@ def bot_status(folder, name, now=None):
     game = live_game(folder, now)
     if (folder / "NEEDS_OWNER.md").exists() or runner.get("state") == "needs_attention":
         status, game = "paused", None
-    elif not _alive(runner.get("pid")):
+    elif not _alive(runner.get("pid")) or runner.get("state") == "off_hours":
+        # Off hours (play_window) the runner waits with no browser open.
         status, game = "offline", None
     elif game:
         status = "playing"

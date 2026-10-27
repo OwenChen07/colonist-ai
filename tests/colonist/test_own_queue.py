@@ -192,3 +192,11 @@ def test_a_waiting_account_is_published_without_a_queue(tmp_path):
     assert bot_status(folder, "Cat", now)["queue"] is None
     _runner(folder, queue_state="queued")
     assert bot_status(folder, "Cat", now)["queue"] == "ranked"
+
+
+def test_an_account_off_hours_is_published_offline(tmp_path):
+    # The runner waits for its play window alive but with no browser; others
+    # must not read it as queued (they'd wait 180 s for it before every game).
+    folder = tmp_path / "bot4"
+    _runner(folder, state="off_hours", queue_state="queued")
+    assert bot_status(folder, "Cat", time.time())["status"] == "offline"
