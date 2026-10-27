@@ -244,6 +244,17 @@ async def queue_1v1(page, mode="Ranked"):
         raise RuntimeError("cloud browser is not signed in to Colonist")
     start = page.get_by_role("button", name="Start Game", exact=True)
     if await start.count() != 1 or not await start.is_enabled():
+        # What the page says instead (a cooldown, a notice, another session),
+        # so run.log shows why without opening the browser.
+        try:
+            labels = [
+                (await button.inner_text()).strip()
+                for button in await page.get_by_role("button").all()
+            ]
+            text = (await page.locator("body").inner_text())[:2500]
+            print(json.dumps({"no_start_buttons": labels, "page": text}), flush=True)
+        except Exception:
+            pass
         raise RuntimeError(f"{mode.lower()} 1v1 start control is unavailable")
     await start.click()
 
