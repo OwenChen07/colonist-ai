@@ -307,6 +307,7 @@ def record_game(
     opponent_mix=0.0,
     pinned=False,
     fixed_net=False,
+    error=None,
 ):
     """Appends one verified game to DATA/games.jsonl: which net played it and
     how it ended. Names and chat stay in the capture."""
@@ -342,9 +343,44 @@ def record_game(
         # Against another of our own bots: not a human game, so not training
         # data, and not part of the bot's record against people.
         row["own_bot"] = True
+    if error:
+        # Why the bot stopped playing (record_abandoned).
+        row["error"] = error
     with open(Path(data) / "games.jsonl", "a") as stream:
         stream.write(json.dumps(row) + "\n")
     return row
+
+
+def record_abandoned(
+    data, captures, before, error, net, label, round_number, simulations, **kwargs
+):
+    """Appends a game the bot stopped playing (the bridge or converter failed
+    mid-game) to games.jsonl with ended='abandoned' and no winner, so the
+    reads can count it as a loss for every account. The capture is this
+    game's in-progress file, if the bridge saved one."""
+    from types import SimpleNamespace
+
+    new = sorted(set(Path(captures).glob("bridge-*.json")) - set(before))
+    record = {}
+    if new:
+        try:
+            record = dict(convert(load_capture(str(new[-1]))).record)
+        except Exception:  # a half-written capture still names the game
+            pass
+    record.pop("winner", None)
+    record.pop("resigned", None)
+    conversion = SimpleNamespace(ended="abandoned", record=record)
+    return record_game(
+        data,
+        new[-1] if new else "",
+        conversion,
+        net,
+        label,
+        round_number,
+        simulations,
+        error=str(error)[:200],
+        **kwargs,
+    )
 
 
 def frame_cap_script(fps):
@@ -869,8 +905,40 @@ async def _run(args):
                     file=sys.stderr,
                     flush=True,
                 )
-                while True:
-                    await asyncio.sleep(60)
+                try:
+                    record_abandoned(
+                        data,
+                        captures,
+                        before,
+                        error,
+                        args.net,
+                        label,
+                        promotion_round,
+                        args.simulations,
+                        account=args.account,
+                        queue=queue,
+                        pinned=args.pin_round is not None,
+                        fixed_net=bool(args.net_path),
+                        opponent_mix=(
+                            float(args.opponent_mix)
+                            if opponent_args(args.opponent_model, args.opponent_mix)
+                            else 0.0
+                        ),
+                    )
+                except Exception as record_error:  # the wait below still runs
+                    print(f"abandoned game not recorded: {record_error}", flush=True)
+                if args.stuck_restart_min <= 0:
+                    while True:
+                        await asyncio.sleep(60)
+                # colonist ends a game whose player stops moving well before
+                # this; until then the account is idle (bot14 sat 3.5 h, Oct 28).
+                await asyncio.sleep(args.stuck_restart_min * 60)
+                print(
+                    f"stuck {args.stuck_restart_min:g} min: exiting for a fresh "
+                    "runner",
+                    file=sys.stderr,
+                    flush=True,
+                )
             completed = True
             raise
         finally:
@@ -979,6 +1047,14 @@ def main(argv=None):
         type=float,
         default=0,
         help="cap the page's animation frames per second (0: no cap)",
+    )
+    parser.add_argument(
+        "--stuck-restart-min",
+        type=float,
+        default=float(os.environ.get("STUCK_RESTART_MIN") or 20),
+        help="(or STUCK_RESTART_MIN) after the bridge stops mid-game, keep the "
+        "browser open this many minutes, then exit so systemd starts a fresh "
+        "runner (0: stay open until someone restarts it)",
     )
     parser.add_argument(
         "--inspect", action="store_true", help="show ranked controls without queueing"

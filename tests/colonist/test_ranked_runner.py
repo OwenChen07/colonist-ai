@@ -152,6 +152,36 @@ def test_each_verified_game_is_listed_with_its_net(tmp_path):
     assert row["label"] == label and len(row["net_sha256"]) == 16
 
 
+def test_a_game_the_bot_stopped_playing_is_listed_as_abandoned(tmp_path):
+    from catanatron.colonist.ranked_runner import record_abandoned
+
+    net = tmp_path / "model.npz"
+    net.write_bytes(b"weights")
+    captures = tmp_path / "captures"
+    captures.mkdir()
+    (captures / "bridge-old.json").write_text("{}")
+    before = set(captures.glob("bridge-*.json"))
+    (captures / "bridge-new.json").write_text("not json yet")
+    row = record_abandoned(
+        tmp_path,
+        captures,
+        before,
+        RuntimeError("bridge stopped: out of sync"),
+        net,
+        "x",
+        8,
+        800,
+        account="bot14",
+        opponent_mix=0.75,
+    )
+    (saved,) = [json.loads(line) for line in open(tmp_path / "games.jsonl")]
+    assert saved == row
+    assert row["ended"] == "abandoned" and row["winner"] is None
+    assert row["capture"] == "bridge-new.json" and row["opponent_mix"] == 0.75
+    assert row["error"] == "bridge stopped: out of sync"
+    assert row["account"] == "bot14" and row["queue"] == "ranked"
+
+
 def test_a_resignation_names_the_other_player_as_winner(tmp_path):
     from types import SimpleNamespace
 
