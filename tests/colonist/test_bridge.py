@@ -12,6 +12,7 @@ import pytest
 
 from catanatron.colonist import convert as C
 from catanatron.colonist.bridge import (
+    ACK_GIVE_UP_SECONDS,
     ACK_SECONDS,
     MAX_RECONNECT_RETRIES,
     Bridge,
@@ -826,6 +827,43 @@ def test_a_browser_frozen_for_seven_seconds_does_not_stop_the_bot():
     assert bridge.expect is not None
     bridge.handle({"kind": "send-confirmed", "sendId": sent["sendId"]})
     assert not bridge.pending_sends
+
+
+def test_a_move_confirmed_eleven_seconds_after_its_resend_keeps_the_game():
+    # bot14 (Oct 29, 1:23 PM): resent at 32 s with the page on the lobby screen,
+    # stopped at 37 s; the browser sent the move at 43 s and colonist took it.
+    bridge = Bridge(random_net(hidden=(8,)), 2, play=True, encode=_fake_encode)
+    bridge.choose = _player_of_record("capture_full_game")
+    bridge.reset()
+    for message in _messages("capture_full_game"):
+        replies = bridge.handle({**message, "socket": 1})
+        if bridge.expect:
+            break
+    sent = next(r for r in replies if r["kind"] == "send")
+    bridge.pending_sends[sent["sendId"]][1] -= ACK_SECONDS + 1
+    assert bridge.check_timeout() == [sent]
+    bridge.pending_sends[sent["sendId"]][1] -= 11
+    assert bridge.check_timeout() == []
+    assert bridge.live.error is None
+    bridge.handle({"kind": "send-confirmed", "sendId": sent["sendId"]})
+    assert not bridge.pending_sends
+    assert bridge.expect is not None
+
+
+def test_a_move_never_confirmed_after_its_resend_stops_the_bot():
+    bridge = Bridge(random_net(hidden=(8,)), 2, play=True, encode=_fake_encode)
+    bridge.choose = _player_of_record("capture_full_game")
+    bridge.reset()
+    for message in _messages("capture_full_game"):
+        replies = bridge.handle({**message, "socket": 1})
+        if bridge.expect:
+            break
+    sent = next(r for r in replies if r["kind"] == "send")
+    bridge.pending_sends[sent["sendId"]][1] -= ACK_SECONDS + 1
+    assert bridge.check_timeout() == [sent]
+    bridge.pending_sends[sent["sendId"]][1] -= ACK_GIVE_UP_SECONDS + 1
+    assert bridge.check_timeout()[-1]["state"] == "stopped"
+    assert bridge.live.error == "browser did not acknowledge a move after retry"
 
 
 def test_outgoing_frame_confirms_send_when_old_page_has_no_ack():

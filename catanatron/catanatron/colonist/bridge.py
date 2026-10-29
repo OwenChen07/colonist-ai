@@ -113,6 +113,13 @@ MAX_RECONNECT_RETRIES = 3
 #: stopped in the opening, losing the game by inactivity.
 ACK_SECONDS = 5
 
+#: Seconds after the resend before the bot stops. Was ACK_SECONDS: bot14's
+#: first settlement (Oct 29, 1:23 PM) was resent at 32 s with the page still on
+#: the lobby screen, the bot stopped at 37 s, and the browser sent the move at
+#: 43 s, which colonist applied at 47 s. Waiting costs nothing: stopping loses
+#: the game, and a move that never lands still stops on move_timeout.
+ACK_GIVE_UP_SECONDS = 20
+
 
 def think_budget(game, remaining, simulations):
     """(seconds or None, simulation cap) for the player to move, given the
@@ -777,7 +784,7 @@ class Bridge:
             retries = []
             for send_id, pending in self.pending_sends.items():
                 reply, sent_at, attempts = pending
-                if now - sent_at < ACK_SECONDS:
+                if now - sent_at < (ACK_GIVE_UP_SECONDS if attempts else ACK_SECONDS):
                     continue
                 if attempts == 0:
                     pending[1:] = [now, 1]
